@@ -1,0 +1,28 @@
+{
+  "productName": "s5-tauri",
+  "version": "0.0.0",
+  "identifier": "dev.switchboard.s5",
+  "build": {
+    "frontendDist": "web"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "S5",
+        "width": 900,
+        "height": 600,
+        "label": "main"
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "withGlobalTauri": true
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "icons/icon.png"
+    ]
+  }
+}

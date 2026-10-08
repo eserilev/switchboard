@@ -1,0 +1,10 @@
+<!doctype html><meta charset="utf-8"><title>S5</title>
+<body style="margin:0;background:#12161d;color:#dfe4ec;font:20px monospace;display:grid;place-items:center;height:100vh">
+<div id="o">loading</div>
+<canvas id="c" width="200" height="60"></canvas>
+<script>
+const c=document.getElementById('c'),g=c.getContext('2d');g.fillStyle='#d4a256';g.fillRect(0,0,200,60);
+const gl=document.createElement('canvas').getContext('webgl2');
+const r='canvas2d=ok webgl2='+(gl?'yes':'no')+' '+navigator.userAgent.match(/AppleWebKit\/[\d.]+/);
+document.getElementById('o').textContent=r;requestAnimationFrame(()=>requestAnimationFrame(()=>window.__TAURI__.core.invoke('report',{s:r+' frames=ok'})));
+</script>
