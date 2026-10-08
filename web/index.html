@@ -7,16 +7,60 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main class="pane" id="pane" data-state="working">
-    <header class="ptitle">
-      <span class="name" id="name"></span>
-      <span class="cmd" id="cmd"></span>
-    </header>
-    <div class="term" id="term"></div>
+  <header class="bar">
+    <nav class="tabs" id="tabs" role="tablist"></nav>
+    <div class="tally" id="tally"></div>
+    <span class="leader" id="leader" hidden>Ctrl+Space</span>
+    <div class="conn">
+      <button class="btn small" id="conn" aria-haspopup="menu"></button>
+      <div class="menu" id="connmenu" role="menu" hidden></div>
+    </div>
+    <button class="btn plus" id="newpane" aria-label="New pane">+</button>
+  </header>
+
+  <main id="view-board" class="board-wrap">
+    <section class="live" id="live" hidden>
+      <div class="ptitle" id="livetitle"></div>
+      <div class="term" id="term"></div>
+    </section>
+    <section class="board" id="board"></section>
   </main>
-  <div class="ended" id="ended" hidden>tmux ended</div>
+
+  <main id="view-review" class="review" hidden></main>
+
+  <div class="launcher" id="launcher" hidden>
+    <div class="lbox" role="dialog" aria-label="New pane">
+      <input id="lq" autocomplete="off" spellcheck="false" aria-label="Repo or PR URL">
+      <ul class="lrepos" id="lrepos" role="listbox" aria-label="Repos"></ul>
+      <div class="lrows" id="lrows">
+        <div class="seg" id="lwhere" aria-label="Where">
+          <button type="button" data-v="main">Main checkout</button>
+          <button type="button" data-v="new">New worktree</button>
+          <button type="button" data-v="tree">Existing worktree</button>
+        </div>
+        <input id="lbranch" autocomplete="off" spellcheck="false" aria-label="Branch" hidden>
+        <select id="ltree" aria-label="Worktree" hidden></select>
+        <div class="seg" id="lrun" aria-label="Run">
+          <button type="button" data-v="claude">Claude Code</button>
+          <button type="button" data-v="nvim">nvim</button>
+          <button type="button" data-v="shell">Shell</button>
+        </div>
+        <div class="layouts" id="llayouts"></div>
+      </div>
+      <div class="lfoot">
+        <span class="lerr" id="lerr"></span>
+        <button class="btn" id="lsave" type="button">Save layout</button>
+        <button class="btn" id="lcancel" type="button">Cancel</button>
+        <button class="btn primary" id="lgo" type="button">Open</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
   <script src="vendor/xterm/xterm.js"></script>
   <script src="vendor/xterm/addon-fit.js"></script>
   <script src="app.js"></script>
+  <script src="review.js"></script>
 </body>
 </html>

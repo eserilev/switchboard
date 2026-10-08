@@ -231,6 +231,49 @@ impl Tmux {
         first_line(self.cmd(&format!("display -p -t {} {}", quote(pane), quote(format)))?)
     }
 
+    /// Lines of `list-panes -s -F <format>` for the whole session.
+    pub fn list(&self, format: &str) -> Result<Vec<String>, Error> {
+        self.cmd(&format!("list-panes -s -t {SESSION} -F {}", quote(format)))
+    }
+
+    /// Sets a pane option, for example `@sb_pane` or `remain-on-exit`.
+    pub fn set_pane_option(&self, pane: &str, key: &str, value: &str) -> Result<(), Error> {
+        self.cmd(&format!(
+            "set-option -p -t {} {} {}",
+            quote(pane),
+            quote(key),
+            quote(value)
+        ))
+        .map(drop)
+    }
+
+    /// Starts a new program in a pane, in place of the old one.
+    pub fn respawn(
+        &self,
+        pane: &str,
+        cwd: &Path,
+        argv: &[&str],
+        env: &[(&str, &str)],
+    ) -> Result<(), Error> {
+        let mut c = format!(
+            "respawn-pane -k -t {} -c {}",
+            quote(pane),
+            quote(&cwd.to_string_lossy())
+        );
+        for (k, v) in env {
+            c += &format!(" -e {}", quote(&format!("{k}={v}")));
+        }
+        for a in argv {
+            c += " ";
+            c += &quote(a);
+        }
+        self.cmd(&c).map(drop)
+    }
+
+    pub fn kill_pane(&self, pane: &str) -> Result<(), Error> {
+        self.cmd(&format!("kill-pane -t {}", quote(pane))).map(drop)
+    }
+
     pub fn socket(&self) -> &str {
         &self.socket
     }

@@ -1,0 +1,10 @@
+[package]
+name = "sb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+switchboard-core = { path = "../core" }
+serde_json = "1"
