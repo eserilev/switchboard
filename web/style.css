@@ -1,0 +1,59 @@
+/* Tokens from the mockup, dark first. */
+:root {
+  color-scheme: dark;
+  --bg: #12161d;
+  --panel: #1a1f28;
+  --panel-2: #212835;
+  --line: #2c3442;
+  --fg: #dfe4ec;
+  --muted: #8b95a6;
+  --accent: #d9b56c;
+  --working: #6f86a8;
+  --needs: #d4a256;
+  --done: #5aa880;
+  --error: #c97a74;
+  --limit: #9d8cc4;
+  --display: "Archivo", "Archivo Narrow", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
+  --mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); padding: 10px; }
+
+.pane {
+  --c: var(--working);
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.ptitle {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 10px 14px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+}
+.ptitle .name {
+  font: 850 26px/1 var(--display);
+  font-stretch: 68%;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+}
+.ptitle .cmd { font: 500 12px/1 var(--mono); color: var(--muted); }
+.term { min-height: 0; padding: 6px 0 0 8px; }
+
+.ended {
+  position: fixed;
+  inset: auto 20px 20px auto;
+  font: 600 12px/1 var(--mono);
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--error) 18%, var(--panel-2));
+  color: var(--error);
+}

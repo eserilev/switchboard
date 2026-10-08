@@ -9,7 +9,7 @@ Each spike answers one question from SPEC.md section 18. Run them from this fold
 | S3 | Pass | `--fork-session` leaves the parent byte-equal. A follow-up keeps the fork id. |
 | S4 | Waiting | Needs the second account logged in. |
 | S5 | Pass | A Tauri 2 window runs on GNOME Wayland with no workaround. WebGL2 works. |
-| S6 | Pass, with a change | Turn tile output off. Do not rely on `pause-after`. |
+| S6 | Pass, with a change | Pause tile panes. Do not use `off`, and do not rely on `pause-after`. |
 | S7 | Blocked | No local model server is installed. |
 
 ## S1: usage limit (`s1_capture.sh`)
@@ -77,7 +77,13 @@ One control client, one live pane printing every 50 ms, 10 panes of `yes`, 10 s:
 - `refresh-client -A '%N:off'` stops the stream for a pane. `capture-pane -p -e -S -4` still reads a tile in 11 ms.
 - The tmux server used 95% of one core for 10 `yes` panes in every mode. That is the cost of the programs, not of the client.
 
-Spec change: tiles use `%N:off` and `capture-pane`. Only the live pane is `on`. `pause-after` stays as a guard.
+Correction (PR 1 tests): `off` is wrong for tiles. When every client turns a pane `off`, tmux stops reading it.
+`capture-pane` then shows nothing new, and a busy program blocks on a full terminal buffer.
+The 11 ms capture above read text from before the pane went `off`.
+`refresh-client -A '%N:pause'` is right: tmux keeps reading the pane, `capture-pane` shows new text, and nothing streams.
+`%N:continue` streams again from new output only. A trace with `cat` showed this.
+
+Spec change: tiles are paused and read with `capture-pane`. Only the live pane streams. `pause-after` stays as a guard.
 
 ## S7: local endpoint
 

@@ -1,0 +1,12 @@
+{
+  "productName": "Switchboard",
+  "version": "0.1.0",
+  "identifier": "dev.switchboard.app",
+  "build": { "frontendDist": "../../web" },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [{ "label": "main", "title": "Switchboard", "width": 1200, "height": 800 }],
+    "security": { "csp": null }
+  },
+  "bundle": { "active": false, "icon": ["icons/icon.png"] }
+}

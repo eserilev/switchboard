@@ -411,11 +411,12 @@ There is no separate local LLM setting. A local model is one more connection (8.
 - The server sets `focus-events on`. Claude Code asks for it.
 - One session, `sb`, with one window for each pane.
 - One control-mode client (`tmux -L switchboard -C attach -t sb`). The core reads `%output` and `%window-*` events.
-- Only the live pane streams. Every other pane is `refresh-client -A '%<pane>:off'`. Spike S6: 10 panes of `yes` sent 244 MB in 10 s with all panes on, and 0.1 MB with tiles off.
+- Only the live pane streams. Every other pane is paused: `refresh-client -A '%<pane>:pause'`. Spike S6: 10 panes of `yes` sent 244 MB in 10 s with all panes streaming, and 0.1 MB with tiles stopped.
+- Never use `%<pane>:off`. When every client turns a pane off, tmux stops reading it, and a busy agent blocks.
 - `refresh-client -f pause-after=2` stays on as a guard for the live pane.
-- When you expand a tile, the core sets the pane `on` and sends `capture-pane -p -e -S -` to draw the scrollback. When you collapse it, the pane goes back `off`.
+- When you expand a tile, the core draws the scrollback with `capture-pane -p -e -S -` and sends `%<pane>:continue`. When you collapse it, the pane is paused again.
 - Tiles refresh from `capture-pane -p -e -S -4` once a second. It takes about 11 ms for each pane.
-- A pane that is `off` still sends `%window-*` events, so the core sees exits.
+- A paused pane still sends `%window-*` events, so the core sees exits.
 - Each window gets `SB_PANE=<id>` with `set-environment` before the command starts.
 - Close the app, and tmux keeps running. Open it, and the core attaches again (16).
 
@@ -603,7 +604,7 @@ Each spike is a small script in `spikes/`. S1 to S6 must pass before PR 1. S7 mu
 | S3 | Does `--resume <id> --fork-session` leave the guide session unchanged? | Pass. |
 | S4 | Does `--resume` work across two connections with a shared `projects/`? | Connection B resumes a session of connection A with full context. Two live panes on two connections do not corrupt `projects/`. Status: waiting for the second login. |
 | S5 | Does a Tauri 2 window draw on your Wayland setup? | Pass, with no workaround. WebGL2 works. |
-| S6 | Does tmux control mode keep up with 10 noisy panes? | Pass, with tile panes `off`. |
+| S6 | Does tmux control mode keep up with 10 noisy panes? | Pass, with tile panes paused. |
 | S7 | Does Claude Code work against a local endpoint through `ANTHROPIC_BASE_URL`? | A llama.cpp or Ollama server runs a pane and a guide session with tool calls. |
 
 ## 19. Tests

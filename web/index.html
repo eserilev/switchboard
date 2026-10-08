@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Switchboard</title>
+  <link rel="stylesheet" href="vendor/xterm/xterm.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="pane" id="pane" data-state="working">
+    <header class="ptitle">
+      <span class="name" id="name"></span>
+      <span class="cmd" id="cmd"></span>
+    </header>
+    <div class="term" id="term"></div>
+  </main>
+  <div class="ended" id="ended" hidden>tmux ended</div>
+  <script src="vendor/xterm/xterm.js"></script>
+  <script src="vendor/xterm/addon-fit.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
