@@ -1,9 +1,10 @@
 # Switchboard: Specification
 
-Status: draft 3, 2026-10-08. Nothing is built. Section 18 lists the spikes that must pass before PR 1.
+Status: draft 4, 2026-10-08. Nothing is built. Section 18 lists the spikes that must pass before PR 1.
 Draft 1 was the design page and mockup.
 Draft 2 applies two reviews: one of the design, and one of the rust-analyzer ideas. It also adds account switching.
 Draft 3 makes the LLM connection app wide (D4) and fixes the name (D5).
+Draft 4 applies the results of spikes S2, S3, S5 and S6 (`spikes/README.md`).
 
 Mockup: https://claude.ai/artifact/DeFPkn6Zk5q4VRUK1gzbpr
 
@@ -98,9 +99,9 @@ Only one pane is live at a time. The Claude TUI never draws at tile width, so ma
 | Lamp | Meaning | Source |
 |---|---|---|
 | Working | The agent is busy. | `UserPromptSubmit`, `PreToolUse` |
-| Needs you | A permission prompt or a question dialog. The border pulses slowly. | `PermissionRequest`; `Notification` with `permission_prompt` or `elicitation_dialog` |
+| Needs you | A permission prompt, a question dialog, or the folder trust dialog. The border pulses slowly. | `PermissionRequest`; `Notification` with `permission_prompt` or `elicitation_dialog`; the trust dialog (6.6) |
 | Your turn | The turn ended. The agent finished, or it asked a question in plain text. | `Stop` |
-| Limit | The connection hit its usage limit. | `StopFailure` with a limit error; the limit text in the pane as a fallback (S1) |
+| Limit | The connection hit its usage limit. The session ended, or it waits for the reset. | `StopFailure` with `error: rate_limit`; `Notification` with `quota_auto_resume_*` (S1) |
 | Error | An API error ended the turn, or the agent crashed. | `StopFailure`; tmux pane exit with a non-zero code |
 | Idle | A new pane before the first prompt. | Pane start |
 
@@ -110,6 +111,8 @@ Rules:
 
 - A plain `Notification` does not set a lamp. Its `idle_prompt` type fires when an agent only sits idle.
 - A failed command inside Claude, for example `cargo clippy`, is not an Error. Claude sees the failure and goes on.
+- `quota_auto_resume_fired` sets the lamp back to Working. `quota_auto_resume_disabled` keeps it at Limit.
+- In auto mode, most tools never reach `PermissionRequest`. Needs you then shows only for the questions and checks that auto mode sends to you.
 - The colors are muted. A full board of lamps does not glare.
 
 ### 6.3 Unseen state
@@ -122,18 +125,36 @@ Rules:
 
 ### 6.4 Summary line
 
-- On `Stop`, the hook input has `transcript_path`. `sb state` reads the last assistant message from it and sends the first line, cut to 120 characters.
+- On `Stop`, the hook input has `last_assistant_message`. `sb state` sends its first line, cut to 120 characters. It never reads `transcript_path`: the docs say the file can lag at `Stop` time.
 - On `PermissionRequest`, the summary is the tool and its input, for example `Bash: cargo nextest run -p beacon_chain`.
-- On `StopFailure`, the summary is the error type and message.
+- On `StopFailure`, the summary is `last_assistant_message`, for example `API Error: Rate limit reached`.
 - You can type a title for a tile. The app keeps it in the store.
 
 ### 6.5 Permission from the tile
 
-The `PermissionRequest` hook runs `sb permit`. That command blocks. It sends the request to the app and waits for the answer (S2).
+The `PermissionRequest` hook runs `sb permit`. That command blocks. It sends the request to the app and waits for the answer.
+Spike S2 showed that the Claude dialog shows in the pane at the same time. The first answer wins.
 
 - Allow and Deny on the tile send the answer. `sb permit` prints the hook decision JSON and exits.
-- If the app does not answer in 10 minutes, `sb permit` exits with no decision. Claude then shows its own prompt in the pane.
+- If you answer in the pane, Claude goes on. `sb permit` gets killed or times out. The app removes the tile buttons on the next hook event.
 - If the app is not running, `sb permit` exits at once with no decision.
+- `sb permit` has no timeout of its own. The hook timeout is 600 s by default.
+
+The decision JSON:
+
+```json
+{ "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": { "behavior": "allow" } } }
+```
+
+### 6.6 Folder trust
+
+Claude shows a trust dialog the first time it starts in a new folder. Every new worktree is a new folder.
+No hook fires for this dialog, and a plain Enter picks "No, exit".
+
+- At pane start, the core reads `capture-pane` until the Claude prompt or the trust dialog shows, for at most 10 s.
+- If the trust dialog shows, the tile goes to Needs you with the summary "Trust this folder?" and Trust and Exit buttons.
+- Trust sends `Down Enter`. Exit closes the pane.
+- This is the one place where the core reads the screen. A test pins the dialog text, so a CLI change fails the test, not the user.
 
 ## 7. Key map
 
@@ -276,6 +297,7 @@ The guide session has a tile on the board with a lamp, like any agent.
 
 - The app runs `claude -p` in the review worktree with the review prompt (11.3).
 - Flags: `--output-format stream-json --verbose --include-partial-messages --mcp-config <sb mcp> --allowedTools <list>`.
+- stdin is `/dev/null`. With any other stdin, `claude -p` waits 3 s for input (S3).
 - `--allowedTools`: `Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),mcp__sb__guide_set_steps,mcp__sb__guide_update_step`.
 - `--disallowedTools`: `Edit,Write,NotebookEdit,Bash(gh:*)`.
 - In `-p` mode a tool that is not allowed is denied with no prompt.
@@ -332,9 +354,9 @@ Validation:
 
 1. Click a line number in the diff to anchor a question to it. An anchor is the full path, the side (old or new), the line number, and the text of the line. Deleted lines take an anchor too.
 2. With no line, the question anchors to the step.
-3. The first question of a thread forks the guide session: `claude -p --resume <guide> --fork-session` (S3). The prompt has the step, the anchor, the pins of the step, and the question.
+3. The first question of a thread forks the guide session: `claude -p --resume <guide> --fork-session`. Spike S3 showed that the guide session file stays byte-equal. The prompt has the step, the anchor, the pins of the step, and the question.
 4. The fork uses the same tool list as the guide session.
-5. Click a thread to make it active. A follow-up resumes the fork with `--resume <fork>`. It does not fork again.
+5. Click a thread to make it active. A follow-up resumes the fork with `--resume <fork>`. It does not fork again. The fork keeps its session id (S3).
 6. Answers stream into the thread.
 
 Cost: each fork sends the guide context again. The prompt cache lasts a few minutes, so a question after a long pause costs more.
@@ -386,11 +408,14 @@ There is no separate local LLM setting. A local model is one more connection (8.
 ### 13.1 tmux
 
 - One tmux server: `tmux -L switchboard`. Your own tmux server is not touched.
+- The server sets `focus-events on`. Claude Code asks for it.
 - One session, `sb`, with one window for each pane.
 - One control-mode client (`tmux -L switchboard -C attach -t sb`). The core reads `%output` and `%window-*` events.
-- `refresh-client -f pause-after=2` (tmux 3.2+) stops a noisy pane from flooding the core. The core sends `refresh-client -A '%<pane>:continue'` when it catches up.
-- The live pane draws from `%output` into xterm.js. When you expand a tile, the core first sends `capture-pane -p -e -S -` to draw the scrollback.
-- Tiles refresh from `capture-pane -p -e -S -4` at most once a second, and only for panes with new output.
+- Only the live pane streams. Every other pane is `refresh-client -A '%<pane>:off'`. Spike S6: 10 panes of `yes` sent 244 MB in 10 s with all panes on, and 0.1 MB with tiles off.
+- `refresh-client -f pause-after=2` stays on as a guard for the live pane.
+- When you expand a tile, the core sets the pane `on` and sends `capture-pane -p -e -S -` to draw the scrollback. When you collapse it, the pane goes back `off`.
+- Tiles refresh from `capture-pane -p -e -S -4` once a second. It takes about 11 ms for each pane.
+- A pane that is `off` still sends `%window-*` events, so the core sees exits.
 - Each window gets `SB_PANE=<id>` with `set-environment` before the command starts.
 - Close the app, and tmux keeps running. Open it, and the core attaches again (16).
 
@@ -555,7 +580,8 @@ At start:
 | The tmux server dies | All tiles show "ended". The app offers to resume every pane with a session id. |
 | The control client disconnects | The core attaches again, with backoff up to 5 s. |
 | A hook finds no socket | `sb state` writes the state file and exits 0. |
-| `sb permit` gets no answer | It exits with no decision after 10 minutes. Claude prompts in the pane. |
+| The trust dialog shows | The tile shows Needs you with Trust and Exit (6.6). |
+| `sb permit` gets no answer | The pane dialog stays open. The hook timeout ends `sb permit`. |
 | The guide agent never calls `guide_set_steps` | The review tab shows the error and the last text, and offers a retry. |
 | A fork fails mid-answer | The thread keeps the partial answer and shows the error. Ask again resumes the fork. |
 | `gh` is not logged in | The launcher shows the `gh auth login` command. |
@@ -572,12 +598,12 @@ Each spike is a small script in `spikes/`. S1 to S6 must pass before PR 1. S7 mu
 
 | ID | Question | Pass |
 |---|---|---|
-| S1 | Does `StopFailure` tell a usage limit apart from other errors? | The hook input names the limit, or the pane text gives a stable pattern. |
-| S2 | Does a blocking `PermissionRequest` hook wait for an outside answer, and does Claude apply its decision? | Allow and deny from a second process both work. |
-| S3 | Does `--resume <id> --fork-session` leave the guide session unchanged? | The guide session file is byte-equal before and after two forks. |
-| S4 | Does `--resume` work across two connections with a shared `projects/`? | Connection B resumes a session of connection A with full context. Two live panes on two connections do not corrupt `projects/`. |
-| S5 | Does a Tauri 2 window draw on your Wayland setup? | A window with xterm.js shows. Note if `WEBKIT_DISABLE_DMABUF_RENDERER=1` is needed. |
-| S6 | Does tmux control mode with `pause-after` keep up with 10 noisy panes? | The live pane stays smooth at 10 panes of `yes`. |
+| S1 | Does a subscription usage limit fire `StopFailure` with `rate_limit`, or only the quota notifications? | The capture log of a real limit shows the fields. Status: waiting. |
+| S2 | Does a blocking `PermissionRequest` hook wait for an outside answer, and does Claude apply its decision? | Pass, in `-p` and in a pane. |
+| S3 | Does `--resume <id> --fork-session` leave the guide session unchanged? | Pass. |
+| S4 | Does `--resume` work across two connections with a shared `projects/`? | Connection B resumes a session of connection A with full context. Two live panes on two connections do not corrupt `projects/`. Status: waiting for the second login. |
+| S5 | Does a Tauri 2 window draw on your Wayland setup? | Pass, with no workaround. WebGL2 works. |
+| S6 | Does tmux control mode keep up with 10 noisy panes? | Pass, with tile panes `off`. |
 | S7 | Does Claude Code work against a local endpoint through `ANTHROPIC_BASE_URL`? | A llama.cpp or Ollama server runs a pane and a guide session with tool calls. |
 
 ## 19. Tests
