@@ -2,18 +2,26 @@
 
 Many AI coding agents on one screen. Each agent gets a tile with a big title and a lamp that stays lit until you look. A guided PR review keeps its step-by-step guide in place while you ask questions.
 
-## Run
+## Install
+
+Linux and macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/eserilev/switchboard/master/scripts/install.sh | bash
+```
+
+`INSTALL.md` has the details: what the script does, the tools that Switchboard needs, other ways to install, and fixes for common problems.
+
+For development:
 
 ```sh
 export CARGO_TARGET_DIR=~/.cache/switchboard-target
 cargo run -p switchboard
 ```
 
-Or install it: `cd packaging/arch && makepkg -si`.
-
-Needs: Rust, tmux 3.2+, webkit2gtk-4.1. Optional: nvim, gh, notify-send, secret-tool.
-
 ## Use
+
+The leader key is `leader` in the config: `ctrl+space` on Linux, and `ctrl+;` from the macOS install. The table uses `Ctrl+Space`.
 
 | Keys | Action |
 |---|---|

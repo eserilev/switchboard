@@ -727,6 +727,8 @@ Where the build differs from the text above:
   - The rust-analyzer memory on a tile comes from one `ps` table, because macOS has no `/proc`.
   - The leader key comes from `leader` in the config, for example `ctrl+space`, `ctrl+a` or `cmd+;`. On macOS, `ctrl+space` can switch the input language; then set another key.
   - `scripts/macos-app.sh` builds `Switchboard.app` with cargo, `sips`, `iconutil` and an ad-hoc `codesign`. No npm and no Tauri CLI. To share the app, sign it with a Developer ID and notarize it.
+  - `scripts/install.sh` installs on Linux and macOS (`INSTALL.md`). It checks the tools, installs the missing ones with `--deps`, takes the latest release when one exists for the system or else builds from source, installs the binaries (Linux) or `~/Applications/Switchboard.app` (macOS), and writes a starter config with the code folders it finds. On macOS the starter config sets `leader = "ctrl+;"`.
+  - `.github/workflows/release.yml`: a `v*` tag builds `switchboard-linux-x86_64.tar.gz` (Ubuntu 22.04) and `Switchboard-macos-arm64.zip`, and puts them on a GitHub release.
   - `.github/workflows/macos.yml` runs clippy, the tests with tmux from Homebrew, the window checks in Chrome, and the app build on a macOS runner. It runs when the repo is on GitHub.
   - From Linux, `cargo clippy --target aarch64-apple-darwin` checks the macOS code. A C compiler that does nothing lets the SQLite build step pass, because a check does not link.
 
