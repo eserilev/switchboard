@@ -17,6 +17,8 @@
 //! Lines are bytes, with their newline, so a change to a final newline counts.
 
 #![forbid(unsafe_code)]
+// Nested `if`s on purpose: the kernel avoids `&&` so the Aeneas translation stays plain.
+#![allow(clippy::collapsible_if)]
 
 /// One changed file. `removed[k]` is true when the diff removes old line `k + 1`;
 /// `added[k]` is true when the diff adds new line `k + 1`.

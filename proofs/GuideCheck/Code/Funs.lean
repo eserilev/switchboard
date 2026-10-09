@@ -19,7 +19,7 @@ set_option maxRecDepth 2048
 namespace guide_check
 
 /-- [guide_check::bytes_equal]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 44:4-51:1
+    Source: 'crates/guide-check/src/lib.rs', lines 46:4-53:1
     Visibility: public -/
 @[rust_loop_body]
 def bytes_equal_loop.body
@@ -38,7 +38,7 @@ def bytes_equal_loop.body
   else ok (done true)
 
 /-- [guide_check::bytes_equal]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 44:4-51:1
+    Source: 'crates/guide-check/src/lib.rs', lines 46:4-53:1
     Visibility: public -/
 @[rust_loop]
 def bytes_equal_loop
@@ -48,7 +48,7 @@ def bytes_equal_loop
     i
 
 /-- [guide_check::bytes_equal]:
-    Source: 'crates/guide-check/src/lib.rs', lines 39:0-51:1
+    Source: 'crates/guide-check/src/lib.rs', lines 41:0-53:1
     Visibility: public -/
 def bytes_equal (a : Slice Std.U8) (b : Slice Std.U8) : Result Bool := do
   let i := Slice.len a
@@ -58,7 +58,7 @@ def bytes_equal (a : Slice Std.U8) (b : Slice Std.U8) : Result Bool := do
   else bytes_equal_loop a b 0#usize
 
 /-- [guide_check::next_kept]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 56:4-63:1
+    Source: 'crates/guide-check/src/lib.rs', lines 58:4-65:1
     Visibility: public -/
 @[rust_loop_body]
 def next_kept_loop.body
@@ -76,7 +76,7 @@ def next_kept_loop.body
   else ok (done j)
 
 /-- [guide_check::next_kept]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 56:4-63:1
+    Source: 'crates/guide-check/src/lib.rs', lines 58:4-65:1
     Visibility: public -/
 @[rust_loop]
 def next_kept_loop (mask : Slice Bool) (j : Std.Usize) : Result Std.Usize := do
@@ -85,14 +85,14 @@ def next_kept_loop (mask : Slice Bool) (j : Std.Usize) : Result Std.Usize := do
     j
 
 /-- [guide_check::next_kept]:
-    Source: 'crates/guide-check/src/lib.rs', lines 54:0-63:1
+    Source: 'crates/guide-check/src/lib.rs', lines 56:0-65:1
     Visibility: public -/
 @[reducible]
 def next_kept (mask : Slice Bool) (i : Std.Usize) : Result Std.Usize := do
   next_kept_loop mask i
 
 /-- [guide_check::lines_left]:
-    Source: 'crates/guide-check/src/lib.rs', lines 66:0-71:1
+    Source: 'crates/guide-check/src/lib.rs', lines 68:0-73:1
     Visibility: public -/
 def lines_left
   (i : Std.Usize) (n : Std.Usize) (j : Std.Usize) (m : Std.Usize) :
@@ -103,7 +103,7 @@ def lines_left
   else ok (j < m)
 
 /-- [guide_check::kept_equal_from]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 1:0-101:1
+    Source: 'crates/guide-check/src/lib.rs', lines 1:0-103:1
     Visibility: public -/
 @[rust_loop_body]
 def kept_equal_from_loop.body
@@ -141,7 +141,7 @@ def kept_equal_from_loop.body
   else ok (done true)
 
 /-- [guide_check::kept_equal_from]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 1:0-101:1
+    Source: 'crates/guide-check/src/lib.rs', lines 1:0-103:1
     Visibility: public -/
 @[rust_loop]
 def kept_equal_from_loop
@@ -155,7 +155,7 @@ def kept_equal_from_loop
     (i, j)
 
 /-- [guide_check::kept_equal_from]:
-    Source: 'crates/guide-check/src/lib.rs', lines 75:0-101:1
+    Source: 'crates/guide-check/src/lib.rs', lines 77:0-103:1
     Visibility: public -/
 @[reducible]
 def kept_equal_from
@@ -167,7 +167,7 @@ def kept_equal_from
   kept_equal_from_loop old removed new added i0 j0
 
 /-- [guide_check::span_holds]:
-    Source: 'crates/guide-check/src/lib.rs', lines 104:0-115:1
+    Source: 'crates/guide-check/src/lib.rs', lines 106:0-117:1
     Visibility: public -/
 def span_holds
   (s : Span) (file : Std.Usize) (old : Bool) (line : Std.Usize) :
@@ -183,7 +183,7 @@ def span_holds
          else ok (line <= s.to)
 
 /-- [guide_check::covered]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 120:4-127:1
+    Source: 'crates/guide-check/src/lib.rs', lines 122:4-129:1
     Visibility: public -/
 @[rust_loop_body]
 def covered_loop.body
@@ -203,7 +203,7 @@ def covered_loop.body
   else ok (done false)
 
 /-- [guide_check::covered]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 120:4-127:1
+    Source: 'crates/guide-check/src/lib.rs', lines 122:4-129:1
     Visibility: public -/
 @[rust_loop]
 def covered_loop
@@ -216,7 +216,7 @@ def covered_loop
     i
 
 /-- [guide_check::covered]:
-    Source: 'crates/guide-check/src/lib.rs', lines 118:0-127:1
+    Source: 'crates/guide-check/src/lib.rs', lines 120:0-129:1
     Visibility: public -/
 @[reducible]
 def covered
@@ -226,7 +226,7 @@ def covered
   covered_loop spans file old line 0#usize
 
 /-- [guide_check::mask_covered]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 132:4-141:1
+    Source: 'crates/guide-check/src/lib.rs', lines 134:4-143:1
     Visibility: public -/
 @[rust_loop_body]
 def mask_covered_loop.body
@@ -250,7 +250,7 @@ def mask_covered_loop.body
   else ok (done true)
 
 /-- [guide_check::mask_covered]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 132:4-141:1
+    Source: 'crates/guide-check/src/lib.rs', lines 134:4-143:1
     Visibility: public -/
 @[rust_loop]
 def mask_covered_loop
@@ -263,7 +263,7 @@ def mask_covered_loop
     k
 
 /-- [guide_check::mask_covered]:
-    Source: 'crates/guide-check/src/lib.rs', lines 130:0-141:1
+    Source: 'crates/guide-check/src/lib.rs', lines 132:0-143:1
     Visibility: public -/
 @[reducible]
 def mask_covered
@@ -273,7 +273,7 @@ def mask_covered
   mask_covered_loop spans file old mask 0#usize
 
 /-- [guide_check::file_ok]:
-    Source: 'crates/guide-check/src/lib.rs', lines 144:0-158:1
+    Source: 'crates/guide-check/src/lib.rs', lines 146:0-160:1
     Visibility: public -/
 def file_ok
   (d : FileDiff) (f : Std.Usize) (spans : Slice Span) : Result Bool := do
@@ -304,7 +304,7 @@ def file_ok
       else ok false
 
 /-- [guide_check::files_ok]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 163:4-170:1
+    Source: 'crates/guide-check/src/lib.rs', lines 165:4-172:1
     Visibility: public -/
 @[rust_loop_body]
 def files_ok_loop.body
@@ -323,7 +323,7 @@ def files_ok_loop.body
   else ok (done true)
 
 /-- [guide_check::files_ok]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 163:4-170:1
+    Source: 'crates/guide-check/src/lib.rs', lines 165:4-172:1
     Visibility: public -/
 @[rust_loop]
 def files_ok_loop
@@ -335,14 +335,14 @@ def files_ok_loop
     f
 
 /-- [guide_check::files_ok]:
-    Source: 'crates/guide-check/src/lib.rs', lines 161:0-170:1
+    Source: 'crates/guide-check/src/lib.rs', lines 163:0-172:1
     Visibility: public -/
 @[reducible]
 def files_ok (files : Slice FileDiff) (spans : Slice Span) : Result Bool := do
   files_ok_loop files spans 0#usize
 
 /-- [guide_check::has_change]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 176:4-183:1
+    Source: 'crates/guide-check/src/lib.rs', lines 178:4-185:1
     Visibility: public -/
 @[rust_loop_body]
 def has_change_loop.body
@@ -359,7 +359,7 @@ def has_change_loop.body
   else ok (done false)
 
 /-- [guide_check::has_change]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 176:4-183:1
+    Source: 'crates/guide-check/src/lib.rs', lines 178:4-185:1
     Visibility: public -/
 @[rust_loop]
 def has_change_loop
@@ -369,7 +369,7 @@ def has_change_loop
     k
 
 /-- [guide_check::has_change]:
-    Source: 'crates/guide-check/src/lib.rs', lines 174:0-183:1
+    Source: 'crates/guide-check/src/lib.rs', lines 176:0-185:1
     Visibility: public -/
 def has_change
   (mask : Slice Bool) («from» : Std.Usize) («to» : Std.Usize) :
@@ -379,7 +379,7 @@ def has_change
   has_change_loop mask «to» k
 
 /-- [guide_check::dist]:
-    Source: 'crates/guide-check/src/lib.rs', lines 185:0-190:1
+    Source: 'crates/guide-check/src/lib.rs', lines 187:0-192:1
     Visibility: public -/
 def dist (a : Std.Usize) (b : Std.Usize) : Result Std.Usize := do
   if a < b
@@ -387,7 +387,7 @@ def dist (a : Std.Usize) (b : Std.Usize) : Result Std.Usize := do
   else a - b
 
 /-- [guide_check::near]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 195:4-204:1
+    Source: 'crates/guide-check/src/lib.rs', lines 197:4-206:1
     Visibility: public -/
 @[rust_loop_body]
 def near_loop.body
@@ -410,7 +410,7 @@ def near_loop.body
   else ok (done false)
 
 /-- [guide_check::near]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 195:4-204:1
+    Source: 'crates/guide-check/src/lib.rs', lines 197:4-206:1
     Visibility: public -/
 @[rust_loop]
 def near_loop
@@ -422,7 +422,7 @@ def near_loop
     k
 
 /-- [guide_check::near]:
-    Source: 'crates/guide-check/src/lib.rs', lines 193:0-204:1
+    Source: 'crates/guide-check/src/lib.rs', lines 195:0-206:1
     Visibility: public -/
 @[reducible]
 def near
@@ -430,7 +430,7 @@ def near
   near_loop mask line pad 0#usize
 
 /-- [guide_check::all_near]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 209:4-216:1
+    Source: 'crates/guide-check/src/lib.rs', lines 211:4-218:1
     Visibility: public -/
 @[rust_loop_body]
 def all_near_loop.body
@@ -447,7 +447,7 @@ def all_near_loop.body
   else ok (done true)
 
 /-- [guide_check::all_near]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 209:4-216:1
+    Source: 'crates/guide-check/src/lib.rs', lines 211:4-218:1
     Visibility: public -/
 @[rust_loop]
 def all_near_loop
@@ -459,7 +459,7 @@ def all_near_loop
     k
 
 /-- [guide_check::all_near]:
-    Source: 'crates/guide-check/src/lib.rs', lines 207:0-216:1
+    Source: 'crates/guide-check/src/lib.rs', lines 209:0-218:1
     Visibility: public -/
 def all_near
   (mask : Slice Bool) («from» : Std.Usize) («to» : Std.Usize)
@@ -470,7 +470,7 @@ def all_near
   all_near_loop mask «to» pad k
 
 /-- [guide_check::span_fits]:
-    Source: 'crates/guide-check/src/lib.rs', lines 219:0-233:1
+    Source: 'crates/guide-check/src/lib.rs', lines 221:0-235:1
     Visibility: public -/
 def span_fits
   (mask : Slice Bool) («from» : Std.Usize) («to» : Std.Usize)
@@ -493,7 +493,7 @@ def span_fits
         else ok false
 
 /-- [guide_check::span_ok]:
-    Source: 'crates/guide-check/src/lib.rs', lines 235:0-243:1
+    Source: 'crates/guide-check/src/lib.rs', lines 237:0-245:1
     Visibility: public -/
 def span_ok
   (s : Span) (files : Slice FileDiff) (pad : Std.Usize) : Result Bool := do
@@ -512,7 +512,7 @@ def span_ok
       span_fits s1 s.from s.to pad
 
 /-- [guide_check::spans_ok]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 247:4-254:1
+    Source: 'crates/guide-check/src/lib.rs', lines 249:4-256:1
     Visibility: public -/
 @[rust_loop_body]
 def spans_ok_loop.body
@@ -532,7 +532,7 @@ def spans_ok_loop.body
   else ok (done true)
 
 /-- [guide_check::spans_ok]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 247:4-254:1
+    Source: 'crates/guide-check/src/lib.rs', lines 249:4-256:1
     Visibility: public -/
 @[rust_loop]
 def spans_ok_loop
@@ -545,7 +545,7 @@ def spans_ok_loop
     i
 
 /-- [guide_check::spans_ok]:
-    Source: 'crates/guide-check/src/lib.rs', lines 245:0-254:1
+    Source: 'crates/guide-check/src/lib.rs', lines 247:0-256:1
     Visibility: public -/
 @[reducible]
 def spans_ok
@@ -555,7 +555,7 @@ def spans_ok
   spans_ok_loop spans files pad 0#usize
 
 /-- [guide_check::check]:
-    Source: 'crates/guide-check/src/lib.rs', lines 257:0-262:1
+    Source: 'crates/guide-check/src/lib.rs', lines 259:0-264:1
     Visibility: public -/
 def check
   (files : Slice FileDiff) (spans : Slice Span) (pad : Std.Usize) :
