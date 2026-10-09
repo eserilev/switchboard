@@ -27,6 +27,8 @@ const SCHEMA: &[&str] = &[
      CREATE TABLE pin (id INTEGER PRIMARY KEY, review TEXT NOT NULL, step TEXT NOT NULL, text TEXT NOT NULL);
      CREATE TABLE draft (id INTEGER PRIMARY KEY, review TEXT NOT NULL, path TEXT, side TEXT,
        line INTEGER, text TEXT NOT NULL);",
+    // Version 2: the board order. A new pane has no position and goes last.
+    "ALTER TABLE pane ADD COLUMN pos INTEGER;",
 ];
 
 pub struct Store {
@@ -196,7 +198,7 @@ impl Store {
     pub fn open_panes(&self) -> R<Vec<PaneRow>> {
         let mut s = self.db.prepare(
             "SELECT id, kind, repo, tree, title, connection, session, lamp, unseen, summary, updated
-             FROM pane WHERE closed IS NULL ORDER BY rowid",
+             FROM pane WHERE closed IS NULL ORDER BY COALESCE(pos, 1000000000), rowid",
         )?;
         let rows = s.query_map([], |r| {
             Ok(PaneRow {
@@ -214,6 +216,17 @@ impl Store {
             })
         })?;
         rows.collect()
+    }
+
+    /// Saves the board order: each id gets its index as its position.
+    pub fn set_order(&self, ids: &[String]) -> R<()> {
+        for (i, id) in ids.iter().enumerate() {
+            self.db.execute(
+                "UPDATE pane SET pos = ?2 WHERE id = ?1",
+                params![id, i as i64],
+            )?;
+        }
+        Ok(())
     }
 
     pub fn close_pane(&self, id: &str, at: u64) -> R<()> {
@@ -490,6 +503,30 @@ mod tests {
         s.save_pane(&p).unwrap();
         s.close_pane("p2", 5).unwrap();
         assert_eq!(s.open_panes().unwrap(), vec![p]);
+    }
+
+    #[test]
+    fn order_is_saved_and_new_panes_go_last() {
+        let s = Store::memory().unwrap();
+        for id in ["p1", "p2", "p3"] {
+            s.save_pane(&pane(id)).unwrap();
+        }
+        s.set_order(&["p3".into(), "p1".into(), "p2".into()])
+            .unwrap();
+        s.save_pane(&pane("p4")).unwrap();
+        let ids: Vec<String> = s.open_panes().unwrap().into_iter().map(|p| p.id).collect();
+        assert_eq!(ids, ["p3", "p1", "p2", "p4"]);
+    }
+
+    #[test]
+    fn version_1_store_migrates_to_version_2() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(&format!("{}; PRAGMA user_version = 1;", SCHEMA[0]))
+            .unwrap();
+        db.execute("INSERT INTO pane (id, kind, repo, tree, lamp, unseen, updated) VALUES ('p1', 'shell', 'r', '/', 'none', 0, 1)", []).unwrap();
+        let s = Store::init(db).unwrap();
+        assert_eq!(s.version().unwrap(), 2);
+        assert_eq!(s.open_panes().unwrap().len(), 1);
     }
 
     #[test]

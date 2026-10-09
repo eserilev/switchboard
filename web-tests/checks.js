@@ -23,6 +23,26 @@
   check("connection button shows a", $("#conn").textContent === "a");
   check("worktree tile is named by branch", $('.pane[data-id="p2"] .name').textContent === "il", $('.pane[data-id="p2"] .name').textContent);
 
+  // Drag p3 onto the left half of p1: p3 goes first.
+  {
+    const from = $('.pane[data-id="p3"]').getBoundingClientRect();
+    const to = $('.pane[data-id="p1"]').getBoundingClientRect();
+    const pt = (x, y) => ({ clientX: x, clientY: y, bubbles: true, button: 0, pointerId: 1 });
+    $('.pane[data-id="p3"] .term-tail').dispatchEvent(new PointerEvent("pointerdown", pt(from.left + 40, from.top + 150)));
+    window.dispatchEvent(new PointerEvent("pointermove", pt(from.left + 30, from.top + 150)));
+    window.dispatchEvent(new PointerEvent("pointermove", pt(to.left + 20, to.top + 150)));
+    check("drag marks the drop side", $('.pane[data-id="p1"]').classList.contains("drop-before"));
+    window.dispatchEvent(new PointerEvent("pointerup", pt(to.left + 20, to.top + 150)));
+    $('.pane[data-id="p3"] .term-tail')?.click();
+    await wait(50);
+    const order = called("pane_reorder")[0]?.[1].ids;
+    check("drop saves the new order", JSON.stringify(order) === '["p3","p1","p2"]', JSON.stringify(order));
+    check("board shows the new order", $$("#board .pane").map((p) => p.dataset.id).join() === "p3,p1,p2");
+    check("a drag is not a click", !called("pane_expand").length);
+    window.__emit("panes", structuredClone(window.__data.panes));
+    await wait(50);
+  }
+
   $('[data-allow="p2-1"]').click();
   await wait(50);
   check("allow calls permit_answer", called("permit_answer").some((c) => c[1].permit === "p2-1" && c[1].allow === true));
@@ -64,7 +84,7 @@
   // A pane event updates one tile.
   window.__emit("pane", Object.assign({}, window.__data.panes[0], { lamp: "limit", unseen: true, summary: "API Error: Rate limit reached", alert: true }));
   await wait(50);
-  check("limit tile offers a switch", $('.pane[data-id="p1"] [data-switch]')?.textContent === "Switch to b", $('.pane[data-id="p1"] .tact')?.outerHTML);
+  check("limit tile offers a switch", $('.pane[data-id="p1"] [data-switch]')?.textContent === "Switch to b", "live=" + window.SB.S.live + " board=" + $$("#board .pane").map((p) => p.dataset.id + ":" + p.dataset.lamp).join() + " title=" + $("#livetitle").innerHTML.slice(0, 300));
 
   // Launcher
   $("#newpane").click();

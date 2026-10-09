@@ -97,6 +97,7 @@ commands! {
     pane_seen(id: String) -> () => |h| h.seen(&id);
     pane_close(id: String) -> () => |h| h.close(&id);
     pane_rename(id: String, title: Option<String>) -> () => |h| h.rename(&id, title);
+    pane_reorder(ids: Vec<String>) -> () => |h| h.reorder(&ids);
     pane_resume(id: String) -> () => |h| h.resume(&id);
     permit_answer(permit: String, allow: bool) -> () => |h| h.permit_answer(&permit, allow);
     trust_answer(id: String, yes: bool) -> () => |h| h.trust(&id, yes);
@@ -171,6 +172,7 @@ fn main() {
             pane_seen,
             pane_close,
             pane_rename,
+            pane_reorder,
             pane_resume,
             permit_answer,
             trust_answer,

@@ -282,7 +282,8 @@ fn hooks_permits_and_panes_end_to_end() {
             .iter()
             .any(|p| p.id == claude_id && p.lamp == Lamp::Limit)
     });
-    assert!(hub.connection_view().list[0].limit_until.is_some());
+    // The lamp changes first; the connection mark follows right after.
+    wait_for("connection at limit", || hub.connection_view().list[0].limit_until.is_some());
 
     // Expand gives the screen and makes the pane live; collapse pauses it again.
     let screen = hub.expand(&id).unwrap();
@@ -373,6 +374,16 @@ fn hooks_permits_and_panes_end_to_end() {
         );
         hub.close(&n1).unwrap();
     }
+
+    // Drag order: the hub keeps it, and the store saves it.
+    let ids: Vec<String> = hub.views().into_iter().map(|v| v.id).collect();
+    let mut flipped = ids.clone();
+    flipped.reverse();
+    hub.reorder(&flipped).unwrap();
+    assert_eq!(
+        hub.views().into_iter().map(|v| v.id).collect::<Vec<_>>(),
+        flipped
+    );
 
     // Layouts.
     hub.layout_save("day").unwrap();

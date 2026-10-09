@@ -101,6 +101,8 @@ function tile(p) {
 }
 
 function drawBoard() {
+  // A redraw in the middle of a drag throws away the tile under the pointer.
+  if (drag?.on) { drawLater = true; return; }
   const shown = S.panes.filter((p) => p.id !== S.live);
   $("#board").innerHTML = shown.map(tile).join("");
   $("#view-board").classList.toggle("has-live", !!S.live);
@@ -125,7 +127,73 @@ function upsert(p) {
 
 const paneById = (id) => S.panes.find((p) => p.id === id);
 
+// ---------- drag to reorder ----------
+
+let drag = null;
+let drawLater = false;
+let justDragged = false;
+const clearMarks = () => document.querySelectorAll(".drop-before, .drop-after").forEach((n) => n.classList.remove("drop-before", "drop-after"));
+
+$("#board").addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || e.target.closest("button, [contenteditable='true']")) return;
+  const el = e.target.closest(".pane");
+  if (el) drag = { id: el.dataset.id, x: e.clientX, y: e.clientY, on: false, target: null };
+});
+
+window.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  if (!drag.on) {
+    if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
+    drag.on = true;
+    document.body.classList.add("is-dragging");
+    $(`#board .pane[data-id="${CSS.escape(drag.id)}"]`)?.classList.add("dragging");
+  }
+  clearMarks();
+  const el = document.elementsFromPoint(e.clientX, e.clientY).map((n) => n.closest?.("#board .pane")).find((p) => p && p.dataset.id !== drag.id);
+  if (!el) { drag.target = null; return; }
+  const r = el.getBoundingClientRect();
+  const after = e.clientX > r.left + r.width / 2;
+  el.classList.add(after ? "drop-after" : "drop-before");
+  drag.target = { id: el.dataset.id, after };
+});
+
+window.addEventListener("pointerup", () => {
+  if (!drag) return;
+  const d = drag;
+  drag = null;
+  if (!d.on) return;
+  document.body.classList.remove("is-dragging");
+  clearMarks();
+  justDragged = true;
+  setTimeout(() => (justDragged = false), 0);
+  if (d.target) moveTile(d.id, d.target.id, d.target.after);
+  else if (drawLater) drawBoard();
+  drawLater = false;
+});
+
+/// Moves a tile before or after another one, and saves the order.
+function moveTile(id, target, after) {
+  const ids = S.panes.map((p) => p.id).filter((x) => x !== id);
+  const at = ids.indexOf(target);
+  if (at < 0) return;
+  ids.splice(after ? at + 1 : at, 0, id);
+  S.panes.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+  drawBoard();
+  $(`#board .pane[data-id="${CSS.escape(id)}"]`)?.focus();
+  call("pane_reorder", { ids });
+}
+
+/// Moves the focused tile one place left (-1) or right (+1).
+function nudgeTile(d) {
+  const ids = S.panes.filter((p) => p.id !== S.live).map((p) => p.id);
+  const i = ids.indexOf(S.focus);
+  const j = i + d;
+  if (i < 0 || j < 0 || j >= ids.length) return;
+  moveTile(S.focus, ids[j], d > 0);
+}
+
 $("#board").addEventListener("click", (e) => {
+  if (justDragged) return;
   const el = e.target.closest(".pane");
   if (!el) return;
   const id = el.dataset.id;
@@ -319,6 +387,8 @@ window.addEventListener("keydown", (e) => {
     case "b": return setTab("board");
     case "r": { const ids = [...S.reviews.keys()]; return ids.length && setTab(ids[(ids.indexOf(S.tab) + 1) % ids.length]); }
     case "a": return cycleConnection();
+    case "<": return nudgeTile(-1);
+    case ">": return nudgeTile(1);
   }
 }, true);
 

@@ -22,8 +22,11 @@ Needs: Rust, tmux 3.2+, webkit2gtk-4.1. Optional: nvim, gh, notify-send, secret-
 | `Ctrl+Space`, `x` | Expand or collapse a tile |
 | `Ctrl+Space`, `e` | nvim in the tile's worktree |
 | `Ctrl+Space`, `a` | Next connection |
+| `Ctrl+Space`, `<` / `>` | Move the focused tile left or right |
 | `Ctrl+Space`, `r` / `b` | Review tabs / board |
 | Review: `j` `k` `n` `d` | Steps, mark and next, draft from the active thread |
+
+Drag a tile onto another tile to move it. The order is saved.
 
 From a terminal: `sb open .`, `sb open <path> -w <branch>`, `sb open <path> --nvim`.
 

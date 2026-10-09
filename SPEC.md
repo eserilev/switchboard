@@ -172,6 +172,7 @@ A live pane gets every key you type. Esc in Claude Code stops the agent. So app 
 | Leader, `r` | Review tab. |
 | Leader, `b` | Board tab. |
 | Leader, `a` | Switch the active connection. |
+| Leader, `<` / `>` | Move the focused tile one place left or right. |
 | Review: `j` / `k` | Next or previous step. |
 | Review: `n` | Mark the step reviewed and go to the next one. |
 | Review: `d` | Draft from the active thread. |
@@ -683,6 +684,7 @@ Where the build differs from the text above:
 - After an expand, the app changes the size by one row and back. The program in the pane then draws its whole screen, and output lost in the expand gap does not matter.
 - A key typed in a pane clears the tile's permit buttons: you answered in the pane.
 - Rename works on the live title (double-click). A click on a tile expands it.
+- Drag a tile onto another tile to move it. A move of less than 6 px is a click. The order is saved in the store (schema version 2) and kept after a restart.
 - Each `claude -p` run is killed after 30 minutes. Its stderr goes to its own thread.
 
 Tests:
@@ -690,7 +692,7 @@ Tests:
 - 61 core unit tests, 11 tmux tests on real servers, 5 MCP tests.
 - An end-to-end test: hub, tmux, the `sb` binary, hooks, permits, worktrees, nvim, layouts, a crash, and a board with every tile closed.
 - A review of the code by a second agent found 15 bugs and no deadlocks. All 15 are fixed.
-- 46 window checks in headless Chromium (`web-tests/run.sh`), with a stand-in for the Tauri API.
+- 50 window checks in headless Chromium (`web-tests/run.sh`), with a stand-in for the Tauri API.
 - Two live tests, ignored by default because they cost tokens: a review of a real PR (`live_review`), and a connection switch with resume (`live_switch`). Both passed on 2026-10-08.
 - A smoke test of the real app: `sb open`, the trust dialog, a real prompt to Your turn, a restart.
 

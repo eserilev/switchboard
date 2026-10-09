@@ -45,7 +45,7 @@ window.__TAURI__ = {
       window.__calls.push([cmd, args || {}]);
       const d = window.__data;
       switch (cmd) {
-        case "panes": return d.panes;
+        case "panes": return structuredClone(d.panes);
         case "connections": return d.connections;
         case "settings": return d.settings;
         case "repos": return d.repos;

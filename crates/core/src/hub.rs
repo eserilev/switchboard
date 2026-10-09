@@ -319,6 +319,22 @@ impl Hub {
                 }
             }
         }
+        // Keep the saved board order. tmux lists panes in window order.
+        let order: Vec<String> = self
+            .store
+            .lock()
+            .unwrap()
+            .open_panes()
+            .map_err(e)?
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        panes.sort_by_key(|p| {
+            order
+                .iter()
+                .position(|id| *id == p.row.id)
+                .unwrap_or(usize::MAX)
+        });
         *self.panes.lock().unwrap() = panes;
         Ok(())
     }
@@ -591,6 +607,22 @@ impl Hub {
             .as_str()
             .into();
         })
+    }
+
+    /// Puts the tiles in this order. Ids not in the list keep their place at the end.
+    pub fn reorder(&self, ids: &[String]) -> Res<()> {
+        let order = {
+            let mut panes = self.panes.lock().unwrap();
+            panes.sort_by_key(|p| {
+                ids.iter()
+                    .position(|id| *id == p.row.id)
+                    .unwrap_or(usize::MAX)
+            });
+            panes.iter().map(|p| p.row.id.clone()).collect::<Vec<_>>()
+        };
+        self.store.lock().unwrap().set_order(&order).map_err(e)?;
+        self.emit_panes();
+        Ok(())
     }
 
     pub fn rename(&self, id: &str, title: Option<String>) -> Res<()> {

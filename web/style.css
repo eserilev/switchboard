@@ -80,6 +80,10 @@ button { font: inherit; }
 @keyframes pulse { 50% { border-color: color-mix(in srgb, var(--c) 25%, var(--line)); } }
 @media (prefers-reduced-motion: reduce) { .pane.unseen[data-lamp="needs"] { animation: none; } }
 .pane.focused { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pane.dragging { opacity: .45; }
+.pane.drop-before { box-shadow: -5px 0 0 0 var(--accent); }
+.pane.drop-after { box-shadow: 5px 0 0 0 var(--accent); }
+body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select: none; }
 .pane.is-live { border-color: var(--accent); }
 
 .ptitle { display: flex; align-items: center; gap: 8px; padding: 9px 10px 9px 12px; background: var(--panel-2); border-bottom: 1px solid var(--line); min-width: 0; }
