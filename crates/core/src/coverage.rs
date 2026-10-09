@@ -725,7 +725,7 @@ pub fn compare_github(
 
 /// The diff rows of a file, from the verified kernel. `number_rows` numbers every
 /// line in the order of the rebuild check, and `cut_rows` keeps the rows at most
-/// `ctx` rows from a change, with a header before each run (SPEC 24, G5 to G9).
+/// `ctx` rows from a change, with a header before each run (SPEC 24, G5 to G10).
 /// Here a row only gets its text, by one lookup with its own number, and a note
 /// when the line has no newline.
 pub fn rows(f: &ChangedFile, ctx: usize) -> Vec<crate::diff::Row> {

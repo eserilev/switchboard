@@ -10,3 +10,4 @@ import Statements
 #print axioms Statements.check_G7
 #print axioms Statements.check_G8
 #print axioms Statements.check_G9
+#print axioms Statements.check_G10

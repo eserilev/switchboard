@@ -18,7 +18,7 @@ The definitions it uses are in `GuideCheck/Spec.lean`:
 - `SpanGood`: the span names a file, has `1 ≤ from ≤ to ≤` the line count, holds a
   changed line, and every line of it is at most `pad` lines from a changed line.
 
-G5 to G9 are about the diff rows that the review window draws. `number_rows` gives
+G5 to G10 are about the diff rows that the review window draws. `number_rows` gives
 every row of a file with its line numbers and no text; the window gets the text
 with the number. `cut_rows` keeps the rows near a change. They use:
 - `Rebuilds`: the first three parts of `FileGood`. `Accept` gives it for every file.
@@ -106,6 +106,20 @@ def G9_rows_never_panic : Prop :=
     (∀ r ∈ rows.val, isHeader r = false) →
     cut_rows rows ctx ⦃ out => CutGood rows.val ctx.val out.val ⦄)
 
+/-- **G10.** On a file that rebuilds, the kind of every row, and so its color in the window,
+follows from the masks. A row is removed exactly when it shows an old line that the diff
+removes. It is added exactly when it shows a new line that the diff adds. It is a context
+row exactly when it shows an old line that the diff does not remove and a new line that
+the diff does not add. -/
+def G10_kind_follows_the_masks : Prop :=
+  ∀ (d : FileDiff), Rebuilds d → d.removed.val.length + d.added.val.length ≤ Usize.max →
+    number_rows (alloc.vec.Vec.deref d.removed) (alloc.vec.Vec.deref d.added) ⦃ rows =>
+      ∀ r ∈ rows.val,
+        (r.kind = .Removed ↔ (r.old.val ≠ 0 ∧ d.removed.val[r.old.val - 1]? = some true)) ∧
+        (r.kind = .Added ↔ (r.new.val ≠ 0 ∧ d.added.val[r.new.val - 1]? = some true)) ∧
+        (r.kind = .Same ↔ (r.old.val ≠ 0 ∧ d.removed.val[r.old.val - 1]? = some false ∧
+          r.new.val ≠ 0 ∧ d.added.val[r.new.val - 1]? = some false)) ⦄
+
 theorem check_G1 : G1_check_decides_accept := GuideCheck.Check.check_spec
 
 theorem check_G2 : G2_every_change_is_covered :=
@@ -127,5 +141,7 @@ theorem check_G8 : G8_the_cut := GuideCheck.Cut.G8_proof
 
 theorem check_G9 : G9_rows_never_panic :=
   ⟨GuideCheck.Rows.number_rows_safe, GuideCheck.Cut.cut_rows_spec⟩
+
+theorem check_G10 : G10_kind_follows_the_masks := GuideCheck.Rows.G10_proof
 
 end Statements

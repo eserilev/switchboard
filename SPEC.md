@@ -751,8 +751,9 @@ The diff rows that the window draws come from the kernel too. `number_rows` give
 - **G7.** Each line comes once. On each side, the numbers of the rows go 1, 2, …, line count, with no gap and no repeat.
 - **G8.** The cut keeps every `+` and `-` row and only rows at most `ctx` rows from one. It changes no row and keeps the order. It starts with a header, and a header marks every gap. A header carries the numbers of the next kept row. On a side where that row has no line, it carries the number of the next line of that side.
 - **G9.** `number_rows` and `cut_rows` never panic, on any input within the size bound. The cut is correct on any rows with no header.
+- **G10.** The kind of every row, and so its color, follows from the masks. A row is `-` exactly when it shows an old line that the diff removes. It is `+` exactly when it shows a new line that the diff adds. It is context exactly when it shows an old line that the diff does not remove and a new line that the diff does not add. Core maps the kind to `-`, `+` or ` ` in one `match`, and the window maps that to a CSS class in one table (`KIND_CLASS`).
 
-G5 to G9 need `removed + added ≤ usize::MAX` lines (G8 and G9: twice that). This is always true: a `Vec<u8>` takes 24 bytes, so a line list has fewer than `usize::MAX / 24` lines.
+G5 to G10 need `removed + added ≤ usize::MAX` lines (G8 and G9: twice that). This is always true: a `Vec<u8>` takes 24 bytes, so a line list has fewer than `usize::MAX / 24` lines.
 
 ### The flow
 
@@ -768,7 +769,7 @@ G5 to G9 need `removed + added ≤ usize::MAX` lines (G8 and G9: twice that). Th
 ### What stays trusted
 
 - git returns the right file content for a commit. git checks object hashes itself.
-- The window draws the accepted guide and the kernel's diff rows. The line numbers and the cut are proved (G5 to G9). Not proved: the text lookup by number, the UTF-8 decoding, the "No newline at end of file" note, the header text, and the drawing code.
+- The window draws the accepted guide and the kernel's diff rows. The line numbers, the row kinds and the cut are proved (G5 to G10). Not proved: the text lookup by number, the UTF-8 decoding, the "No newline at end of file" note, the header text, and the drawing code.
 - Files with no changed line have nothing for the line checker: binary files, submodules, pure renames and mode changes. A step must name each one in `files`. That rule is plain code, not proved.
 - What the agent writes about the code. No checker can prove that an explanation is true.
 

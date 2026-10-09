@@ -240,4 +240,33 @@ theorem G6_proof (d : FileDiff) (hd : Rebuilds d)
   rw [lo, ln, map_range_getD, map_range_getD]
   exact ⟨rfl, rfl⟩
 
+/-- The kind of a row that names the right lines follows from its numbers and the masks. -/
+theorem kind_of_row (oldL newL : List (List U8)) (rm ad : List Bool) (r : Row)
+    (h : RowNames oldL newL rm ad r) :
+    (r.kind = .Removed ↔ (r.old.val ≠ 0 ∧ rm[r.old.val - 1]? = some true)) ∧
+    (r.kind = .Added ↔ (r.new.val ≠ 0 ∧ ad[r.new.val - 1]? = some true)) ∧
+    (r.kind = .Same ↔ (r.old.val ≠ 0 ∧ rm[r.old.val - 1]? = some false ∧
+      r.new.val ≠ 0 ∧ ad[r.new.val - 1]? = some false)) := by
+  unfold RowNames LineIs at h
+  cases hk : r.kind <;> simp only [hk] at h <;> simp only [reduceCtorEq, false_iff, true_iff, not_and]
+  · -- A context row: both bits are false.
+    obtain ⟨⟨h1, _, h2⟩, ⟨h3, _, h4⟩, _⟩ := h
+    refine ⟨fun _ => by simp [h2], fun _ => by simp [h4], by omega, h2, by omega, h4⟩
+  · -- A removed row: the old bit is true, and there is no new line.
+    obtain ⟨⟨h1, _, h2⟩, h3⟩ := h
+    refine ⟨⟨by omega, h2⟩, fun h => absurd h3 h, fun _ => by simp [h2]⟩
+  · -- An added row: the new bit is true, and there is no old line.
+    obtain ⟨h1, ⟨h2, _, h3⟩⟩ := h
+    refine ⟨fun h => absurd h1 h, ⟨by omega, h3⟩, fun h => absurd h1 h⟩
+
+theorem G10_proof (d : FileDiff) (hd : Rebuilds d)
+    (hsize : d.removed.val.length + d.added.val.length ≤ Usize.max) :
+    number_rows (alloc.vec.Vec.deref d.removed) (alloc.vec.Vec.deref d.added) ⦃ rows =>
+      ∀ r ∈ rows.val,
+        (r.kind = .Removed ↔ (r.old.val ≠ 0 ∧ d.removed.val[r.old.val - 1]? = some true)) ∧
+        (r.kind = .Added ↔ (r.new.val ≠ 0 ∧ d.added.val[r.new.val - 1]? = some true)) ∧
+        (r.kind = .Same ↔ (r.old.val ≠ 0 ∧ d.removed.val[r.old.val - 1]? = some false ∧
+          r.new.val ≠ 0 ∧ d.added.val[r.new.val - 1]? = some false)) ⦄ :=
+  WP.spec_mono (G5_proof d hd hsize) (fun _ h r hr => kind_of_row _ _ _ _ r (h r hr))
+
 end GuideCheck.Rows
