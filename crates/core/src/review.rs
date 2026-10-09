@@ -561,10 +561,10 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
 ///
 /// - The author only added commits on top of `since`: the base is `since`.
 /// - The author rebased, or merged the base branch: the base is `since` with the
-///   new base branch merged in (`git merge-tree`). The round then leaves out the
-///   changes that came from the base branch.
-/// - That merge has conflicts: the base is `since`, and the note says that the
-///   round also shows changes from the base branch.
+///   new base branch merged in (`replay`). The round then leaves out the changes that
+///   came from the base branch.
+/// - A file of that merge has a conflict: that file takes its version at `since`, so
+///   only that file can also show changes from the base branch. The note names it.
 ///
 /// Returns the base (a commit or a tree id) and a note when the base is not `since`.
 pub fn round_base(
@@ -585,28 +585,99 @@ pub fn round_base(
     if ancestor(since, head)? && ancestor(new_base, since)? {
         return Ok((since.to_owned(), None));
     }
+    let (tree, conflicts) = replay(dir, since, new_base)?;
+    let mut note = "The author rebased or merged the base branch. This round leaves out the changes from the base branch".to_owned();
+    if conflicts.is_empty() {
+        note.push('.');
+    } else {
+        note.push_str(&format!(
+            ", except in {} file{} where git found a merge conflict: {}.",
+            conflicts.len(),
+            if conflicts.len() == 1 { "" } else { "s" },
+            conflicts.join(", ")
+        ));
+    }
+    Ok((tree, Some(note)))
+}
+
+/// `since` with `new_base` merged in, as a tree (`git merge-tree --write-tree`). Each
+/// file with a conflict takes its version at `since`, or is left out when `since` has
+/// no such file. Returns the tree and the files with a conflict, sorted.
+pub fn replay(dir: &Path, since: &str, new_base: &str) -> Result<(String, Vec<String>), String> {
     let out = Command::new("git")
-        .args(["merge-tree", "--write-tree", "--no-messages", since, new_base])
+        .args(["merge-tree", "--write-tree", "--no-messages", "--name-only", since, new_base])
         .current_dir(dir)
         .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("git merge-tree: {e}"))?;
-    let tree = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_owned();
-    if out.status.success() && !tree.is_empty() {
-        return Ok((
-            tree,
-            Some("The author rebased or merged the base branch. This round leaves out the changes from the base branch.".into()),
+    // Exit 0: a clean merge. Exit 1: conflicts, and the tree has conflict markers.
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut lines = text.lines();
+    let tree = lines.next().unwrap_or("").trim().to_owned();
+    if tree.is_empty() || !matches!(out.status.code(), Some(0 | 1)) {
+        return Err(format!(
+            "git merge-tree: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    Ok((
-        since.to_owned(),
-        Some("The author rebased or merged the base branch, and git cannot replay it without conflicts. This round also shows changes from the base branch.".into()),
-    ))
+    let mut conflicts: Vec<String> = lines
+        .take_while(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect();
+    conflicts.sort();
+    conflicts.dedup();
+    if conflicts.is_empty() {
+        return Ok((tree, conflicts));
+    }
+    // Put the `since` version of each conflicted file into a copy of the tree, in a
+    // private index file, so the repo's own index does not change.
+    // A name of its own for each call, also for two calls at the same time.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let index = std::env::temp_dir().join(format!(
+        "sb-round-index-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let run = |args: &[&str], input: Option<&str>| -> Result<String, String> {
+        use std::io::Write;
+        let mut child = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_INDEX_FILE", &index)
+            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("git: {e}"))?;
+        if let (Some(t), Some(mut i)) = (input, child.stdin.take()) {
+            i.write_all(t.as_bytes()).map_err(|e| format!("git: {e}"))?;
+        }
+        let out = child.wait_with_output().map_err(|e| format!("git: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("git {}: {}", args[0], String::from_utf8_lossy(&out.stderr).trim()));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    };
+    let result = (|| {
+        run(&["read-tree", &tree], None)?;
+        let mut info = String::new();
+        for path in &conflicts {
+            let entry = git(dir, &["ls-tree", since, "--", path])?;
+            match entry.split_once('\t') {
+                // "<mode> blob <oid>\t<path>" becomes "<mode> <oid>\t<path>".
+                Some((meta, _)) => {
+                    let parts: Vec<&str> = meta.split_whitespace().collect();
+                    info.push_str(&format!("{} {}\t{path}\n", parts[0], parts[2]));
+                }
+                // No such file at `since`: mode 0 removes it.
+                None => info.push_str(&format!("0 {}\t{path}\n", "0".repeat(40))),
+            }
+        }
+        run(&["update-index", "--index-info"], Some(&info))?;
+        run(&["write-tree"], None)
+    })();
+    let _ = std::fs::remove_file(&index);
+    Ok((result?, conflicts))
 }
 
 pub fn changed_files(tree: &Path, old: &str, new: &str) -> Result<Vec<String>, String> {
@@ -712,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn a_conflict_falls_back_to_the_reviewed_head_with_a_note() {
+    fn a_conflicted_file_takes_its_round_1_version() {
         let (dir, _, since) = round_repo("conflict");
         let g = |args: &[&str]| git(&dir, args).unwrap();
         g(&["checkout", "-q", "main"]);
@@ -726,8 +797,32 @@ mod tests {
         let head = g(&["rev-parse", "HEAD"]);
         let new_base = g(&["merge-base", "main", "pr"]);
         let (b, note) = round_base(&dir, &since, &new_base, &head).unwrap();
-        assert_eq!(b, since);
-        assert!(note.unwrap().contains("also shows"));
+        assert!(note.unwrap().contains("1 file where git found a merge conflict: a.rs"));
+        // The conflicted file takes its round-1 version, and the clean files merge.
+        assert_eq!(git(&dir, &["show", &format!("{b}:a.rs")]).unwrap(), git(&dir, &["show", &format!("{since}:a.rs")]).unwrap());
+        assert_eq!(round_changes(&dir, &b, &head), Vec::<String>::new());
+        // The repo's own index did not change.
+        assert_eq!(git(&dir, &["status", "--porcelain"]).unwrap(), "");
+    }
+
+    #[test]
+    fn a_conflict_keeps_the_other_files_merged() {
+        let (dir, _, since) = round_repo("conflict2");
+        let g = |args: &[&str]| git(&dir, args).unwrap();
+        g(&["checkout", "-q", "main"]);
+        std::fs::write(dir.join("a.rs"), "1\nzwei\n3\n4\n5\n").unwrap();
+        std::fs::write(dir.join("base.rs"), "x\ny\n").unwrap();
+        g(&["commit", "-qam", "main changes line 2 and base.rs"]);
+        g(&["checkout", "-q", "pr"]);
+        let _ = git(&dir, &["merge", "-q", "--no-edit", "main"]);
+        std::fs::write(dir.join("a.rs"), "1\nTWO\n3\n4\nFIVE\n").unwrap();
+        g(&["add", "a.rs"]);
+        g(&["commit", "-qm", "resolve and fix"]);
+        let head = g(&["rev-parse", "HEAD"]);
+        let new_base = g(&["merge-base", "main", "pr"]);
+        let (b, _) = round_base(&dir, &since, &new_base, &head).unwrap();
+        // base.rs merged cleanly, so it does not show; a.rs shows the author's fix.
+        assert_eq!(round_changes(&dir, &b, &head), ["a.rs:old:5", "a.rs:new:5"]);
     }
 
     #[test]

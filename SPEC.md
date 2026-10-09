@@ -413,10 +413,11 @@ After you send a review, the author pushes new commits. A new round reviews only
 - `since` is the head that the round before covered. The base of the round's diff is:
   - `since`, when the author only added commits on top of it.
   - `since` with the new base branch merged in (`git merge-tree --write-tree`), when the author rebased or merged the base branch. The round then leaves out the changes that came from the base branch. The header says so.
-  - `since`, when that merge has conflicts. The header says that the round also shows changes from the base branch.
+  - When a file of that merge has a conflict, that file takes its version at `since`, and every other file stays merged. Only the conflicted files can show changes from the base branch, and the header names them. The merge uses a private index file, so the clone's own index does not change.
 - The diff model, the verified checker and the drawn rows work on this base and the new head as on any other pair. So G1 to G10 hold for the round: the round guide covers every line changed since `since`, and no other line.
 - The guide prompt for a round names the scope, the files of the round, and the comments that you sent in the round before. The agent says in each step whether the change addresses a comment, and lists the comments that no change touches.
 - A sent review records its commit, its summary and its line comments, for the next round.
+- Tests: git repos for each case (added commits, base merge, rebase, conflict, a conflict with other merged files), and open Lighthouse PRs (`crates/core/tests/real_rounds.rs`), with a commit in the middle of each PR as the round-1 head. On 22 PRs: 12 plain, 6 with a base merge or rebase, 4 with one conflicted file each. No file from the base branch shows, except the conflicted files. Before the per-file rule, those 4 PRs showed up to 266 files of the base branch.
 - The GitHub count check (24) is for a first round only, because GitHub counts the whole PR.
 - **Finish review** in a round works as in 11.8. A comment on the old side goes into the summary, because the old side of a round is the code of the round before, not GitHub's base.
 
