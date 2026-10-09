@@ -213,7 +213,8 @@ pub fn anchor_at(f: &ChangedFile, old: bool, from: u32, to: u32) -> Option<Ancho
 /// Where a block of lines is now, after the code changed. The lines must be the
 /// same, in order, with the same spaces. With the code around the block stored:
 /// - the code above or the code below must be the same too; a place where both are
-///   the same wins, then the place nearest to the old one;
+///   the same wins over a place where one is; two places with the same best match
+///   are a tie, and a tie is stale;
 /// - else `None`: the draft is stale. So a common line (`}`, a blank line) never
 ///   jumps to other code.
 ///
@@ -225,7 +226,6 @@ pub fn move_anchor(
     text: &str,
     before: Option<&str>,
     after: Option<&str>,
-    near: u32,
 ) -> Option<Anchor> {
     let size = text.split('\n').count() as u32;
     let count = lines_of(f, old);
@@ -242,10 +242,10 @@ pub fn move_anchor(
     let score = |a: &Anchor| {
         u32::from(before.is_some_and(|b| a.before == b)) + u32::from(after.is_some_and(|x| a.after == x))
     };
-    let first = |a: &Anchor| a.start_line.unwrap_or(a.line);
-    hits.into_iter()
-        .filter(|a| score(a) > 0)
-        .min_by_key(|a| (std::cmp::Reverse(score(a)), first(a).abs_diff(near)))
+    // The best score must be at one place only: a tie in repeated code is stale.
+    let best = hits.iter().map(score).max().unwrap_or(0);
+    let top: Vec<&Anchor> = hits.iter().filter(|a| score(a) == best).collect();
+    (best > 0 && top.len() == 1).then(|| top[0].clone())
 }
 
 /// The index of the row that shows line `n` of one side in GitHub's diff.
@@ -314,6 +314,13 @@ pub fn plan(m: &DiffModel, gh: &[GhFile], drafts: &[DraftRow], old_on_github: bo
             p.errors.push(format!("{at}: the file has no such line at the reviewed head."));
             continue;
         };
+        // The draft must belong to this head: a draft from an older head has an old number.
+        if d.head.as_deref() != Some(m.head.as_str()) {
+            p.errors.push(format!(
+                "{at}: this comment belongs to an older commit. Place it again or delete it."
+            ));
+            continue;
+        }
         // The comment was written on some text. That text must still be at its lines.
         // A draft with no text is from before the app kept it: it cannot be checked.
         if d.line_text.as_deref() != Some(ours.join("\n").as_str()) {
@@ -562,6 +569,7 @@ Binary files /dev/null and b/img.png differ
         let old = side == "old";
         let text = model_file(&model(), path, old).and_then(|f| block_text(f, old, start.unwrap_or(line), line));
         DraftRow {
+            head: Some("head1".into()),
             line_text: text,
             id,
             path: Some(path.into()),
@@ -570,7 +578,6 @@ Binary files /dev/null and b/img.png differ
             start_line: start,
             text: format!("comment {id}"),
             agent: false,
-            head: None,
             stale: false,
             before: None,
             after: None,
@@ -772,6 +779,11 @@ Binary files /dev/null and b/img.png differ
         d.line_text = Some("something else".into());
         let p = plan(&m, &gh, &[d.clone()], true);
         assert!(p.errors[0].contains("changed after you wrote it"), "{:?}", p.errors);
+        // A draft from an older head stops.
+        d.line_text = block_text(f, false, 2, 2);
+        d.head = Some("head0".into());
+        assert!(plan(&m, &gh, &[d.clone()], true).errors[0].contains("older commit"));
+        d.head = Some("head1".into());
         // A stale draft stops too.
         d.line_text = None;
         d.stale = true;
@@ -785,11 +797,11 @@ Binary files /dev/null and b/img.png differ
         // "twenty" / "new" is unique: it moves from a far guess.
         let a = anchor_at(f, false, 20, 21).unwrap();
         assert_eq!(a.before, "l18\nl19");
-        assert_eq!(move_anchor(f, false, &a.text, Some(&a.before), Some(&a.after), 5).map(|x| x.line), Some(21));
+        assert_eq!(move_anchor(f, false, &a.text, Some(&a.before), Some(&a.after)).map(|x| x.line), Some(21));
         // The lines are gone: stale.
-        assert_eq!(move_anchor(f, false, "twenty\nnot here", None, None, 20), None);
+        assert_eq!(move_anchor(f, false, "twenty\nnot here", None, None), None);
         // Spaces count.
-        assert_eq!(move_anchor(f, false, " l7", None, None, 7), None);
+        assert_eq!(move_anchor(f, false, " l7", None, None), None);
     }
 
     #[test]
@@ -802,17 +814,20 @@ Binary files /dev/null and b/img.png differ
         let a = anchor_at(&f, false, 3, 3).unwrap();
         assert_eq!((a.text.as_str(), a.before.as_str(), a.after.as_str()), ("}", "fn a() {\n  x();", "fn b() {\n  y();"));
         // Same code: it stays.
-        assert_eq!(move_anchor(&f, false, &a.text, Some(&a.before), Some(&a.after), 3).map(|x| x.line), Some(3));
+        assert_eq!(move_anchor(&f, false, &a.text, Some(&a.before), Some(&a.after)).map(|x| x.line), Some(3));
         // fn a is gone. The only "}" left is the one of fn b: other code, so stale.
         f.new = lines(&["fn b() {", "  y();", "}"]);
-        assert_eq!(move_anchor(&f, false, &a.text, Some(&a.before), Some(&a.after), 3), None);
+        assert_eq!(move_anchor(&f, false, &a.text, Some(&a.before), Some(&a.after)), None);
         // With no stored context (an old draft), a unique copy is enough.
-        assert_eq!(move_anchor(&f, false, "  y();", None, None, 9).map(|x| x.line), Some(2));
+        assert_eq!(move_anchor(&f, false, "  y();", None, None).map(|x| x.line), Some(2));
         f.new = lines(&["}", "}"]);
-        assert_eq!(move_anchor(&f, false, "}", None, None, 1), None);
+        assert_eq!(move_anchor(&f, false, "}", None, None), None);
+        // Two copies of the same code: a tie, so stale.
+        f.new = lines(&["fn a() {", "  x();", "}", "fn b() {", "  y();", "}", "fn a() {", "  x();", "}", "fn b() {", "  y();", "}"]);
+        assert_eq!(move_anchor(&f, false, "}", Some("fn a() {\n  x();"), Some("fn b() {\n  y();")), None);
         // A line above fn a's "}" changed, but the code below is the same: it moves.
         f.new = lines(&["// new", "fn a() {", "  x2();", "}", "fn b() {", "  y();", "}"]);
-        assert_eq!(move_anchor(&f, false, "}", Some("fn a() {\n  x();"), Some("fn b() {\n  y();"), 3).map(|x| x.line), Some(4));
+        assert_eq!(move_anchor(&f, false, "}", Some("fn a() {\n  x();"), Some("fn b() {\n  y();")).map(|x| x.line), Some(4));
     }
 
     #[test]

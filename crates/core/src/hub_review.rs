@@ -1,9 +1,9 @@
 //! Reviews in the hub (SPEC 11).
 
-use crate::diff::{self, Row};
+use crate::diff::Row;
 use crate::hub::Hub;
 use crate::now;
-use crate::repos::{self, git};
+use crate::repos;
 use crate::review::{self, PrInfo, Run, Stream};
 use crate::store::{DraftRow, ReviewRow, ThreadRow};
 use crate::{connections, coverage, expand};
@@ -517,8 +517,11 @@ impl Hub {
             r.model = Some(model.clone());
             r.coverage = Some(view);
         }
-        // The drafts follow the head in the same step as the model.
-        self.move_drafts(id, &model)?;
+        // The drafts and the threads follow the head in the same step as the model.
+        let moved = self.move_drafts(id, &model)? | self.move_threads(id, &model)?;
+        if moved {
+            self.emit_review(id);
+        }
         Ok(model)
     }
 
@@ -1088,6 +1091,17 @@ impl Hub {
             .get(id)
             .and_then(|r| r.row.guide_session.clone())
             .ok_or("the guide session has not started")?;
+        // A new thread on a line keeps the head and the code around the line, so it
+        // moves with the code as drafts do. The model comes first: no lock is held.
+        let at = match &anchor {
+            Some(a) if thread.is_none() => self.model(id).ok().and_then(|m| {
+                let old = a.side == "old";
+                crate::post::model_file(&m, &a.path, old)
+                    .and_then(|f| crate::post::anchor_at(f, old, a.line, a.line))
+                    .map(|x| (m.head.clone(), x))
+            }),
+            _ => None,
+        };
         let store = self.store.lock().unwrap();
         let t = match thread {
             Some(tid) => store
@@ -1104,9 +1118,12 @@ impl Hub {
                     path: anchor.as_ref().map(|a| a.path.clone()),
                     side: anchor.as_ref().map(|a| a.side.clone()),
                     line: anchor.as_ref().map(|a| a.line),
-                    line_text: anchor.as_ref().map(|a| a.text.clone()),
+                    line_text: at.as_ref().map(|(_, x)| x.text.clone()).or_else(|| anchor.as_ref().map(|a| a.text.clone())),
                     fork_session: None,
                     removed: false,
+                    head: at.as_ref().map(|(h, _)| h.clone()),
+                    before: at.as_ref().map(|(_, x)| x.before.clone()),
+                    after: at.as_ref().map(|(_, x)| x.after.clone()),
                 };
                 store.save_thread(&t).map_err(e)?;
                 t
@@ -1290,8 +1307,11 @@ impl Hub {
             (Some(path), Some(n), Ok(m)) => {
                 let old = d.side.as_deref() == Some("old");
                 let at = crate::post::model_file(&m, path, old).and_then(|f| crate::post::anchor_at(f, old, n, n));
-                let asked = t.line_text.as_deref().map(str::trim);
-                let good = !t.removed && at.as_ref().is_some_and(|a| asked.is_none_or(|q| a.text.trim() == q));
+                // The thread must be at this head, on a line it did not lose, with the
+                // text that the question was about.
+                let good = !t.removed
+                    && t.head.as_deref() == Some(m.head.as_str())
+                    && at.as_ref().is_some_and(|a| t.line_text.as_deref() == Some(a.text.as_str()));
                 match at.filter(|_| good) {
                     Some(a) => DraftRow { head: Some(m.head.clone()), line_text: Some(a.text), before: Some(a.before), after: Some(a.after), ..d },
                     None => DraftRow { head: Some(m.head.clone()), stale: true, ..d },
@@ -1424,6 +1444,11 @@ impl Hub {
             ));
         }
         let gh = crate::post::parse_pr_diff(&review::gh_pr_diff(&row.repo, row.number)?);
+        // A draft added while a new model loaded can still be at the old head: move
+        // the drafts once more before the plan.
+        if self.move_drafts(id, &model)? {
+            self.emit_review(id);
+        }
         let drafts = self.store.lock().unwrap().drafts(id).map_err(e)?;
         // In a later round the old side is the code of the round before, not GitHub's base.
         Ok((row.clone(), crate::post::plan(&model, &gh, &drafts, row.round == 1)))
@@ -1617,7 +1642,6 @@ impl Hub {
                 }
             }
         }
-        self.reanchor(id, &f.tree, &f.head)?;
         let prompt = format!(
             "The PR has new commits. The head is now {}. The worktree is checked out at it. Changed files since {old}: {}. \
              Read the new code. Call guide_set_steps with the full guide for the new head. Keep the id of each step \
@@ -1636,8 +1660,9 @@ impl Hub {
     /// - At the draft's own head: a draft with no stored text gets it.
     /// - At a new head: the draft moves to the same code (`post::move_anchor`), or
     ///   becomes stale. A draft with no stored text cannot move, so it is stale.
-    fn move_drafts(&self, id: &str, model: &coverage::DiffModel) -> Res<()> {
+    fn move_drafts(&self, id: &str, model: &coverage::DiffModel) -> Res<bool> {
         let drafts = self.store.lock().unwrap().drafts(id).map_err(e)?;
+        let mut changed = false;
         for d in drafts {
             let (Some(path), Some(line)) = (&d.path, d.line) else {
                 continue;
@@ -1651,7 +1676,7 @@ impl Hub {
                 (None, true) if !d.stale => f.and_then(|f| crate::post::anchor_at(f, old, start, line)),
                 (None, _) => None,
                 (Some(text), false) => f.and_then(|f| {
-                    crate::post::move_anchor(f, old, text, d.before.as_deref(), d.after.as_deref(), start)
+                    crate::post::move_anchor(f, old, text, d.before.as_deref(), d.after.as_deref())
                 }),
             };
             if d.stale && same_head {
@@ -1662,34 +1687,43 @@ impl Hub {
                 .unwrap()
                 .place_draft(d.id, &model.head, at.as_ref())
                 .map_err(e)?;
+            changed = true;
         }
-        Ok(())
+        Ok(changed)
     }
 
-    /// Moves line anchors to the line with the same text at the new head.
-    fn reanchor(&self, id: &str, tree: &Path, head: &str) -> Res<()> {
-        let store = self.store.lock().unwrap();
-        for mut t in store.threads(id).map_err(e)? {
-            let (Some(path), Some(line), Some(text)) =
-                (t.path.clone(), t.line, t.line_text.clone())
-            else {
+    /// Moves each thread on a line to its code at the model's head, with the rule of
+    /// the drafts (`post::move_anchor`). A thread whose code is gone keeps its line
+    /// and shows "line removed"; a draft from it is stale.
+    fn move_threads(&self, id: &str, model: &coverage::DiffModel) -> Res<bool> {
+        let threads = self.store.lock().unwrap().threads(id).map_err(e)?;
+        let mut changed = false;
+        for mut t in threads {
+            let (Some(path), Some(_), Some(text)) = (t.path.clone(), t.line, t.line_text.clone()) else {
                 continue;
             };
-            if t.side.as_deref() == Some("old") {
+            if t.head.as_deref() == Some(model.head.as_str()) {
                 continue;
             }
-            let content = git(tree, &["show", &format!("{head}:{path}")]).unwrap_or_default();
-            let lines: Vec<&str> = content.lines().collect();
-            match diff::find_near(&lines, &text, line) {
-                Some(n) => {
-                    t.line = Some(n);
+            let old = t.side.as_deref() == Some("old");
+            let at = crate::post::model_file(model, &path, old).and_then(|f| {
+                crate::post::move_anchor(f, old, &text, t.before.as_deref(), t.after.as_deref())
+            });
+            match at {
+                Some(a) => {
+                    t.line = Some(a.line);
+                    t.line_text = Some(a.text);
+                    t.before = Some(a.before);
+                    t.after = Some(a.after);
                     t.removed = false;
                 }
                 None => t.removed = true,
             }
-            store.save_thread(&t).map_err(e)?;
+            t.head = Some(model.head.clone());
+            self.store.lock().unwrap().save_thread(&t).map_err(e)?;
+            changed = true;
         }
-        Ok(())
+        Ok(changed)
     }
 
     /// Opens nvim in the review worktree at a file and line.
@@ -1842,6 +1876,9 @@ mod tests {
             line_text: Some("  builder_params.slot - 1,".into()),
             fork_session: None,
             removed: false,
+            head: None,
+            before: None,
+            after: None,
         };
         let p = thread_prompt(&step, &t, &["Use safe_sub.".into()], "saturating or safe?");
         assert!(p.contains("gloas.rs:1379"));

@@ -375,6 +375,20 @@
     await wait(150);
     const drop = called("review_draft_edit").slice(before).find((c) => c[1].draft === 1 && c[1].text === null);
     check("Place again adds the comment and removes the stale draft", called("review_comment").slice(-1)[0]?.[1].line === 12 && !!drop);
+    // Place again, then Cancel, then a different comment: the stale draft stays.
+    $('#rdrafts [data-place="1"]').click();
+    await wait(50);
+    $('#rdiff [data-cm][data-side="new"][data-n="12"]').click();
+    await wait(50);
+    $("#rcform [data-ccancel]").click();
+    await wait(50);
+    $('#rdiff [data-cm][data-side="new"][data-n="11"]').click();
+    await wait(50);
+    const n2 = called("review_draft_edit").length;
+    $("#rctext").value = "Another comment.";
+    $("#rcform").requestSubmit();
+    await wait(150);
+    check("Cancel ends Place again, so a new comment keeps the stale draft", $("#rctext") === null && !called("review_draft_edit").slice(n2).some((c) => c[1].draft === 1 && c[1].text === null));
     window.__emit("review", window.__data.reviews[0]);
     await wait(100);
   }

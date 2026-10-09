@@ -380,12 +380,14 @@ Cost: each fork sends the guide context again. The prompt cache lasts a few minu
 - When the head changes, the top bar shows the old and the new head.
 - Steps whose files changed get a stale mark.
 - "Diff since last review" shows `git diff <old>..<new>` for each stale step.
-- Threads re-anchor by the line text. If the text is gone, the thread shows "line removed" and keeps the old anchor.
+- Threads on a line move with the rule of the drafts below: a thread keeps its head, its line text and up to 2 lines of code around it. If the code is gone, the thread shows "line removed" and keeps the old line.
 - Drafts move too. A draft keeps the head, the exact text of its lines, and up to 2 lines of code above and below them.
   - Every model load moves the drafts: update, retry and restart. It runs in the same step as the model change, before the threads move.
-  - At a new head, a draft moves to a place with the same lines (in order, same spaces) where the code above or below is also the same. A place where both are the same wins, then the nearest one. So a draft on a `}` or a blank line never jumps to other code.
-  - A draft from before the app kept the code around it moves only to the one place in the file with its lines. A draft with no stored text gets the text at its own head, and is stale at any other head.
-  - An agent draft takes the line of its thread only when that line still has the text that the question was about. Else it is stale.
+  - At a new head, a draft moves to a place with the same lines (in order, same spaces) where the code above or below is also the same. A place where both are the same wins over a place where one is. Two places with the same best match are a tie, and a tie is stale. So a draft on a `}`, a blank line or repeated code never jumps to other code. An edit right above and right below the line also makes the draft stale; that is safe, and you place it again.
+  - A draft with no stored code around it moves only to the one place in the file with its lines. Store version 7 marks the older drafts on a line stale once, because an older build moved them by number.
+  - An agent draft takes the line of its thread only when the thread is at the model's head, its line is not removed, and the line has the text that the question was about. Else it is stale.
+  - The send moves the drafts once more before its plan.
+  - Not yet: a file renamed at the new head makes its drafts stale.
   - A stale draft shows a note in the list, with **Place again** and **Delete**, and the diff does not show it. **Place again**: the next **+** opens the form with the draft's text, and the add removes the stale draft. The send refuses a stale draft.
 - "Update guide" resumes the guide session with the new head and asks for `guide_update_step` calls.
 
@@ -401,7 +403,7 @@ Cost: each fork sends the guide context again. The prompt cache lasts a few minu
    - The text of each line must be the same in GitHub's diff and in the verified diff model. A difference stops the whole send.
    - A draft with no line, or with a line that GitHub's diff does not show, goes into the summary as `` `path:line`: text``. GitHub refuses a line comment there.
    - A draft on a file or line that the model does not have stops the send.
-   - A draft that is stale, or that has no stored text, or whose stored text is not the text at its lines in the model, stops the send. Without this, a draft from before an update goes on the old line number, which is another line of the new code.
+   - A draft that is stale, that belongs to another head, that has no stored text, or whose stored text is not the text at its lines in the model, stops the send. Without this, a draft from before an update goes on the old line number, which is another line of the new code.
 3. The window shows the plan: the GitHub login, the head commit, the comments on lines, the comments that go into the summary and why, and the agent drafts. Nothing is sent before your click on **Submit review**.
 4. The send uses the plan that you saw. The app builds the plan again and compares a fingerprint of it. If the plan changed, the app sends nothing and asks you to check again.
 5. One `POST /repos/{repo}/pulls/{n}/reviews` call sends the review: `commit_id` is the reviewed head, each comment has `path`, `side` (`RIGHT` or `LEFT`), `line`, and for a range `start_line` and `start_side`. GitHub accepts all comments or none.

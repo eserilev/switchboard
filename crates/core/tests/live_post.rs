@@ -50,7 +50,7 @@ fn check_pr(repo: &std::path::Path, url: &str) -> Seen {
                         start_line: None,
                         text: "x".into(),
                         agent: false,
-                        head: None,
+                        head: Some(m.head.clone()),
                         line_text: text,
                         stale: false,
                         before: None,

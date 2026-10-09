@@ -56,6 +56,13 @@ const SCHEMA: &[&str] = &[
      ALTER TABLE draft ADD COLUMN after TEXT;
      UPDATE draft SET head = (SELECT head FROM review WHERE review.id = draft.review)
        WHERE head IS NULL AND line IS NOT NULL;",
+    // Version 7: threads keep the head and the code around their line, as drafts do.
+    // A draft with no stored code around it can be on a wrong line from an older
+    // build, so it is stale once and you place it again.
+    "ALTER TABLE thread ADD COLUMN head TEXT;
+     ALTER TABLE thread ADD COLUMN before TEXT;
+     ALTER TABLE thread ADD COLUMN after TEXT;
+     UPDATE draft SET stale = 1 WHERE line IS NOT NULL AND before IS NULL AND after IS NULL;",
 ];
 
 pub struct Store {
@@ -117,6 +124,13 @@ pub struct ThreadRow {
     pub line_text: Option<String>,
     pub fork_session: Option<String>,
     pub removed: bool,
+    /// The head that `line` belongs to, and up to 2 lines of code around it.
+    #[serde(default)]
+    pub head: Option<String>,
+    #[serde(default)]
+    pub before: Option<String>,
+    #[serde(default)]
+    pub after: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -407,17 +421,19 @@ impl Store {
 
     pub fn save_thread(&self, t: &ThreadRow) -> R<()> {
         self.db.execute(
-            "INSERT INTO thread (id, review, step, path, side, line, line_text, fork_session, removed)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-             ON CONFLICT(id) DO UPDATE SET line = ?6, line_text = ?7, fork_session = ?8, removed = ?9",
-            params![t.id, t.review, t.step, t.path, t.side, t.line, t.line_text, t.fork_session, t.removed],
+            "INSERT INTO thread (id, review, step, path, side, line, line_text, fork_session, removed, head, before, after)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             ON CONFLICT(id) DO UPDATE SET line = ?6, line_text = ?7, fork_session = ?8, removed = ?9,
+               head = ?10, before = ?11, after = ?12",
+            params![t.id, t.review, t.step, t.path, t.side, t.line, t.line_text, t.fork_session, t.removed, t.head, t.before, t.after],
         )?;
         Ok(())
     }
 
     pub fn threads(&self, review: &str) -> R<Vec<ThreadRow>> {
         let mut s = self.db.prepare(
-            "SELECT id, review, step, path, side, line, line_text, fork_session, removed FROM thread WHERE review = ?1 ORDER BY rowid",
+            "SELECT id, review, step, path, side, line, line_text, fork_session, removed, head, before, after
+             FROM thread WHERE review = ?1 ORDER BY rowid",
         )?;
         let rows = s.query_map([review], |r| {
             Ok(ThreadRow {
@@ -430,6 +446,9 @@ impl Store {
                 line_text: r.get(6)?,
                 fork_session: r.get(7)?,
                 removed: r.get(8)?,
+                head: r.get(9)?,
+                before: r.get(10)?,
+                after: r.get(11)?,
             })
         })?;
         rows.collect()
@@ -737,7 +756,8 @@ mod tests {
                 assert!(rs.iter().all(|r| r.round == 1 && r.since.is_none()));
                 let ds = s.drafts("r0").unwrap();
                 assert_eq!(ds.len() as u64, drafts);
-                assert!(ds.iter().all(|d| d.agent && d.start_line.is_none() && !d.stale && d.line_text.is_none()));
+                // Old drafts on a line have no stored code around them: stale once.
+                assert!(ds.iter().all(|d| d.agent && d.start_line.is_none() && d.stale && d.line_text.is_none()));
             }
         }
     }
@@ -808,6 +828,9 @@ mod tests {
             line_text: Some("x".into()),
             fork_session: None,
             removed: false,
+            head: None,
+            before: None,
+            after: None,
         };
         s.save_thread(&t).unwrap();
         s.add_message("t1", true, "q", 1).unwrap();

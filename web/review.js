@@ -117,6 +117,7 @@
     l.mode = mode;
     l.anchor = null;
     l.compose = null;
+    l.placing = null;
     l.active = null;
     savePlace(id);
     update(S.reviews.get(id));
@@ -522,9 +523,9 @@
       ta.addEventListener("keydown", (e) => {
         e.stopPropagation();
         if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); form.requestSubmit(); }
-        if (e.key === "Escape") { l.compose = null; drawDiff(r); }
+        if (e.key === "Escape") { l.compose = null; l.placing = null; drawDiff(r); }
       });
-      form.querySelector("[data-ccancel]").onclick = () => { l.compose = null; drawDiff(r); };
+      form.querySelector("[data-ccancel]").onclick = () => { l.compose = null; l.placing = null; drawDiff(r); };
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
         const c = l.compose;
@@ -532,7 +533,9 @@
         if (!c || !text) return;
         try {
           await call("review_comment", { id: r.id, path: c.path, side: c.side, line: c.line, startLine: c.start < c.line ? c.start : null, text });
-          if (l.placing) { await call("review_draft_edit", { id: r.id, draft: l.placing.id, text: null }).catch(() => {}); l.placing = null; }
+          // Place again: the old draft goes only when this is the same comment.
+          if (l.placing && text === l.placing.text.trim()) await call("review_draft_edit", { id: r.id, draft: l.placing.id, text: null }).catch(() => {});
+          l.placing = null;
           l.compose = null;
           drawDiff(S.reviews.get(r.id) || r);
         } catch (_) {}

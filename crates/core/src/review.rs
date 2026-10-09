@@ -772,19 +772,19 @@ mod tests {
         assert_ne!(block_text(fb, false, 40, 40).unwrap(), text);
         // The move finds it at 43.
         let a = anchor_at(fa, false, 40, 40).unwrap();
-        let moved = move_anchor(fb, false, &a.text, Some(&a.before), Some(&a.after), 40).unwrap();
+        let moved = move_anchor(fb, false, &a.text, Some(&a.before), Some(&a.after)).unwrap();
         assert_eq!(moved.line, 43);
         // A range moves as one block.
         let range = block_text(fa, false, 39, 41).unwrap();
         let r = anchor_at(fa, false, 39, 41).unwrap();
         assert_eq!(r.text, range);
-        let moved = move_anchor(fb, false, &r.text, Some(&r.before), Some(&r.after), 39).unwrap();
+        let moved = move_anchor(fb, false, &r.text, Some(&r.before), Some(&r.after)).unwrap();
         assert_eq!((moved.start_line, moved.line), (Some(42), 44));
         // Line 50 at A is gone at B: the draft is stale.
         let gone = block_text(fa, false, 50, 50).unwrap();
         assert_eq!(gone, "line 50");
         let g = anchor_at(fa, false, 50, 50).unwrap();
-        assert_eq!(move_anchor(fb, false, &g.text, Some(&g.before), Some(&g.after), 50), None);
+        assert_eq!(move_anchor(fb, false, &g.text, Some(&g.before), Some(&g.after)), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
