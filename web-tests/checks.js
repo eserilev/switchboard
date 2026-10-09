@@ -40,6 +40,16 @@
   await wait(100);
   check("stream writes to the terminal", screen().includes("streamed bytes"), screen().slice(0, 120));
 
+  // Rename on the live title survives a pane update.
+  $("#livetitle .name").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  window.__emit("pane", Object.assign({}, window.__data.panes[0], { tail: ["new line"] }));
+  await wait(50);
+  check("rename survives a pane event", $("#livetitle .name")?.contentEditable === "true");
+  $("#livetitle .name").textContent = "my title";
+  $("#livetitle .name").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await wait(50);
+  check("rename saves", called("pane_rename").some((c) => c[1].id === "p1" && c[1].title === "my title"));
+
   // Leader keys: Ctrl+Space, then x collapses.
   key(" ", { ctrl: true, code: "Space" });
   check("leader shows", !$("#leader").hidden);

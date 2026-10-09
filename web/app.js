@@ -36,6 +36,7 @@ const call = (cmd, args) => invoke(cmd, args).catch((e) => { toast(e); throw e; 
 // ---------- tabs ----------
 
 function setTab(tab) {
+  if (tab !== "board") window.SB?.term?.blur();
   S.tab = tab;
   $("#view-board").hidden = tab !== "board";
   $("#view-review").hidden = tab === "board";
@@ -142,15 +143,18 @@ $("#board").addEventListener("click", (e) => {
 
 // Rename: double-click the title.
 document.addEventListener("dblclick", (e) => {
-  const name = e.target.closest(".ptitle .name");
-  if (!name) return;
-  const id = name.closest("[data-id]")?.dataset.id || S.live;
-  if (!id) return;
+  // Rename works on the live title. A click on a tile expands it first.
+  const name = e.target.closest("#livetitle .name");
+  if (!name || !S.live) return;
+  const id = S.live;
+  renaming = true;
   e.preventDefault();
   name.contentEditable = "true";
   name.focus();
   document.getSelection().selectAllChildren(name);
   const done = (save) => {
+    if (!renaming) return;
+    renaming = false;
     name.contentEditable = "false";
     if (save) call("pane_rename", { id, title: name.textContent.trim() || null });
     else drawBoard();
@@ -178,8 +182,15 @@ const fit = new FitAddon.FitAddon();
 term.loadAddon(fit);
 term.open($("#term"));
 term.attachCustomKeyEventHandler((e) => !(e.ctrlKey && e.code === "Space"));
-term.onData((data) => S.live && invoke("pane_input", { id: S.live, data, binary: false }).catch(() => {}));
-term.onBinary((data) => S.live && invoke("pane_input", { id: S.live, data, binary: true }).catch(() => {}));
+// Keys go one at a time, so fast typing keeps its order.
+let inputQ = Promise.resolve();
+const send = (data, binary) => {
+  if (!S.live || S.tab !== "board") return;
+  const id = S.live;
+  inputQ = inputQ.then(() => invoke("pane_input", { id, data, binary })).catch(() => {});
+};
+term.onData((data) => send(data, false));
+term.onBinary((data) => send(data, true));
 
 let drawn = false;
 let held = [];
@@ -233,9 +244,10 @@ function collapse() {
   if (was) $(`.pane[data-id="${CSS.escape(was)}"]`)?.focus();
 }
 
+let renaming = false;
 function drawLiveTitle() {
   const p = S.live && paneById(S.live);
-  if (!p) return;
+  if (!p || renaming) return;
   const state = p.lamp === "none" ? p.kind : LABEL[p.lamp] || p.lamp;
   const nvimBtn = p.kind !== "nvim" && S.settings.nvim ? `<button class="tool" data-nvim>nvim</button>` : "";
   $("#livetitle").innerHTML = `<span class="name">${esc(paneName(p))}</span><span class="state" style="color:var(--muted)">${esc(state)}</span>
@@ -497,7 +509,7 @@ listen("review", (e) => {
   const was = S.reviews.has(e.payload.id);
   S.reviews.set(e.payload.id, e.payload);
   drawTabs();
-  if (S.tab === e.payload.id) window.SBReview?.update(e.payload);
+  window.SBReview?.update(e.payload);
   if (!was) drawTabs();
 });
 listen("review_closed", (e) => {

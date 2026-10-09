@@ -243,6 +243,8 @@
     const s = steps(r)[l.cur];
     const text = $("#rq").value.trim();
     if (!s || !text) return;
+    const busy = l.active && (l.busy.has(l.active) || r.threads.find((t) => t.id === l.active)?.busy);
+    if (busy) return toast("This thread is still answering. Wait for it, or click the thread to start a new one.");
     $("#rq").value = "";
     try {
       const t = await invoke("review_ask", { id, step: s.id, anchor: l.active ? null : l.anchor, thread: l.active, text });
@@ -252,7 +254,7 @@
       l.pending.set(t, "");
       const fresh = await invoke("review_view", { id });
       S.reviews.set(id, fresh);
-      update(fresh);
+      window.SBReview.update(fresh);
     } catch (e) {
       $("#rq").value = text;
       toast(e);

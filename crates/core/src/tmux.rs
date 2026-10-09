@@ -369,6 +369,8 @@ pub fn quote(s: &str) -> String {
 /// The tmux config for the Switchboard server.
 pub const CONF: &str = "\
 set -g status off
+# A pane that exits at once stays, so its error shows on the tile.
+set -g remain-on-exit on
 set -g focus-events on
 set -g history-limit 50000
 set -g escape-time 0

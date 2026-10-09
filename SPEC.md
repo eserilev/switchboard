@@ -678,12 +678,19 @@ Where the build differs from the text above:
 - `--allowedTools`, `--disallowedTools` and `--mcp-config` take lists. The prompt of a `claude -p` run goes first, or one of them takes it.
 - Every `nvim --server` call times out after 3 s. An nvim that waits at "Press ENTER" never answers.
 - tmux `%pane:off` stops tmux from reading the pane. Tiles use `pause`.
+- A hidden keeper pane (`@sb_keep`) keeps the tmux session alive when every tile closes.
+- `remain-on-exit` is on for the whole server, so a pane that fails at once still shows its error.
+- After an expand, the app changes the size by one row and back. The program in the pane then draws its whole screen, and output lost in the expand gap does not matter.
+- A key typed in a pane clears the tile's permit buttons: you answered in the pane.
+- Rename works on the live title (double-click). A click on a tile expands it.
+- Each `claude -p` run is killed after 30 minutes. Its stderr goes to its own thread.
 
 Tests:
 
 - 61 core unit tests, 11 tmux tests on real servers, 5 MCP tests.
-- An end-to-end test: hub, tmux, the `sb` binary, hooks, permits, worktrees, nvim, layouts.
-- 44 window checks in headless Chromium (`web-tests/run.sh`), with a stand-in for the Tauri API.
+- An end-to-end test: hub, tmux, the `sb` binary, hooks, permits, worktrees, nvim, layouts, a crash, and a board with every tile closed.
+- A review of the code by a second agent found 15 bugs and no deadlocks. All 15 are fixed.
+- 46 window checks in headless Chromium (`web-tests/run.sh`), with a stand-in for the Tauri API.
 - Two live tests, ignored by default because they cost tokens: a review of a real PR (`live_review`), and a connection switch with resume (`live_switch`). Both passed on 2026-10-08.
 - A smoke test of the real app: `sb open`, the trust dialog, a real prompt to Your turn, a restart.
 

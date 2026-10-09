@@ -33,13 +33,6 @@ impl Sink for AppSink {
 impl AppSink {
     /// A desktop notification and the urgency hint, when the window is not focused (SPEC 6.3).
     fn alert(&self, pane: &Value) {
-        let Some(win) = self.handle.get_webview_window("main") else {
-            return;
-        };
-        if win.is_focused().unwrap_or(false) {
-            return;
-        }
-        let _ = win.request_user_attention(Some(UserAttentionType::Informational));
         let label = match pane["lamp"].as_str() {
             Some("needs") => "Needs you",
             Some("turn") => "Your turn",
@@ -47,6 +40,13 @@ impl AppSink {
             Some("error") => "Error",
             _ => return,
         };
+        let Some(win) = self.handle.get_webview_window("main") else {
+            return;
+        };
+        if win.is_focused().unwrap_or(false) {
+            return;
+        }
+        let _ = win.request_user_attention(Some(UserAttentionType::Informational));
         let title = pane["title"]
             .as_str()
             .filter(|t| !t.is_empty())

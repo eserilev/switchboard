@@ -334,6 +334,10 @@ pub fn args(run: &Run) -> Vec<String> {
 }
 
 /// Runs `claude -p` and calls `on` for each stream event. Returns the final result.
+/// The longest one `claude -p` run may take. A stuck run is killed, so the
+/// review shows an error and Retry, not "writing" for good.
+pub const RUN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
 pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
     let mut child = Command::new("claude")
         .args(args(run))
@@ -345,6 +349,31 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
         .spawn()
         .map_err(|e| format!("claude: {e}"))?;
     let out = child.stdout.take().expect("piped");
+    // Read stderr on its own thread: a full stderr pipe blocks the child.
+    let mut err = child.stderr.take().expect("piped");
+    let err_text = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        let _ = err.read_to_end(&mut buf);
+        let s = String::from_utf8_lossy(&buf).into_owned();
+        s.chars()
+            .rev()
+            .take(2000)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<String>()
+    });
+    // A watchdog kills a run that takes too long.
+    let pid = child.id();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let watchdog = std::thread::spawn(move || {
+        if done_rx.recv_timeout(RUN_TIMEOUT).is_err() {
+            let _ = Command::new("kill").arg("-9").arg(pid.to_string()).status();
+            return true;
+        }
+        false
+    });
     let mut last = None;
     for line in BufReader::new(out).lines().map_while(Result::ok) {
         if let Some(ev) = parse_stream(&line) {
@@ -355,19 +384,21 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
         }
     }
     let status = child.wait().map_err(|e| e.to_string())?;
+    let _ = done_tx.send(());
+    let killed = watchdog.join().unwrap_or(false);
+    let err = err_text.join().unwrap_or_default();
+    if killed {
+        return Err(format!(
+            "claude took longer than {} minutes and was stopped.",
+            RUN_TIMEOUT.as_secs() / 60
+        ));
+    }
     match last {
         Some(r) => Ok(r),
-        None => {
-            let mut err = String::new();
-            if let Some(mut e) = child.stderr.take() {
-                use std::io::Read;
-                let _ = e.read_to_string(&mut err);
-            }
-            Err(format!(
-                "claude exited with {status} and no result. {}",
-                err.trim()
-            ))
-        }
+        None => Err(format!(
+            "claude exited with {status} and no result. {}",
+            err.trim()
+        )),
     }
 }
 

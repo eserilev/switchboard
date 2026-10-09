@@ -375,6 +375,17 @@ impl Hub {
     }
 
     pub fn review_retry(&self, id: &str) -> Res<()> {
+        let running = self
+            .reviews
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|r| matches!(r.status.as_str(), "fetching" | "writing" | "updating"))
+            .unwrap_or(false);
+        if running {
+            return Err("the review is still running".into());
+        }
+        self.set_status(id, "fetching", None);
         let hub = self.arc();
         let rid = id.to_owned();
         std::thread::spawn(move || {
@@ -555,6 +566,9 @@ impl Hub {
                 t
             }
         };
+        if BUSY.lock().unwrap().contains(&t.id) {
+            return Err("this thread is still answering; wait for it".into());
+        }
         store.add_message(&t.id, true, text, now()).map_err(e)?;
         let pins: Vec<String> = store
             .pins(id)
@@ -566,7 +580,8 @@ impl Hub {
         drop(store);
 
         let prompt = match &t.fork_session {
-            Some(_) => text.to_owned(),
+            // A plain follow-up can start with "-", and claude would read it as a flag.
+            Some(_) => format!("Follow-up question: {text}"),
             None => thread_prompt(&self.step(id, &t.step)?, &t, &pins, text),
         };
         let (resume, fork) = match &t.fork_session {
@@ -807,6 +822,16 @@ impl Hub {
 
     /// Moves the review to the new head: stale steps, re-anchored threads, a guide update.
     pub fn review_update(&self, id: &str) -> Res<()> {
+        let running = self
+            .reviews
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|r| matches!(r.status.as_str(), "fetching" | "writing" | "updating"))
+            .unwrap_or(false);
+        if running {
+            return Err("the review is still running".into());
+        }
         let hub = self.arc();
         let rid = id.to_owned();
         std::thread::spawn(move || {

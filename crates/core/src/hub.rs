@@ -73,6 +73,8 @@ pub(crate) struct Pane {
     pub permit: Option<PermitView>,
     pub trust: bool,
     pub started: u64,
+    /// The tick saw this process exit. It stops a second alert for the same exit.
+    pub dead: bool,
 }
 
 impl Pane {
@@ -123,6 +125,8 @@ pub struct Hub {
     pub(crate) sink: Arc<dyn Sink>,
     pub(crate) sb: PathBuf,
     pub(crate) reviews: Mutex<HashMap<String, crate::hub_review::ReviewState>>,
+    /// The last size the window asked for.
+    size: Mutex<(u16, u16)>,
     me: Weak<Hub>,
 }
 
@@ -173,8 +177,10 @@ impl Hub {
             sink,
             sb,
             reviews: Mutex::default(),
+            size: Mutex::new((200, 50)),
             me: me.clone(),
         });
+        hub.keep_session()?;
         hub.reattach()?;
         hub.load_reviews();
         if let Some(err) = config_error {
@@ -196,10 +202,32 @@ impl Hub {
 
     // ---------- start and restart (SPEC 16) ----------
 
+    /// tmux ends a session when its last pane closes, and the control client
+    /// with it. A hidden pane that never exits keeps the session alive.
+    fn keep_session(&self) -> Res<()> {
+        let tags = self.tmux.list("#{@sb_keep}").map_err(e)?;
+        if tags.iter().any(|t| t == "1") {
+            return Ok(());
+        }
+        let tid = self
+            .tmux
+            .new_pane(
+                &crate::paths::home_dir(),
+                &["sh", "-c", "exec tail -f /dev/null"],
+                &[],
+            )
+            .map_err(e)?;
+        self.tmux
+            .set_pane_option(&tid, "@sb_keep", "1")
+            .map_err(e)?;
+        let _ = self.tmux.set_streaming(&tid, false);
+        Ok(())
+    }
+
     fn reattach(&self) -> Res<()> {
         let lines = self
             .tmux
-            .list("#{pane_id}\t#{@sb_pane}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_current_path}\t#{pane_pid}")
+            .list("#{pane_id}\t#{@sb_pane}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_current_path}\t#{pane_pid}\t#{@sb_keep}")
             .map_err(e)?;
         let store = self.store.lock().unwrap();
         let rows = store.open_panes().map_err(e)?;
@@ -214,6 +242,10 @@ impl Hub {
                 f.get(4).copied().unwrap_or("/"),
                 f.get(5).and_then(|p| p.parse().ok()),
             );
+            let status: i32 = f.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+            if f.get(6) == Some(&"1") {
+                continue;
+            }
             let _ = self.tmux.set_streaming(tid, false);
             let row = match rows.iter().find(|r| r.id == tag) {
                 Some(r) => r.clone(),
@@ -243,9 +275,25 @@ impl Hub {
                 }
             };
             found.insert(row.id.clone());
+            if dead && row.kind != "claude" {
+                // An nvim or a shell that quit while the app was closed.
+                let _ = self.tmux.kill_pane(tid);
+                store.close_pane(&row.id, now()).map_err(e)?;
+                continue;
+            }
             let mut p = self.pane_from(row, Some(tid.to_owned()), pid);
             if dead {
-                p.row.lamp = Lamp::Ended.as_str().into();
+                p.dead = true;
+                p.row.lamp = if status == 0 {
+                    Lamp::Ended
+                } else {
+                    Lamp::Error
+                }
+                .as_str()
+                .into();
+                if status != 0 {
+                    p.row.summary = Some(format!("Exited with {status}"));
+                }
             }
             panes.push(p);
         }
@@ -288,6 +336,7 @@ impl Hub {
             permit: None,
             trust: false,
             started: now(),
+            dead: false,
         }
     }
 
@@ -352,6 +401,20 @@ impl Hub {
         self.store.lock().unwrap().save_pane(&p.row).map_err(e)?;
         self.emit_pane(p, alert);
         Ok(out)
+    }
+
+    /// Like `with_pane`, but `f` decides if the change alerts you.
+    fn update_pane(&self, id: &str, f: impl FnOnce(&mut Pane) -> bool) -> Res<bool> {
+        let mut panes = self.panes.lock().unwrap();
+        let p = panes
+            .iter_mut()
+            .find(|p| p.row.id == id)
+            .ok_or(format!("no pane {id}"))?;
+        let alert = f(p);
+        p.row.updated = now();
+        self.store.lock().unwrap().save_pane(&p.row).map_err(e)?;
+        self.emit_pane(p, alert);
+        Ok(alert)
     }
 
     fn tmux_id(&self, id: &str) -> Res<String> {
@@ -556,6 +619,16 @@ impl Hub {
         screen.extend(lines.join("\r\n").into_bytes());
         screen.extend(format!("\x1b[{};{}H", y + 1, x + 1).into_bytes());
         self.seen(id)?;
+        // Output in the gap between the capture and `continue` is lost. A size
+        // change makes the program in the pane draw its whole screen again.
+        let (cols, rows) = *self.size.lock().unwrap();
+        let tmux = Arc::clone(&self.tmux);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(80));
+            let _ = tmux.set_size(cols, rows.saturating_sub(1).max(2));
+            std::thread::sleep(Duration::from_millis(80));
+            let _ = tmux.set_size(cols, rows);
+        });
         Ok(screen)
     }
 
@@ -575,6 +648,10 @@ impl Hub {
     pub fn input(&self, id: &str, bytes: &[u8]) -> Res<()> {
         let tid = self.tmux_id(id)?;
         self.tmux.send_bytes(&tid, bytes).map_err(e)?;
+        // A key in the pane answers its prompt there, so the tile buttons go.
+        if self.permits.lock().unwrap().values().any(|(p, _)| p == id) {
+            self.answer_permits(id, None);
+        }
         let unseen = self
             .panes
             .lock()
@@ -588,6 +665,7 @@ impl Hub {
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Res<()> {
+        *self.size.lock().unwrap() = (cols, rows);
         self.tmux.set_size(cols, rows).map_err(e)
     }
 
@@ -600,8 +678,7 @@ impl Hub {
     pub fn on_state(&self, m: &StateMsg) {
         let mut checktime = None;
         let mut limit_conn = None;
-        let res = self.with_pane(&m.pane, true, |p| {
-            let before = p.lamp();
+        let res = self.update_pane(&m.pane, |p| {
             apply_state(p, m);
             if m.event == "edited" {
                 checktime = Some(p.row.tree.clone());
@@ -609,7 +686,8 @@ impl Hub {
             if m.event == "limit" {
                 limit_conn = Some(p.row.connection.clone());
             }
-            p.lamp().wants_you() && p.lamp() != before || m.event == "turn"
+            // Only an event that lights a lamp alerts. `edited` and `session` never do.
+            p.lamp().wants_you() && matches!(m.event.as_str(), "needs" | "turn" | "limit" | "error")
         });
         if res.is_err() {
             return;
@@ -654,7 +732,7 @@ impl Hub {
         let id = format!("{pane}-{}", now_nanos());
         let summary = hooks::permit_summary(tool, input);
         let ok = self
-            .with_pane(pane, true, |p| {
+            .update_pane(pane, |p| {
                 p.permit = Some(PermitView {
                     id: id.clone(),
                     summary: summary.clone(),
@@ -663,6 +741,7 @@ impl Hub {
                 p.row.lamp = l.as_str().into();
                 p.row.unseen = u;
                 p.row.summary = Some(summary.clone());
+                true
             })
             .is_ok();
         if ok {
@@ -801,6 +880,7 @@ impl Hub {
             p.row.unseen = false;
             p.row.summary = Some(format!("Resumed on {connection}"));
             p.started = now();
+            p.dead = false;
         })
     }
 
@@ -1233,7 +1313,8 @@ impl Hub {
                 changed = true;
             }
             p.pid = pid.or(p.pid);
-            if dead && p.lamp() != Lamp::Ended {
+            if dead && !p.dead {
+                p.dead = true;
                 if p.row.kind == "claude" {
                     p.row.lamp = if status == 0 {
                         Lamp::Ended
@@ -1255,6 +1336,14 @@ impl Hub {
                     gone.push(id.clone());
                     continue;
                 }
+            }
+            // The trust dialog was answered in the pane: no hook says so.
+            if p.trust && !p.tail.join("\n").to_lowercase().contains(TRUST_TEXT) {
+                p.trust = false;
+                p.row.lamp = Lamp::Idle.as_str().into();
+                p.row.unseen = false;
+                p.row.summary = None;
+                changed = true;
             }
             // Trust dialog: only a new Claude pane, before its first hook.
             if p.row.kind == "claude"
@@ -1321,7 +1410,7 @@ fn apply_state(p: &mut Pane, m: &StateMsg) {
     if let Some(s) = &m.session {
         p.row.session = Some(s.clone());
     }
-    if m.summary.is_some() {
+    if m.summary.is_some() && !(m.event == "needs" && p.permit.is_some()) {
         p.row.summary = m.summary.clone();
     } else if m.event == "working" && p.permit.is_none() {
         p.row.summary = None;

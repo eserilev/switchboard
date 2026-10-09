@@ -246,6 +246,30 @@ fn hooks_permits_and_panes_end_to_end() {
             .any(|p| p.id == claude_id && p.permit.is_none() && p.lamp == Lamp::Working)
     });
 
+    // A key typed in the pane answers there: the tile buttons go, with no decision.
+    let r4 = root.clone();
+    let cid = claude_id.clone();
+    let asker = std::thread::spawn(move || {
+        sb(
+            &r4,
+            &cid,
+            &["permit"],
+            json!({"tool_name":"Bash","tool_input":{"command":"ls"}}),
+        )
+    });
+    wait_for("third permit", || {
+        hub.views()
+            .iter()
+            .any(|p| p.id == claude_id && p.permit.is_some())
+    });
+    hub.input(&claude_id, b"1").unwrap();
+    let out = asker.join().unwrap();
+    assert!(out.stdout.is_empty());
+    assert!(hub
+        .views()
+        .iter()
+        .any(|p| p.id == claude_id && p.permit.is_none()));
+
     // A rate limit sets Limit and marks the connection.
     sb(
         &root,
@@ -285,13 +309,34 @@ fn hooks_permits_and_panes_end_to_end() {
     wait_for("shell exit removes the tile", || {
         !hub.views().iter().any(|p| p.id == sh.id)
     });
-    // A Claude pane that exits stays as an ended tile, so it can resume.
-    hub.input(&claude_id, b"exit\r").unwrap();
-    wait_for("claude-kind exit ends the tile", || {
+    // A Claude pane that crashes shows Error and alerts once, not every tick.
+    let alerts = |id: &str| {
+        events
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(e, v)| e == "pane" && v["id"] == id && v["alert"] == true)
+            .count()
+    };
+    let before = alerts(&claude_id);
+    hub.input(&claude_id, b"\x15exit 3\r").unwrap();
+    wait_for("crash shows Error", || {
         hub.views()
             .iter()
-            .any(|p| p.id == claude_id && p.lamp == Lamp::Ended)
+            .any(|p| p.id == claude_id && p.lamp == Lamp::Error && p.unseen)
     });
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(alerts(&claude_id) - before, 1, "one alert for one crash");
+    assert_eq!(
+        hub.views()
+            .iter()
+            .find(|p| p.id == claude_id)
+            .unwrap()
+            .summary
+            .as_deref(),
+        Some("Exited with 3")
+    );
 
     // nvim: one per worktree, opened at a line, then reused.
     if switchboard_core::nvim::installed() {
@@ -332,6 +377,24 @@ fn hooks_permits_and_panes_end_to_end() {
     // Layouts.
     hub.layout_save("day").unwrap();
     assert_eq!(hub.layouts(), vec!["day"]);
+
+    // Close every tile. The hidden keeper pane keeps the tmux session, so a new pane still opens.
+    for v in hub.views() {
+        hub.close(&v.id).unwrap();
+    }
+    assert!(hub.views().is_empty());
+    std::thread::sleep(Duration::from_millis(300));
+    let again = hub
+        .open(OpenReq {
+            repo: repo.to_string_lossy().into(),
+            place: "main".into(),
+            branch: None,
+            tree: None,
+            run: "shell".into(),
+            title: None,
+        })
+        .unwrap();
+    assert!(hub.views().iter().any(|p| p.id == again.id));
 
     // `sb state` with no SB_PANE does nothing and exits 0.
     let out = Command::new(env!("CARGO_BIN_EXE_sb"))
