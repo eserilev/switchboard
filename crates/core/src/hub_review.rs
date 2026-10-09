@@ -1139,7 +1139,7 @@ impl Hub {
                 let x = crate::post::model_file(&m, &a.path, old)
                     .and_then(|f| crate::post::anchor_at(f, old, a.line, a.line));
                 // The line must be from the diff of this head, with this text.
-                if a.head != m.head || x.as_ref().map(|x| x.text.as_str()) != Some(a.text.as_str()) {
+                if a.head != m.head || !x.as_ref().is_some_and(|x| crate::post::same_line(&a.text, &x.text)) {
                     return Err(STALE_VIEW.into());
                 }
                 x.map(|x| (m.head.clone(), x))
@@ -1437,7 +1437,9 @@ impl Hub {
             return Err(format!("{path} has no lines {start} to {line}."));
         }
         // The line must be from the diff of this head, with the text you saw.
-        if head != model.head || crate::post::line_text(f, side == "old", line).as_deref() != Some(line_text) {
+        if head != model.head
+            || !crate::post::line_text(f, side == "old", line).is_some_and(|t| crate::post::same_line(line_text, &t))
+        {
             return Err(STALE_VIEW.into());
         }
         let d = DraftRow {

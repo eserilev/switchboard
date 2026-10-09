@@ -319,8 +319,10 @@
     // review's head. (During an update the server loads the new commit for a while.)
     if (d && d.head && r.head && d.head !== r.head) {
       l.diff.delete(key);
-      $("#rdiff").innerHTML = `<div class="rnote">Loading the new commit…</div>`;
       clearTimeout(l.retry);
+      // A failed update keeps the old model: show the error, and stop asking.
+      if (r.status === "error") { $("#rdiff").innerHTML = `<div class="rerror">${esc(r.error || "The new commit did not load. Use Retry.")}</div>`; return; }
+      $("#rdiff").innerHTML = `<div class="rnote">Loading the new commit…</div>`;
       l.retry = setTimeout(() => loadDiff(r.id), 800);
       return;
     }

@@ -171,6 +171,12 @@ pub fn line_text(f: &ChangedFile, old: bool, n: u32) -> Option<String> {
     Some(String::from_utf8_lossy(l).into_owned())
 }
 
+/// True when the window's text of a line is `ours`. The window's row text can keep
+/// a `\r` (a file with CRLF line ends), and the browser can turn it into `\n`.
+pub fn same_line(window: &str, ours: &str) -> bool {
+    window.trim_end_matches(['\r', '\n']) == ours.trim_end_matches(['\r', '\n'])
+}
+
 /// The text of lines `from` to `to` of one side, joined with "\n".
 pub fn block_text(f: &ChangedFile, old: bool, from: u32, to: u32) -> Option<String> {
     let lines: Option<Vec<String>> = (from..=to).map(|n| line_text(f, old, n)).collect();
@@ -788,6 +794,14 @@ Binary files /dev/null and b/img.png differ
         d.line_text = None;
         d.stale = true;
         assert_eq!(plan(&m, &gh, &[d], true).errors.len(), 1);
+    }
+
+    #[test]
+    fn a_crlf_line_from_the_window_is_the_same_line() {
+        assert!(same_line("let a = 1;\r", "let a = 1;"));
+        assert!(same_line("let a = 1;\n", "let a = 1;"));
+        assert!(!same_line("let a = 2;", "let a = 1;"));
+        assert!(!same_line(" let a = 1;", "let a = 1;"));
     }
 
     #[test]
