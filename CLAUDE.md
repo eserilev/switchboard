@@ -13,6 +13,14 @@ A desktop app for many AI agents on one screen, plus a guided PR review. `SPEC.m
 - A `claude -p` run puts the prompt first. List flags take it otherwise.
 - Lock rule: never hold a lock in an `if let` on the guard when the block locks again. Take the value first.
 
+## Proofs
+
+`crates/guide-check` is proved in Lean with Aeneas (`proofs/`, SPEC 24). It stays in the Aeneas subset:
+- `while` loops and small functions. No `?`, no closures, no `&&` or `||` in a loop condition, no iterators.
+- A `return` inside a loop only when the loop is the last statement.
+- No add that can overflow: loop with an index `k < bound`, not `l <= to`.
+After a change to `guide-check`, run `scripts/check-proofs.sh`. It regenerates `proofs/GuideCheck/Code`; commit that too. Never weaken a statement in `proofs/Statements.lean` to make a proof pass.
+
 ## Build and test
 
 ```sh

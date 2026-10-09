@@ -59,22 +59,32 @@ fn live_review_of_a_tiny_pr() {
         v.error
     );
     assert_eq!(v.status, "ready", "{:?}", v.error);
+    let cov = v.coverage.clone().expect("coverage");
+    println!(
+        "coverage: {} lines in {} files, accepted {}, missed {}, github {:?}",
+        cov.changed_lines, cov.files, cov.accepted, cov.missed_lines, cov.github
+    );
+    assert!(
+        cov.accepted,
+        "the verified checker must accept the shown guide"
+    );
     let guide = v.guide.unwrap();
     let steps = guide["steps"].as_array().unwrap();
     for s in steps {
-        println!(
-            "step {} {} {} {:?}",
-            s["id"], s["title"], s["file"], s["lines"]
-        );
+        println!("step {} {} {}", s["id"], s["title"], s["ranges"]);
     }
     let step = steps
         .iter()
-        .find(|s| s["file"].is_string())
-        .expect("a step with a file");
+        .find(|s| s["ranges"].as_array().is_some_and(|r| !r.is_empty()))
+        .expect("a step with ranges");
     let sid = step["id"].as_str().unwrap();
     let diff = hub.review_diff(&id, sid).unwrap();
-    println!("diff rows={} context={}", diff.rows.len(), diff.context);
-    assert!(!diff.rows.is_empty());
+    println!(
+        "diff sections={} rows={}",
+        diff.sections.len(),
+        diff.sections.iter().map(|s| s.rows.len()).sum::<usize>()
+    );
+    assert!(!diff.sections.is_empty() && !diff.sections[0].rows.is_empty());
 
     let tid = hub
         .review_ask(

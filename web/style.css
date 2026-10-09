@@ -141,6 +141,9 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .rhead .m { font: 11px/1.4 var(--mono); color: var(--muted); }
 .rhead .status { font: 600 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--working); }
 .rhead .status.error { color: var(--error); }
+.rhead .cov { font: 600 11px/1 var(--mono); color: var(--muted); }
+.rhead .cov.ok { color: var(--done); }
+.rhead .cov.warn { color: var(--needs); }
 .rhead .newhead { font: 12px/1.4 var(--mono); color: var(--needs); display: flex; gap: 8px; align-items: center; }
 .rhead .right { margin-left: auto; display: flex; gap: 8px; }
 .rerror { padding: 14px; color: var(--error); font: 13px/1.5 var(--mono); white-space: pre-wrap; }

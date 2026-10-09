@@ -3,6 +3,7 @@
 pub mod config;
 pub mod connections;
 pub mod control;
+pub mod coverage;
 pub mod diff;
 pub mod hooks;
 pub mod hub;

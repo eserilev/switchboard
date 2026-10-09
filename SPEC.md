@@ -703,3 +703,40 @@ Not tested yet:
 - An endpoint connection (S7).
 - New commits during a review (11.7) against a real PR.
 - Desktop notifications when the window is in the background.
+
+## 24. Verified guide check
+
+The LLM proposes the review guide. A small checker decides if you see it. The checker is the crate `guide-check`, and `proofs/` proves it in Lean with Aeneas.
+
+### What is proved
+
+`Statements.lean` holds the approved statements. `scripts/check-proofs.sh` regenerates the Lean from the Rust, builds the proofs, and allows only the axioms `propext`, `Classical.choice` and `Quot.sound`.
+
+- **G1.** `check` never panics, and it returns `true` exactly when the guide is accepted (`Accept` in `proofs/GuideCheck/Spec.lean`).
+- **G2.** In an accepted guide, every added and every removed line is in a step range of the same file and side.
+- **G3.** In an accepted guide, the lines the diff does not mark are the same in the old and the new file, in the same order. So the diff names every change.
+- **G4.** In an accepted guide, a file where the diff marks no line did not change.
+
+`Accept` also needs every range to hold a changed line, and every line of a range to be at most 20 lines (`PAD`) from a changed line.
+
+### The flow
+
+1. The app fetches the PR. The head must equal GitHub's `headRefOid`. The base is the merge base of GitHub's `baseRefOid` and the head, as on GitHub.
+2. The app reads every changed file at both commits from git, and the changed line numbers from `git diff -U0`. Lines keep their newline byte.
+3. The verified rebuild check runs on every file. If one fails, the review stops. A wrong diff parse can never reach you.
+4. git's counts are compared with GitHub's counts for each file. A difference shows as a warning in the header.
+5. `guide_set_steps` runs the verified `check`. A refused guide goes back to the agent with every missed line and every bad range. After 3 refusals, the app keeps the good ranges and adds a step "Not in the guide" with every missed change.
+6. When the agent ends, the app checks the stored guide again. You only ever see a guide that `check` accepted.
+
+### What stays trusted
+
+- git returns the right file content for a commit. git checks object hashes itself.
+- The window draws the accepted guide and diff. It draws from the same data, with no second copy.
+- Binary files have no lines. A step must name each one in `files`. That rule is plain code, not proved.
+- What the agent writes about the code. No checker can prove that an explanation is true.
+
+### Tests
+
+- 40,000 random inputs compare `check` with a plain model of the spec.
+- The diff model and the rebuild check on the last 50 Lighthouse commits: 334 files, 15,819 changed lines, 6 renames, 1 binary file, all pass (`crates/core/tests/real_diffs.rs`).
+- A live review of a real PR: the agent's guide passed the checker with no added step.

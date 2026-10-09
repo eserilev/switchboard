@@ -3038,6 +3038,7 @@ dependencies = [
 name = "switchboard-core"
 version = "0.1.0"
 dependencies = [
+ "guide-check",
  "rusqlite",
  "serde",
  "serde_json",

@@ -6,7 +6,7 @@ use crate::now;
 use crate::repos::{self, git};
 use crate::review::{self, PrInfo, Run, Stream};
 use crate::store::{DraftRow, ReviewRow, ThreadRow};
-use crate::{connections, expand};
+use crate::{connections, coverage, expand};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -18,6 +18,29 @@ pub(crate) struct ReviewState {
     pub error: Option<String>,
     pub new_head: Option<String>,
     pub last_poll: u64,
+    /// The PR diff that the verified checker works on. Built after the fetch.
+    pub model: Option<std::sync::Arc<coverage::DiffModel>>,
+    /// Rejected guides in a row, and the last one, for the "Not in the guide" step.
+    pub attempts: u32,
+    pub proposal: Option<Value>,
+    pub coverage: Option<CoverageView>,
+}
+
+/// Rejected guides before the app completes the guide itself.
+const MAX_ATTEMPTS: u32 = 3;
+
+/// What the window shows about coverage.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct CoverageView {
+    pub files: usize,
+    pub changed_lines: usize,
+    /// True when the verified checker accepted the guide.
+    pub accepted: bool,
+    /// Changed lines that the app put into "Not in the guide".
+    pub missed_lines: usize,
+    pub binary: Vec<String>,
+    /// Differences between git's and GitHub's counts.
+    pub github: Vec<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -38,6 +61,7 @@ pub struct ReviewView {
     pub threads: Vec<ThreadView>,
     pub pins: Vec<crate::store::PinRow>,
     pub drafts: Vec<DraftRow>,
+    pub coverage: Option<CoverageView>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -77,10 +101,18 @@ pub struct Anchor {
 
 #[derive(Serialize, Clone, Debug)]
 pub struct DiffView {
-    pub path: Option<String>,
+    pub sections: Vec<DiffSection>,
+}
+
+/// The diff of one file in a step, with the step's ranges in it.
+#[derive(Serialize, Clone, Debug)]
+pub struct DiffSection {
+    pub path: String,
+    pub old_path: Option<String>,
     pub rows: Vec<Row>,
     /// True when the PR does not change the file and the rows are plain context.
     pub context: bool,
+    pub ranges: Vec<coverage::Range>,
 }
 
 type Res<T> = Result<T, String>;
@@ -116,6 +148,10 @@ impl Hub {
                     error,
                     new_head: None,
                     last_poll: 0,
+                    model: None,
+                    attempts: 0,
+                    proposal: None,
+                    coverage: None,
                 },
             );
         }
@@ -187,6 +223,7 @@ impl Hub {
             threads,
             pins: store.pins(id).map_err(e)?,
             drafts: store.drafts(id).map_err(e)?,
+            coverage: r.coverage.clone(),
         })
     }
 
@@ -250,6 +287,10 @@ impl Hub {
                 error: None,
                 new_head: None,
                 last_poll: now(),
+                model: None,
+                attempts: 0,
+                proposal: None,
+                coverage: None,
             },
         );
         self.emit_review(&id);
@@ -278,13 +319,24 @@ impl Hub {
         tracing::info!(target: "sb::review", review = id, ms = ms(), clone = %dir.display(), %remote, "review: found the clone");
         let f = review::fetch(&dir, &remote, &pr)?;
         tracing::info!(target: "sb::review", review = id, ms = ms(), tree = %f.tree.display(), "review: worktree ready");
+        if f.head != pr.head_ref_oid {
+            return Err(format!(
+                "the PR head moved during the fetch (GitHub {}, fetched {}). Use Retry.",
+                pr.head_ref_oid, f.head
+            ));
+        }
         if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
             r.row.title = pr.title.clone();
             r.row.head = f.head.clone();
             r.row.base = f.base.clone();
             r.row.tree = f.tree.to_string_lossy().into_owned();
+            r.row.guide = None;
+            r.attempts = 0;
+            r.proposal = None;
         }
         self.save_row(id);
+        self.load_model(id, Some(&pr))?;
+        tracing::info!(target: "sb::review", review = id, ms = ms(), "review: diff model checked");
         self.run_guide(id, &pr, None)
     }
 
@@ -304,6 +356,114 @@ impl Hub {
         Err(format!(
             "no local clone has a remote for {repo}. Clone it under a scanned folder."
         ))
+    }
+
+    /// Builds the diff model, runs the verified rebuild check, and compares the
+    /// counts with GitHub. A failed rebuild stops the review.
+    fn load_model(
+        &self,
+        id: &str,
+        pr: Option<&PrInfo>,
+    ) -> Res<std::sync::Arc<coverage::DiffModel>> {
+        let (tree, head, base) = self.review_refs(id)?;
+        let model = coverage::build(&tree, &base, &head)?;
+        coverage::rebuild_ok(&model)
+            .map_err(|err| format!("The diff check failed, so the review stops: {err}."))?;
+        let github = match pr {
+            Some(pr) => {
+                let counts = pr
+                    .files
+                    .iter()
+                    .map(|f| (f.path.clone(), (f.additions, f.deletions)))
+                    .collect();
+                coverage::compare_counts(&model, &counts)
+            }
+            None => vec![],
+        };
+        for w in &github {
+            tracing::warn!(target: "sb::review", review = id, warning = %w, "git and GitHub differ");
+        }
+        let view = CoverageView {
+            files: model.files.len(),
+            changed_lines: model
+                .files
+                .iter()
+                .map(coverage::ChangedFile::changed_lines)
+                .sum(),
+            accepted: false,
+            missed_lines: 0,
+            binary: model
+                .files
+                .iter()
+                .filter(|f| f.binary)
+                .map(|f| f.path().to_owned())
+                .collect(),
+            github,
+        };
+        let model = std::sync::Arc::new(model);
+        if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
+            r.model = Some(model.clone());
+            r.coverage = Some(view);
+        }
+        Ok(model)
+    }
+
+    /// The diff model, built when a review loads from the store.
+    fn model(&self, id: &str) -> Res<std::sync::Arc<coverage::DiffModel>> {
+        let have = self
+            .reviews
+            .lock()
+            .unwrap()
+            .get(id)
+            .and_then(|r| r.model.clone());
+        match have {
+            Some(m) => Ok(m),
+            None => self.load_model(id, None),
+        }
+    }
+
+    /// Stores a guide that the verified checker accepted.
+    fn accept_guide(&self, id: &str, guide: Value, missed_lines: usize) {
+        if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
+            r.row.guide = Some(guide.to_string());
+            r.attempts = 0;
+            r.proposal = None;
+            if let Some(c) = r.coverage.as_mut() {
+                c.accepted = true;
+                c.missed_lines = missed_lines;
+            }
+        }
+        self.save_row(id);
+        self.emit_review(id);
+    }
+
+    /// When the agent is done: the stored guide must pass the checker. If it
+    /// does not, or the agent gave up, the app completes the last guide.
+    fn finalize_guide(&self, id: &str) -> Res<bool> {
+        let model = self.model(id)?;
+        let (stored, proposal) = {
+            let r = self.reviews.lock().unwrap();
+            let r = r.get(id).ok_or("gone")?;
+            (
+                r.row
+                    .guide
+                    .as_deref()
+                    .and_then(|g| serde_json::from_str::<Value>(g).ok()),
+                r.proposal.clone(),
+            )
+        };
+        if let Some(g) = &stored {
+            if coverage::check_guide(&model, g).is_ok() {
+                return Ok(true);
+            }
+        }
+        let Some(base) = proposal.or(stored) else {
+            return Ok(false);
+        };
+        let (guide, missed) = coverage::complete(&model, &base)?;
+        tracing::warn!(target: "sb::review", review = id, missed, "the app completed the guide");
+        self.accept_guide(id, guide, missed);
+        Ok(true)
     }
 
     /// Runs the guide session: a new one, or a resume with an update prompt.
@@ -363,15 +523,9 @@ impl Hub {
                 self.save_row(id);
             }
         })?;
-        let has_guide = self
-            .reviews
-            .lock()
-            .unwrap()
-            .get(id)
-            .map(|r| r.row.guide.is_some())
-            .unwrap_or(false);
+        let has_guide = self.finalize_guide(id)?;
         match result {
-            Stream::Result { error: false, .. } if has_guide => self.set_status(id, "ready", None),
+            Stream::Result { .. } if has_guide => self.set_status(id, "ready", None),
             Stream::Result { text, .. } => self.set_status(
                 id,
                 "error",
@@ -410,18 +564,38 @@ impl Hub {
     // ---------- the MCP tools ----------
 
     pub(crate) fn guide_set(&self, id: &str, guide: Value) -> Res<()> {
-        let (tree, head, base) = self.review_refs(id)?;
-        review::validate(&guide, &tree, &head, &base)?;
-        if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
-            r.row.guide = Some(guide.to_string());
+        let guide = normalize(guide)?;
+        let model = self.model(id)?;
+        match coverage::check_guide(&model, &guide) {
+            Ok(()) => {
+                tracing::info!(target: "sb::review", review = id, "guide accepted by the checker");
+                self.accept_guide(id, guide, 0);
+                Ok(())
+            }
+            Err(report) => {
+                let attempts = {
+                    let mut r = self.reviews.lock().unwrap();
+                    let r = r.get_mut(id).ok_or("gone")?;
+                    r.attempts += 1;
+                    r.proposal = Some(guide.clone());
+                    r.attempts
+                };
+                tracing::info!(target: "sb::review", review = id, attempts, uncovered = report.uncovered.len(), bad = report.bad_ranges.len(), "guide refused by the checker");
+                if attempts >= MAX_ATTEMPTS {
+                    // Enough tries: keep what is good, and add every missed change.
+                    let (done, missed) = coverage::complete(&model, &guide)?;
+                    self.accept_guide(id, done, missed);
+                    return Ok(());
+                }
+                Err(format!(
+                    "{}This was try {attempts} of {MAX_ATTEMPTS}.",
+                    report.text()
+                ))
+            }
         }
-        self.save_row(id);
-        self.emit_review(id);
-        Ok(())
     }
 
     pub(crate) fn guide_update(&self, id: &str, step: &str, fields: Value) -> Res<()> {
-        let (tree, head, base) = self.review_refs(id)?;
         let mut guide: Value = {
             let r = self.reviews.lock().unwrap();
             let g = r
@@ -430,31 +604,31 @@ impl Hub {
                 .ok_or("no guide yet: call guide_set_steps first")?;
             serde_json::from_str(&g).map_err(e)?
         };
-        let steps = guide
-            .get_mut("steps")
-            .and_then(Value::as_array_mut)
-            .ok_or("the guide has no steps")?;
-        let s = steps
-            .iter_mut()
-            .find(|s| s.get("id").and_then(Value::as_str) == Some(step))
-            .ok_or(format!("no step {step}"))?;
-        let obj = fields.as_object().ok_or("fields must be an object")?;
-        for (k, v) in obj {
-            if k != "id" {
-                s[k] = v.clone();
+        {
+            let steps = guide
+                .get_mut("steps")
+                .and_then(Value::as_array_mut)
+                .ok_or("the guide has no steps")?;
+            let s = steps
+                .iter_mut()
+                .find(|s| s.get("id").and_then(Value::as_str) == Some(step))
+                .ok_or(format!("no step {step}"))?;
+            let obj = fields.as_object().ok_or("fields must be an object")?;
+            for (k, v) in obj {
+                if k != "id" {
+                    s[k] = v.clone();
+                }
             }
         }
-        review::validate_step(s, step, &tree, &head, &base)?;
+        let guide = normalize(guide)?;
+        let model = self.model(id)?;
+        coverage::check_guide(&model, &guide).map_err(|r| r.text())?;
         let _ = self
             .store
             .lock()
             .unwrap()
             .set_step(id, step, None, Some(false));
-        if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
-            r.row.guide = Some(guide.to_string());
-        }
-        self.save_row(id);
-        self.emit_review(id);
+        self.accept_guide(id, guide, 0);
         Ok(())
     }
 
@@ -485,44 +659,64 @@ impl Hub {
 
     pub fn review_diff(&self, id: &str, step: &str) -> Res<DiffView> {
         let s = self.step(id, step)?;
-        let Some(path) = s.get("file").and_then(Value::as_str) else {
-            return Ok(DiffView {
-                path: None,
-                rows: vec![],
-                context: false,
-            });
-        };
+        let ranges = coverage::step_ranges(&s);
+        let model = self.model(id)?;
         let (tree, head, base) = self.review_refs(id)?;
-        let text = git(
-            &tree,
-            &["diff", "-U12", "--no-color", &base, &head, "--", path],
-        )?;
-        let rows = diff::parse(&text);
-        if !rows.is_empty() {
-            return Ok(DiffView {
-                path: Some(path.into()),
+        // One section for each file, in the order the ranges name them.
+        let mut sections: Vec<DiffSection> = vec![];
+        for r in &ranges {
+            let file = model.files.iter().find(|f| {
+                let p = if r.side == "old" {
+                    f.old_path.as_deref()
+                } else {
+                    f.new_path.as_deref()
+                };
+                p == Some(r.file.as_str())
+            });
+            let path = file
+                .map(|f| f.path().to_owned())
+                .unwrap_or_else(|| r.file.clone());
+            if let Some(sec) = sections.iter_mut().find(|sec| sec.path == path) {
+                sec.ranges.push(r.clone());
+                continue;
+            }
+            let old_path = file.and_then(|f| f.old_path.clone());
+            let mut args = vec![
+                "diff",
+                "-U12",
+                "--no-color",
+                "--no-ext-diff",
+                "-M",
+                &base,
+                &head,
+                "--",
+            ];
+            if let Some(o) = &old_path {
+                if *o != path {
+                    args.push(o);
+                }
+            }
+            args.push(&path);
+            let text = git(&tree, &args)?;
+            let rows = diff::parse(&text);
+            let (rows, context) = if rows.is_empty() {
+                let content = git(&tree, &["show", &format!("{head}:{path}")]).unwrap_or_default();
+                (
+                    diff::context(&content, r.from as u32, r.to as u32, 12),
+                    true,
+                )
+            } else {
+                (rows, false)
+            };
+            sections.push(DiffSection {
+                path,
+                old_path,
                 rows,
-                context: false,
+                context,
+                ranges: vec![r.clone()],
             });
         }
-        let lines: Vec<u32> = s["lines"]
-            .as_array()
-            .map(|l| {
-                l.iter()
-                    .filter_map(|n| n.as_u64().map(|n| n as u32))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let (from, to) = (
-            lines.first().copied().unwrap_or(1),
-            lines.last().copied().unwrap_or(1),
-        );
-        let content = git(&tree, &["show", &format!("{head}:{path}")])?;
-        Ok(DiffView {
-            path: Some(path.into()),
-            rows: diff::context(&content, from, to, 12),
-            context: true,
-        })
+        Ok(DiffView { sections })
     }
 
     pub fn review_mark(&self, id: &str, step: &str, checked: bool) -> Res<()> {
@@ -863,13 +1057,22 @@ impl Hub {
         let pr = review::gh_view(&url)?;
         let (dir, remote) = self.find_clone(&repo)?;
         let f = review::fetch(&dir, &remote, &pr)?;
+        if f.head != pr.head_ref_oid {
+            return Err(format!(
+                "the PR head moved during the fetch (GitHub {}, fetched {}). Use Update again.",
+                pr.head_ref_oid, f.head
+            ));
+        }
         let changed = review::changed_files(&f.tree, &old, &f.head).unwrap_or_default();
         if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
             r.row.head = f.head.clone();
             r.row.base = f.base.clone();
             r.new_head = None;
+            r.attempts = 0;
+            r.proposal = None;
         }
         self.save_row(id);
+        self.load_model(id, Some(&pr))?;
         let guide: Option<Value> = self.reviews.lock().unwrap().get(id).and_then(|r| {
             r.row
                 .guide
@@ -879,8 +1082,12 @@ impl Hub {
         let mut stale = vec![];
         if let Some(g) = &guide {
             for s in g["steps"].as_array().into_iter().flatten() {
-                if let (Some(sid), Some(file)) = (s["id"].as_str(), s["file"].as_str()) {
-                    if changed.iter().any(|c| c == file) {
+                let files: Vec<String> = coverage::step_ranges(s)
+                    .into_iter()
+                    .map(|r| r.file)
+                    .collect();
+                if let Some(sid) = s["id"].as_str() {
+                    if files.iter().any(|f| changed.contains(f)) {
                         stale.push(sid.to_owned());
                         let _ = self
                             .store
@@ -894,8 +1101,9 @@ impl Hub {
         self.reanchor(id, &f.tree, &f.head)?;
         let prompt = format!(
             "The PR has new commits. The head is now {}. The worktree is checked out at it. Changed files since {old}: {}. \
-             Read the new code. Call guide_update_step for each step whose code changed: fix its lines, what and check. \
-             Do not call guide_set_steps. Reply with one line when done.",
+             Read the new code. Call guide_set_steps with the full guide for the new head. Keep the id of each step \
+             that still applies, so the reviewer keeps its notes. Every changed line of the new diff must be in a range. \
+             Reply with one line when done.",
             f.head,
             if changed.is_empty() { "(none)".to_owned() } else { changed.join(", ") }
         );
@@ -955,6 +1163,34 @@ impl Hub {
     }
 }
 
+/// Checks the shape of a guide, and gives every step a `ranges` list.
+fn normalize(mut guide: Value) -> Res<Value> {
+    let steps = guide
+        .get_mut("steps")
+        .and_then(Value::as_array_mut)
+        .ok_or("the guide needs a steps array")?;
+    if steps.is_empty() {
+        return Err("the guide has no steps".into());
+    }
+    let mut ids = std::collections::HashSet::new();
+    for (i, s) in steps.iter_mut().enumerate() {
+        let id = s
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(format!("step {i} has no id"))?
+            .to_owned();
+        if !ids.insert(id.clone()) {
+            return Err(format!("step id {id} is used twice"));
+        }
+        s.get("title")
+            .and_then(Value::as_str)
+            .ok_or(format!("step {id} has no title"))?;
+        let ranges = coverage::step_ranges(s);
+        s["ranges"] = serde_json::to_value(ranges).map_err(e)?;
+    }
+    Ok(guide)
+}
+
 /// Threads that wait for an answer.
 static BUSY: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
@@ -964,8 +1200,13 @@ fn thread_prompt(step: &Value, t: &ThreadRow, pins: &[String], question: &str) -
         step["id"].as_str().unwrap_or("?"),
         step["title"].as_str().unwrap_or("")
     );
-    if let Some(f) = step["file"].as_str() {
-        p += &format!(" ({f} {})", step["lines"]);
+    let ranges = coverage::step_ranges(step);
+    if !ranges.is_empty() {
+        let list: Vec<String> = ranges
+            .iter()
+            .map(|r| format!("{}:{}-{} ({})", r.file, r.from, r.to, r.side))
+            .collect();
+        p += &format!(" ({})", list.join(", "));
     }
     p += ".\n";
     if let (Some(path), Some(line)) = (&t.path, t.line) {

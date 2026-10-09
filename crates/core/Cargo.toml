@@ -11,3 +11,4 @@ serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 toml = "0.8"
 tracing = "0.1"
+guide-check = { path = "../guide-check" }

@@ -130,7 +130,9 @@
   check("HTML in an answer is text, not code", !window.__xss && $("#rthreads").textContent.includes("<script>"));
   check("guide text renders markdown", !!$("#rguide .what strong") && !!$("#rguide .check code"));
   check("pin shows in the guide", $("#rguide").textContent.includes("Use safe_sub, not -."));
-  check("diff renders with focus lines", $$("#rdiff tr.focus").length === 2, $$("#rdiff tr.focus").length);
+  check("diff renders with focus lines", $$("#rdiff tr.focus").length === 3, $$("#rdiff tr.focus").length);
+  check("coverage shows in the header", $("#rhead .cov.ok")?.textContent.includes("All 3 changed lines in 1 files covered"), $("#rhead").textContent);
+  check("step shows its first range", $('#rsteps [data-i="1"] .loc')?.textContent === "beacon_node/gloas.rs:11-12 +1", $('#rsteps [data-i="1"] .loc')?.textContent);
   check("removed line has the old number", [...$$("#rdiff tr.del td.ln")].map((t) => t.textContent).join() === "11");
   check("thread anchor dot on line 11", !!$('#rdiff tr.anchored td.ln[data-ln="11"][data-side="new"]'));
   check("thread renders with pin and draft actions", $$("#rthreads .thread").length === 1 && !!$('#rthreads [data-pin="t1"]'));

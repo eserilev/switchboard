@@ -9,16 +9,25 @@ use std::io::{BufRead, Write};
 use switchboard_core::proto::{Ack, Request};
 
 pub fn tools() -> Value {
+    let range = json!({
+        "type": "object",
+        "properties": {
+            "file": { "type": "string", "description": "Path in that version of the file." },
+            "side": { "type": "string", "enum": ["new", "old"], "description": "new: lines at the PR head. old: removed lines at the base." },
+            "from": { "type": "integer" },
+            "to": { "type": "integer" }
+        },
+        "required": ["file", "side", "from", "to"]
+    });
     let step = json!({
         "type": "object",
         "properties": {
             "id": { "type": "string" },
             "title": { "type": "string" },
-            "file": { "type": ["string", "null"], "description": "Path at the PR head, or null for a step with no code." },
-            "side": { "type": "string", "enum": ["new", "old"] },
-            "lines": { "type": "array", "items": { "type": "integer" }, "description": "[first, last]" },
             "what": { "type": "string" },
             "check": { "type": "array", "items": { "type": "string" } },
+            "ranges": { "type": "array", "items": range, "description": "Every changed line of the PR must be in some range." },
+            "files": { "type": "array", "items": { "type": "string" }, "description": "Binary files this step covers." },
             "context": { "type": "array", "items": { "type": "string" } }
         },
         "required": ["id", "title"]
@@ -26,7 +35,7 @@ pub fn tools() -> Value {
     json!([
         {
             "name": "guide_set_steps",
-            "description": "Set the full review guide. Call it once with every step.",
+            "description": "Set the full review guide. A verified checker refuses a guide that misses a changed line; the error lists what to fix.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -39,7 +48,7 @@ pub fn tools() -> Value {
         },
         {
             "name": "guide_update_step",
-            "description": "Change named fields of one step. Pins and threads stay.",
+            "description": "Change named fields of one step. The whole guide must still pass the checker. Pins and threads stay.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "id": { "type": "string" }, "fields": { "type": "object" } },

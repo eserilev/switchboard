@@ -62,12 +62,23 @@
     else drawDiff(r);
   }
 
+  // The result of the verified checker, in one line.
+  function coverageLine(r) {
+    const c = r.coverage;
+    if (!c) return "";
+    const what = `${c.changed_lines} changed lines in ${c.files} files`;
+    if (!c.accepted) return `<span class="cov">${esc(what)}</span>`;
+    const missed = c.missed_lines ? ` · ${c.missed_lines} added by the app` : "";
+    const gh = c.github?.length ? `<span class="cov warn" title="${esc(c.github.join("\n"))}">${c.github.length} count${c.github.length > 1 ? "s" : ""} differ from GitHub</span>` : "";
+    return `<span class="cov ok" title="Every changed line is in a step. The checker is proved in Lean.">✓ All ${esc(what)} covered${esc(missed)}</span>${gh}`;
+  }
+
   function drawHead(r) {
     const status = { fetching: "Fetching the PR", writing: "Writing the guide", updating: "Updating the guide", error: "Error", ready: "" }[r.status] ?? r.status;
     const newHead = r.new_head ? `<span class="newhead">New commits: ${esc(short(r.head))} → ${esc(short(r.new_head))}<button class="btn small" data-act="update">Update guide</button></span>` : "";
     const retry = r.status === "error" ? `<button class="btn small" data-act="retry">Retry</button>` : "";
     $("#rhead").innerHTML = `<div><div class="t">${esc(r.title)}</div><div class="m">${esc(r.repo)} #${esc(r.number)} · ${esc(short(r.head))}${r.tree ? " · " + esc(r.tree) : ""}</div></div>
-      ${status ? `<span class="status${r.status === "error" ? " error" : ""}">${esc(status)}</span>` : ""}${newHead}
+      ${status ? `<span class="status${r.status === "error" ? " error" : ""}">${esc(status)}</span>` : ""}${coverageLine(r)}${newHead}
       <div class="right">${retry}<button class="btn small" data-act="close">Close review</button></div>
       ${r.error ? `<div class="rerror" style="flex-basis:100%;padding:0">${esc(r.error)}</div>` : ""}`;
     $("#rhead").onclick = async (e) => {
@@ -83,8 +94,9 @@
     $("#rsteps").innerHTML = steps(r).map((s, i) => {
       const st = stepState(r, s.id);
       const n = r.threads.filter((t) => t.step === s.id).length;
-      const loc = s.file ? `${s.file}${s.lines?.length ? ":" + s.lines.join("-") : ""}` : "";
-      const badges = [n ? `<span class="badge th">${n} thread${n > 1 ? "s" : ""}</span>` : "", st.stale ? `<span class="badge stale">stale</span>` : ""].join("");
+      const rs = s.ranges || [];
+      const loc = rs.length ? `${rs[0].file}:${rs[0].from}-${rs[0].to}${rs.length > 1 ? ` +${rs.length - 1}` : ""}` : (s.files || []).join(", ");
+      const badges = [n ? `<span class="badge th">${n} thread${n > 1 ? "s" : ""}</span>` : "", st.stale ? `<span class="badge stale">stale</span>` : "", s.auto ? `<span class="badge stale">added by the app</span>` : ""].join("");
       return `<li class="step${st.checked ? " checked" : ""}" tabindex="0" data-i="${i}" ${i === l.cur ? 'aria-current="step"' : ""}>
         <span class="n">${st.checked && i !== l.cur ? "✓" : i + 1}</span>
         <div><div class="st">${mdi(s.title)}</div>${loc ? `<div class="loc" title="${esc(loc)}">${esc(loc)}</div>` : ""}${badges ? `<div class="badges">${badges}</div>` : ""}</div></li>`;
@@ -98,7 +110,7 @@
     if (!s) { $("#rguide").innerHTML = ""; return; }
     const st = stepState(r, s.id);
     const pins = r.pins.filter((p) => p.step === s.id);
-    const ctx = [...(s.context || [])];
+    const ctx = [...(s.context || []), ...(s.files || []).map((f) => `binary: ${f}`)];
     $("#rguide").innerHTML = `
       <div class="eyebrow">Step ${l.cur + 1} of ${steps(r).length}</div>
       <h4>${mdi(s.title)}</h4>
@@ -144,35 +156,44 @@
     const l = local(r.id);
     const s = steps(r)[l.cur];
     const d = s && l.diff.get(s.id);
-    if (!s || !d || !d.path) { $("#rdiff").innerHTML = d?.error ? `<div class="rerror">${esc(d.error)}</div>` : ""; return; }
-    const [from, to] = [s.lines?.[0] ?? -1, s.lines?.[s.lines.length - 1] ?? -1];
-    const side = s.side || "new";
-    const anchored = new Set(r.threads.filter((t) => t.step === s.id && t.line && t.path === d.path).map((t) => `${t.side || "new"}:${t.line}`));
-    const rows = d.rows.map((row) => {
-      if (row.kind === "@") return `<tr class="hunk"><td class="ln"></td><td class="src">${esc(row.text)}</td></tr>`;
-      const rowSide = row.kind === "-" ? "old" : "new";
-      const num = rowSide === "old" ? row.old : row.new;
-      const focus = rowSide === side && num >= from && num <= to;
-      const isAnchor = l.anchor && l.anchor.side === rowSide && l.anchor.line === num;
-      const cls = [row.kind === "+" ? "add" : row.kind === "-" ? "del" : "", focus ? "focus" : "", isAnchor ? "anchor" : "", anchored.has(`${rowSide}:${num}`) ? "anchored" : ""].join(" ");
-      const sign = row.kind === " " ? " " : row.kind;
-      return `<tr class="${cls}"><td class="ln" data-side="${rowSide}" data-ln="${num}">${num}</td><td class="src">${esc(sign + row.text)}</td></tr>`;
+    if (!s || !d || !d.sections?.length) { $("#rdiff").innerHTML = d?.error ? `<div class="rerror">${esc(d.error)}</div>` : ""; return; }
+    const html = d.sections.map((sec, si) => {
+      const inRange = (side, num) => sec.ranges.some((g) => g.side === side && num >= g.from && num <= g.to);
+      const anchored = new Set(r.threads.filter((t) => t.step === s.id && t.line && t.path === sec.path).map((t) => `${t.side || "new"}:${t.line}`));
+      const rows = sec.rows.map((row) => {
+        if (row.kind === "@") return `<tr class="hunk"><td class="ln"></td><td class="src">${esc(row.text)}</td></tr>`;
+        const rowSide = row.kind === "-" ? "old" : "new";
+        const num = rowSide === "old" ? row.old : row.new;
+        // A context line is in a range on either side.
+        const focus = inRange(rowSide, num) || (row.kind === " " && inRange("old", row.old));
+        const isAnchor = l.anchor && l.anchor.path === sec.path && l.anchor.side === rowSide && l.anchor.line === num;
+        const cls = [row.kind === "+" ? "add" : row.kind === "-" ? "del" : "", focus ? "focus" : "", isAnchor ? "anchor" : "", anchored.has(`${rowSide}:${num}`) ? "anchored" : ""].join(" ");
+        const sign = row.kind === " " ? " " : row.kind;
+        return `<tr class="${cls}"><td class="ln" data-sec="${si}" data-side="${rowSide}" data-ln="${num}">${num}</td><td class="src">${esc(sign + row.text)}</td></tr>`;
+      }).join("");
+      const moved = sec.old_path && sec.old_path !== sec.path ? ` <span class="ctxnote">from ${esc(sec.old_path)}</span>` : "";
+      return `<div class="file"><span>${esc(sec.path)}${moved}${sec.context ? ' <span class="ctxnote">not changed by the PR</span>' : ""}</span><button class="tool" data-nvim="${si}">nvim</button></div>
+        <div class="codewrap"><table class="code">${rows}</table></div>`;
     }).join("");
-    $("#rdiff").innerHTML = `<div class="file"><span>${esc(d.path)}${d.context ? ' <span class="ctxnote">not changed by the PR</span>' : ""}</span><button class="tool" data-nvim>nvim</button></div>
-      <div class="codewrap"><table class="code">${rows}</table></div>`;
+    $("#rdiff").innerHTML = html;
     $("#rdiff").onclick = async (e) => {
-      if (e.target.closest("[data-nvim]")) {
-        const line = l.anchor?.line || (from > 0 ? from : 1);
-        const pane = await call("review_nvim", { id: r.id, path: d.path, line });
+      const nv = e.target.closest("[data-nvim]");
+      if (nv) {
+        const sec = d.sections[+nv.dataset.nvim];
+        const first = sec.ranges.find((g) => g.side === "new") || sec.ranges[0];
+        const line = (l.anchor?.path === sec.path && l.anchor.line) || first?.from || 1;
+        const pane = await call("review_nvim", { id: r.id, path: sec.path, line });
         await window.SB.refreshPanes();
         window.SB.expand(pane);
         return;
       }
       const td = e.target.closest("td.ln[data-ln]");
       if (!td || td.dataset.ln === "undefined") return;
+      const sec = d.sections[+td.dataset.sec];
       const line = +td.dataset.ln;
-      const same = l.anchor && l.anchor.line === line && l.anchor.side === td.dataset.side;
-      l.anchor = same ? null : { path: d.path, side: td.dataset.side, line, text: td.nextElementSibling.textContent.slice(1) };
+      const path = td.dataset.side === "old" ? (sec.old_path || sec.path) : sec.path;
+      const same = l.anchor && l.anchor.path === path && l.anchor.line === line && l.anchor.side === td.dataset.side;
+      l.anchor = same ? null : { path, side: td.dataset.side, line, text: td.nextElementSibling.textContent.slice(1) };
       l.active = null;
       drawDiff(r);
       drawThreads(r);
