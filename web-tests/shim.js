@@ -30,7 +30,7 @@ window.__data = {
     summary: "", posted: [],
     coverage: { files: 1, changed_lines: 3, accepted: true, missed_lines: 0, binary: [], github: [] },
   }],
-  diff: { sections: [{ path: "beacon_node/gloas.rs", old_path: "beacon_node/gloas.rs", context: false, ranges: [{ file: "beacon_node/gloas.rs", side: "new", from: 11, to: 12 }, { file: "beacon_node/gloas.rs", side: "old", from: 11, to: 11 }], rows: [
+  diff: { head: "ac92ae9aaaa", sections: [{ path: "beacon_node/gloas.rs", old_path: "beacon_node/gloas.rs", context: false, ranges: [{ file: "beacon_node/gloas.rs", side: "new", from: 11, to: 12 }, { file: "beacon_node/gloas.rs", side: "old", from: 11, to: 11 }], rows: [
     { kind: "@", old: null, new: null, text: "@@ -10,3 +10,4 @@" },
     { kind: " ", old: 10, new: 10, text: "let a = 1;" },
     { kind: "-", old: 11, new: null, text: "let il = vec![];" },
@@ -59,21 +59,21 @@ window.__TAURI__ = {
             scope_note: "The author rebased or merged the base branch. This round leaves out the changes from the base branch." }));
           return "r2";
         }
-        case "review_diff": return { sections: d.diff.sections.map((x) => ({ ...x, other: { lines: 4, steps: ["s1"] } })) };
+        case "review_diff": return { head: d.diff.head, sections: d.diff.sections.map((x) => ({ ...x, other: { lines: 4, steps: ["s1"] } })) };
         case "review_ask": return "t2";
         case "pane_expand": return btoa("\x1b[H\x1b[2Jhello from the live pane\r\n$ ");
         case "pane_open": return pane({ id: "p9", tree: args.req.repo });
         case "nvim_open": case "review_nvim": return "p3";
         case "review_drafts_text": return "beacon_node/gloas.rs:11: nit: use safe_sub";
         case "review_open": return "r1";
-        case "review_file_rows": return Array.from({ length: 60 }, (_, i) => i + 1).flatMap((n) =>
+        case "review_file_rows": return { head: d.diff.head, rows: Array.from({ length: 60 }, (_, i) => i + 1).flatMap((n) =>
           n === 11 ? [{ kind: "-", old: 11, new: null, text: "let il = vec![];" }, { kind: "+", old: null, new: 11, text: "let il = self.get(slot - 1)?;" }, { kind: "+", old: null, new: 12, text: "let b = 2;" }]
-          : [{ kind: " ", old: n, new: n < 11 ? n : n + 1, text: n === 10 ? "let a = 1;" : `line ${n}` }]);
+          : [{ kind: " ", old: n, new: n < 11 ? n : n + 1, text: n === 10 ? "let a = 1;" : `line ${n}` }]) };
         case "review_files": return [
           { path: "beacon_node/gloas.rs", old_path: "beacon_node/gloas.rs", added: 2, removed: 1, note: null, steps: ["s2"] },
           { path: "docs/img.png", old_path: null, added: 0, removed: 0, note: "binary file", steps: [] },
         ];
-        case "review_file_diff": return args.path === "beacon_node/gloas.rs" ? d.diff : { sections: [{ path: args.path, old_path: null, context: false, ranges: [], rows: [], note: "binary file" }] };
+        case "review_file_diff": return args.path === "beacon_node/gloas.rs" ? d.diff : { head: d.diff.head, sections: [{ path: args.path, old_path: null, context: false, ranges: [], rows: [], note: "binary file" }] };
         case "review_post_preview": return { login: "eserilev", token: "tok1", plan: { head: "ac92ae9aaaa", errors: [],
           inline: [{ draft: 1, path: "beacon_node/gloas.rs", side: "RIGHT", line: 11, start_line: null, text: "nit: use safe_sub" }],
           outside: [{ draft: 2, at: "beacon_node/gloas.rs:40", reason: "the line is outside GitHub's diff", text: "far away" }] } };

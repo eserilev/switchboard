@@ -114,11 +114,24 @@ pub struct Anchor {
     pub line: u32,
     #[serde(default)]
     pub text: String,
+    /// The head of the diff on screen when you clicked the line.
+    #[serde(default)]
+    pub head: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
 pub struct DiffView {
+    /// The head of the model that drew these rows. The window refetches a view whose
+    /// head is not the review's head, and sends it back with each new anchor.
+    pub head: String,
     pub sections: Vec<DiffSection>,
+}
+
+/// Every row of one file, with the head of the model that drew them.
+#[derive(Serialize, Clone, Debug)]
+pub struct FileRows {
+    pub head: String,
+    pub rows: Vec<Row>,
 }
 
 /// The diff of one file in a step, with the step's ranges in it.
@@ -142,6 +155,9 @@ pub struct OtherChanges {
     pub lines: usize,
     pub steps: Vec<String>,
 }
+
+/// The answer when a click comes from the diff of an older head.
+const STALE_VIEW: &str = "The diff on screen is from an older commit. It reloads now; click the line again.";
 
 /// Rows of context around a step's ranges. The ranges already hold some context.
 const STEP_CONTEXT: usize = 6;
@@ -986,7 +1002,10 @@ impl Hub {
                 steps,
             });
         }
-        Ok(DiffView { sections })
+        Ok(DiffView {
+            head: model.head.clone(),
+            sections,
+        })
     }
 
     /// Every changed file of the PR, in path order, with the steps that cover it.
@@ -1048,19 +1067,23 @@ impl Hub {
             .find(|f| f.path() == path)
             .ok_or(format!("The PR does not change {path}."))?;
         Ok(DiffView {
+            head: model.head.clone(),
             sections: vec![section(f)],
         })
     }
 
     /// Every row of one file, for the expand buttons of the diff.
-    pub fn review_file_rows(&self, id: &str, path: &str) -> Res<Vec<Row>> {
+    pub fn review_file_rows(&self, id: &str, path: &str) -> Res<FileRows> {
         let model = self.model(id)?;
         let f = model
             .files
             .iter()
             .find(|f| f.path() == path)
             .ok_or(format!("The PR does not change {path}."))?;
-        Ok(coverage::all_rows(f))
+        Ok(FileRows {
+            head: model.head.clone(),
+            rows: coverage::all_rows(f),
+        })
     }
 
     pub fn review_mark(&self, id: &str, step: &str, checked: bool) -> Res<()> {
@@ -1094,12 +1117,17 @@ impl Hub {
         // A new thread on a line keeps the head and the code around the line, so it
         // moves with the code as drafts do. The model comes first: no lock is held.
         let at = match &anchor {
-            Some(a) if thread.is_none() => self.model(id).ok().and_then(|m| {
+            Some(a) if thread.is_none() => {
+                let m = self.model(id)?;
                 let old = a.side == "old";
-                crate::post::model_file(&m, &a.path, old)
-                    .and_then(|f| crate::post::anchor_at(f, old, a.line, a.line))
-                    .map(|x| (m.head.clone(), x))
-            }),
+                let x = crate::post::model_file(&m, &a.path, old)
+                    .and_then(|f| crate::post::anchor_at(f, old, a.line, a.line));
+                // The line must be from the diff of this head, with this text.
+                if a.head != m.head || x.as_ref().map(|x| x.text.as_str()) != Some(a.text.as_str()) {
+                    return Err(STALE_VIEW.into());
+                }
+                x.map(|x| (m.head.clone(), x))
+            }
             _ => None,
         };
         let store = self.store.lock().unwrap();
@@ -1375,6 +1403,8 @@ impl Hub {
         line: u32,
         start_line: Option<u32>,
         text: &str,
+        head: &str,
+        line_text: &str,
     ) -> Res<()> {
         let text = text.trim();
         if text.is_empty() {
@@ -1389,6 +1419,10 @@ impl Hub {
             .ok_or(format!("The PR does not change {path}."))?;
         if start == 0 || start > line || crate::post::line_text(f, side == "old", line).is_none() {
             return Err(format!("{path} has no lines {start} to {line}."));
+        }
+        // The line must be from the diff of this head, with the text you saw.
+        if head != model.head || crate::post::line_text(f, side == "old", line).as_deref() != Some(line_text) {
+            return Err(STALE_VIEW.into());
         }
         let d = DraftRow {
             id: 0,

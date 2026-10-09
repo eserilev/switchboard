@@ -315,6 +315,15 @@
     const s = l.mode === "files" ? null : steps(r)[l.cur];
     const key = diffKey(r);
     const d = key && l.diff.get(key);
+    // A view of an older head never takes a click: refetch until the server has the
+    // review's head. (During an update the server loads the new commit for a while.)
+    if (d && d.head && r.head && d.head !== r.head) {
+      l.diff.delete(key);
+      $("#rdiff").innerHTML = `<div class="rnote">Loading the new commit…</div>`;
+      clearTimeout(l.retry);
+      l.retry = setTimeout(() => loadDiff(r.id), 800);
+      return;
+    }
     if (!d || !d.sections?.length) { $("#rdiff").innerHTML = d?.error ? `<div class="rerror">${esc(d.error)}</div>` : ""; return; }
     const html = d.sections.map((sec, si) => {
       const inRange = (side, num) => sec.ranges.some((g) => g.side === side && num >= g.from && num <= g.to);
@@ -388,7 +397,7 @@
       const line = +td.dataset.ln;
       const path = td.dataset.side === "old" ? (sec.old_path || sec.path) : sec.path;
       const same = l.anchor && l.anchor.path === path && l.anchor.line === line && l.anchor.side === td.dataset.side;
-      l.anchor = same ? null : { path, side: td.dataset.side, line, text: td.nextElementSibling.textContent.slice(1) };
+      l.anchor = same ? null : { path, side: td.dataset.side, line, text: td.nextElementSibling.textContent.slice(1), head: d.head || "" };
       l.active = null;
       drawDiff(r);
       drawThreads(r);
@@ -473,7 +482,11 @@
     const key = diffKey(r);
     const sec = d.sections[+b.dataset.sec];
     if (!l.full.has(sec.path)) {
-      try { l.full.set(sec.path, await invoke("review_file_rows", { id: r.id, path: sec.path })); } catch (e) { toast(e); return; }
+      try {
+        const got = await invoke("review_file_rows", { id: r.id, path: sec.path });
+        if (got.head !== d.head) { toast("The diff on screen is from an older commit. It reloads now."); l.diff.clear(); drawDiff(S.reviews.get(r.id) || r); return; }
+        l.full.set(sec.path, got.rows);
+      } catch (e) { toast(e); return; }
     }
     reveal(l, key, sec, b.dataset.prev, b.dataset.next, b.dataset.exp);
     drawDiff(S.reviews.get(r.id) || r);
@@ -514,6 +527,13 @@
     $("#rctext")?.focus();
   }
 
+  // The text of the last line of a comment, as the diff on screen shows it.
+  function lineText(l, d, c) {
+    const rows = [...(d.sections.find((x) => x.path === c.sec)?.rows || []), ...(l.full.get(c.sec) || [])];
+    const hit = rows.find((x) => x.kind !== "@" && (c.side === "old" ? x.kind !== "+" && x.old === c.line : x.kind !== "-" && x.new === c.line));
+    return hit ? hit.text : "";
+  }
+
   function wireComments(r, d) {
     const l = local(r.id);
     const form = $("#rcform");
@@ -532,7 +552,7 @@
         const text = ta.value.trim();
         if (!c || !text) return;
         try {
-          await call("review_comment", { id: r.id, path: c.path, side: c.side, line: c.line, startLine: c.start < c.line ? c.start : null, text });
+          await call("review_comment", { id: r.id, path: c.path, side: c.side, line: c.line, startLine: c.start < c.line ? c.start : null, text, head: d.head || "", lineText: lineText(l, d, c) });
           // Place again: the old draft goes only when this is the same comment.
           if (l.placing && text === l.placing.text.trim()) await call("review_draft_edit", { id: r.id, draft: l.placing.id, text: null }).catch(() => {});
           l.placing = null;

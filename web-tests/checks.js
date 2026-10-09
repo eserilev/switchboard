@@ -156,7 +156,7 @@
   $("#rask").dispatchEvent(new Event("submit", { cancelable: true }));
   await wait(200);
   const ask = called("review_ask")[0]?.[1];
-  check("ask sends the anchor", ask && ask.step === "s2" && ask.anchor?.line === 12 && ask.anchor.side === "new" && ask.thread === null && ask.anchor.text.includes("let b = 2"), JSON.stringify(ask));
+  check("ask sends the anchor", ask && ask.step === "s2" && ask.anchor?.head === "ac92ae9aaaa" && ask.anchor?.line === 12 && ask.anchor.side === "new" && ask.thread === null && ask.anchor.text.includes("let b = 2"), JSON.stringify(ask));
   window.__emit("review_stream", { review: "r1", thread: "t2", delta: "partial" });
   // A long answer: the thread list scrolls inside the column.
   {
@@ -213,7 +213,7 @@
   $("#rcform").requestSubmit();
   await wait(100);
   const cm = called("review_comment")[0]?.[1];
-  check("Add to review sends path, side and range", cm && cm.path === "beacon_node/gloas.rs" && cm.side === "new" && cm.line === 12 && cm.startLine === 11 && cm.text === "Both lines need a test.", JSON.stringify(cm));
+  check("Add to review sends path, side, range, head and line text", cm && cm.path === "beacon_node/gloas.rs" && cm.side === "new" && cm.line === 12 && cm.startLine === 11 && cm.text === "Both lines need a test." && cm.head === "ac92ae9aaaa" && cm.lineText === "let b = 2;", JSON.stringify(cm));
   check("the form closes after the add", !$("#rcform"));
   // Finish review: preview from GitHub, pick a type, send only on the click.
   $("#rdrafts [data-finish]").click();
@@ -391,6 +391,16 @@
     check("Cancel ends Place again, so a new comment keeps the stale draft", $("#rctext") === null && !called("review_draft_edit").slice(n2).some((c) => c[1].draft === 1 && c[1].text === null));
     window.__emit("review", window.__data.reviews[0]);
     await wait(100);
+  }
+
+  // A diff of an older head never takes a click: the window refetches it.
+  {
+    const r = Object.assign({}, window.__data.reviews[0], { head: "fff0000bbbb" });
+    window.__emit("review", r);
+    await wait(100);
+    check("a diff of an older head shows Loading and no + button", $("#rdiff .rnote")?.textContent.includes("Loading the new commit") && !$("#rdiff [data-cm]"), $("#rdiff").textContent.slice(0, 80));
+    window.__emit("review", window.__data.reviews[0]);
+    await wait(1200);
   }
 
   // Back to the board with the leader.
