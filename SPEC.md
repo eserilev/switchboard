@@ -780,7 +780,15 @@ The diff rows that the window draws come from the kernel too. `number_rows` give
 - **G9.** `number_rows` and `cut_rows` never panic, on any input within the size bound. The cut is correct on any rows with no header.
 - **G10.** The kind of every row, and so its color, follows from the masks. A row is `-` exactly when it shows an old line that the diff removes. It is `+` exactly when it shows a new line that the diff adds. It is context exactly when it shows an old line that the diff does not remove and a new line that the diff does not add. Core maps the kind to `-`, `+` or ` ` in one `match`, and the window maps that to a CSS class in one table (`KIND_CLASS`).
 
-G5 to G10 need `removed + added ≤ usize::MAX` lines (G8 and G9: twice that). This is always true: a `Vec<u8>` takes 24 bytes, so a line list has fewer than `usize::MAX / 24` lines.
+A step shows only its part of a file. `step_cut` makes one part per range of the step: the rows that show the range, with up to `ctx` rows of context that stop at another change. Parts that overlap or touch merge, and each part is cut as `cut_rows` does it. It also gives the change rows that the step does not show. For a file that rebuilds:
+
+- **S1.** A step shows all of its own changes: every `+` or `-` row that shows a line of one of the step's ranges is in the step's rows.
+- **S2.** Without the headers, the step's rows are rows of the full list, unchanged and in order. So G5, G7 and G10 hold for them. Every row is at most `ctx` rows from a change.
+- **S3.** The step's rows start with a header, and a header marks every gap. A header carries the numbers of the next row, counted from the start of the file. When that row shows an old (new) line, the header carries exactly its number.
+- **S4.** The hidden list is exactly the change rows that the step does not show, in file order. The shown and the hidden change rows together are every change of the file.
+- **S5.** `step_cut` never panics, on any rows with no header within the size bound and any ranges.
+
+G5 to G7 and G10 need `removed + added ≤ usize::MAX` lines. G8, G9 and S1 to S4 need twice that, and S5 needs twice the row count. This is always true: a `Vec<u8>` takes 24 bytes, so a line list has fewer than `usize::MAX / 24` lines.
 
 ### The flow
 
@@ -796,9 +804,8 @@ G5 to G10 need `removed + added ≤ usize::MAX` lines (G8 and G9: twice that). T
 ### What stays trusted
 
 - git returns the right file content for a commit. git checks object hashes itself.
-- The window draws the accepted guide and the kernel's diff rows. The line numbers, the row kinds and the cut are proved (G5 to G10). Not proved: the text lookup by number, the UTF-8 decoding, the "No newline at end of file" note, the header text, and the drawing code.
+- The window draws the accepted guide and the kernel's diff rows. The line numbers, the row kinds and the cut are proved (G5 to G10), and so are the parts that a step shows (S1 to S5). Not proved: the map from a guide range to a `StepRange` (`side == "old"`), the text lookup by number, the UTF-8 decoding, the "No newline at end of file" note, the header text, and the drawing code.
 - In a review round, the base of the diff can be a tree from `git merge-tree` (11.9). The proofs hold for any base and head; the meaning of the round's base (the reviewed code plus the new base branch) comes from git, not from a proof.
-- A step shows only its part of a file (`step_rows`). Each part is a slice of the proved rows, cut by the proved `cut_rows`, so rows keep their proved numbers and kinds. Not proved: the slice bounds, and the offset that the app adds to the header numbers of a slice, because the cut numbers a header from the start of its slice.
 - Files with no changed line have nothing for the line checker: binary files, submodules, pure renames and mode changes. A step must name each one in `files`. That rule is plain code, not proved.
 - What the agent writes about the code. No checker can prove that an explanation is true.
 
@@ -806,6 +813,7 @@ G5 to G10 need `removed + added ≤ usize::MAX` lines (G8 and G9: twice that). T
 
 - 40,000 random inputs compare `check` with a plain model of the spec.
 - 20,000 random files compare `cut_rows` with a plain model, and check the G5 to G7 facts on the rows.
+- 20,000 random files and step ranges compare `step_cut` with the old core code of `step_rows` as a plain model.
 - The last 300 Lighthouse commits (`crates/core/tests/real_diffs.rs`): 2,449 files, 119,439 changed lines, 10 renames, 2 binary files. For each commit, the file list matches the git trees, every file rebuilds, the completed guide passes the checker, the drawn rows rebuild both versions of every file, and in the cut with context 12 every line number names the line that its row shows. Next to the old row code, the kernel rows were the same in 2,257 of 2,446 files. The other 189 differed only in header numbers where a side had no line (it was 0).
 - On the same 300 commits, each range of the completed guide is drawn as its own step. Every step row is a row of the full diff, every header names the numbers of its next row, and the steps together show every changed line.
 - A live review of a real PR: the agent's guide passed the checker with no added step.

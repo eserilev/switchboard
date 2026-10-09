@@ -746,74 +746,30 @@ pub fn all_rows(f: &ChangedFile) -> Vec<crate::diff::Row> {
     draw(f, &guide_check::number_rows(&f.removed, &f.added))
 }
 
-/// The rows of one step: only the parts of the file that the step's ranges name.
-/// Each part is a slice of the numbered rows, cut by the proved `cut_rows`, so every
-/// row keeps its proved number and kind (G5 to G10). Only the slice bounds are plain
-/// code. A part grows past its range by at most `ctx` unchanged rows, and stops at a
-/// change that the range does not name.
-///
-/// Also returns the changed lines of the file that no part shows, as (old side, number).
+/// The rows that a step shows of a file, from the verified kernel, and the changed
+/// lines that it does not show, as (old side, line number). `step_cut` makes one part
+/// per range: the rows that show the range, with up to `ctx` rows of context that
+/// stop at another change. Parts that touch merge. Each part is cut as `cut_rows`
+/// does it, and a header counts its lines from the start of the file (SPEC 24, S1 to S5).
 pub fn step_rows(f: &ChangedFile, ranges: &[Range], ctx: usize) -> (Vec<crate::diff::Row>, Vec<(bool, usize)>) {
     use guide_check::Kind;
     if f.removed.len() != f.old.len() || f.added.len() != f.new.len() {
         return (vec![], vec![]);
     }
     let all = guide_check::number_rows(&f.removed, &f.added);
-    let shows = |r: &guide_check::Row, g: &Range| {
-        let n = if g.side == "old" { r.old } else { r.new };
-        n > 0 && g.from <= n && n <= g.to
-    };
-    let change = |k: usize| matches!(all[k].kind, Kind::Removed | Kind::Added);
-    let mut parts: Vec<(usize, usize)> = vec![];
-    for g in ranges {
-        let Some(mut lo) = (0..all.len()).find(|&k| shows(&all[k], g)) else {
-            continue;
-        };
-        let mut hi = (lo..all.len()).rev().find(|&k| shows(&all[k], g)).unwrap_or(lo);
-        for _ in 0..ctx {
-            if lo == 0 || change(lo - 1) {
-                break;
-            }
-            lo -= 1;
-        }
-        for _ in 0..ctx {
-            if hi + 1 >= all.len() || change(hi + 1) {
-                break;
-            }
-            hi += 1;
-        }
-        parts.push((lo, hi));
-    }
-    parts.sort();
-    let mut merged: Vec<(usize, usize)> = vec![];
-    for (lo, hi) in parts {
-        match merged.last_mut() {
-            Some(last) if lo <= last.1 + 1 => last.1 = last.1.max(hi),
-            _ => merged.push((lo, hi)),
-        }
-    }
-    let mut kernel: Vec<guide_check::Row> = vec![];
-    for &(lo, hi) in &merged {
-        // The cut numbers a header from the start of its slice (G8). Add the lines
-        // of each side that come before the slice.
-        let old_before = all[..lo].iter().filter(|r| r.old > 0).count();
-        let new_before = all[..lo].iter().filter(|r| r.new > 0).count();
-        for mut r in guide_check::cut_rows(&all[lo..=hi], ctx) {
-            if r.kind == Kind::Header {
-                r.old += old_before;
-                r.new += new_before;
-            }
-            kernel.push(r);
-        }
-    }
-    let hidden = (0..all.len())
-        .filter(|&k| change(k) && !merged.iter().any(|&(lo, hi)| lo <= k && k <= hi))
-        .map(|k| match all[k].kind {
-            Kind::Removed => (true, all[k].old),
-            _ => (false, all[k].new),
+    let ranges: Vec<guide_check::StepRange> = ranges
+        .iter()
+        .map(|g| guide_check::StepRange { old: g.side == "old", from: g.from, to: g.to })
+        .collect();
+    let (shown, hidden) = guide_check::step_cut(&all, &ranges, ctx);
+    let hidden = hidden
+        .iter()
+        .map(|r| match r.kind {
+            Kind::Removed => (true, r.old),
+            _ => (false, r.new),
         })
         .collect();
-    (draw(f, &kernel), hidden)
+    (draw(f, &shown), hidden)
 }
 
 /// Kernel rows to window rows: each row gets its text by its own number, and a note
