@@ -660,6 +660,42 @@ mod tests {
         assert_eq!(s.open_panes().unwrap().len(), 1);
     }
 
+    /// From every old version, with random rows: the migration ends at the last
+    /// version, keeps every row, and gives the new columns their defaults.
+    #[test]
+    fn every_old_version_migrates_with_its_rows() {
+        let mut seed: u64 = 7;
+        let mut rnd = |n: u64| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) % n
+        };
+        for from in 1..SCHEMA.len() {
+            for _ in 0..20 {
+                let db = Connection::open_in_memory().unwrap();
+                db.execute_batch(&format!("{}; PRAGMA user_version = {from};", SCHEMA[..from].join(";"))).unwrap();
+                let (panes, reviews, drafts) = (rnd(5), rnd(4), rnd(6));
+                for i in 0..panes {
+                    db.execute("INSERT INTO pane (id, kind, repo, tree, lamp, unseen, updated) VALUES (?1, 'claude', 'r', '/t', 'none', 0, ?2)", params![format!("p{i}"), i as i64]).unwrap();
+                }
+                for i in 0..reviews {
+                    db.execute("INSERT INTO review (id, url, repo, number, title, head, base, tree, opened) VALUES (?1, 'u', 'o/r', ?2, 't', 'h', 'b', '/w', 1)", params![format!("r{i}"), i as i64]).unwrap();
+                }
+                for i in 0..drafts {
+                    db.execute("INSERT INTO draft (review, path, side, line, text) VALUES ('r0', 'a.rs', 'new', ?1, 'd')", [i as i64 + 1]).unwrap();
+                }
+                let s = Store::init(db).unwrap();
+                assert_eq!(s.version().unwrap(), SCHEMA.len());
+                assert_eq!(s.open_panes().unwrap().len() as u64, panes);
+                let rs = s.open_reviews().unwrap();
+                assert_eq!(rs.len() as u64, reviews);
+                assert!(rs.iter().all(|r| r.round == 1 && r.since.is_none()));
+                let ds = s.drafts("r0").unwrap();
+                assert_eq!(ds.len() as u64, drafts);
+                assert!(ds.iter().all(|d| d.agent && d.start_line.is_none()));
+            }
+        }
+    }
+
     #[test]
     fn version_2_drafts_migrate_as_agent_drafts() {
         let db = Connection::open_in_memory().unwrap();
