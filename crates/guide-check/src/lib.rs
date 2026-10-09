@@ -19,6 +19,8 @@
 #![forbid(unsafe_code)]
 // Nested `if`s on purpose: the kernel avoids `&&` so the Aeneas translation stays plain.
 #![allow(clippy::collapsible_if)]
+// A plain `match` on purpose: the kernel avoids macros so the translation stays plain.
+#![allow(clippy::match_like_matches_macro)]
 
 /// One changed file. `removed[k]` is true when the diff removes old line `k + 1`;
 /// `added[k]` is true when the diff adds new line `k + 1`.
@@ -261,6 +263,182 @@ pub fn check(files: &[FileDiff], spans: &[Span], pad: usize) -> bool {
         return false;
     }
     spans_ok(spans, files, pad)
+}
+
+/// What a diff row shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// A line on both sides: not removed, not added.
+    Same,
+    Removed,
+    Added,
+    /// The start of a run of rows after a cut.
+    Header,
+}
+
+/// One row of the diff of a file, with no text. `old` and `new` are 1-based line
+/// numbers, and 0 means "no line on this side". The caller gets the text from the
+/// line list with the number, so the text and the number cannot disagree.
+/// A header carries the numbers of the next old line and the next new line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Row {
+    pub kind: Kind,
+    pub old: usize,
+    pub new: usize,
+}
+
+/// The kind of the next row when the walk is at old index `i` and new index `j`.
+/// A removed line comes first, then an added line, then a line on both sides.
+/// `Header` means that the walk is stuck: one side has unchanged lines and the
+/// other side has none. That cannot happen when the file rebuilds.
+pub fn next_kind(removed: &[bool], added: &[bool], i: usize, j: usize) -> Kind {
+    if i < removed.len() {
+        if removed[i] {
+            return Kind::Removed;
+        }
+    }
+    if j < added.len() {
+        if added[j] {
+            return Kind::Added;
+        }
+    }
+    if i < removed.len() {
+        if j < added.len() {
+            return Kind::Same;
+        }
+    }
+    Kind::Header
+}
+
+/// Every row of the diff of a file, in the order of the rebuild check.
+/// The masks give the line counts: `removed` has one bit per old line, `added`
+/// one bit per new line.
+pub fn number_rows(removed: &[bool], added: &[bool]) -> Vec<Row> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    let mut j = 0;
+    while lines_left(i, removed.len(), j, added.len()) {
+        let kind = next_kind(removed, added, i, j);
+        match kind {
+            Kind::Removed => {
+                i += 1;
+                out.push(Row { kind, old: i, new: 0 });
+            }
+            Kind::Added => {
+                j += 1;
+                out.push(Row { kind, old: 0, new: j });
+            }
+            Kind::Same => {
+                i += 1;
+                j += 1;
+                out.push(Row { kind, old: i, new: j });
+            }
+            Kind::Header => {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+pub fn is_change(r: &Row) -> bool {
+    match r.kind {
+        Kind::Removed => true,
+        Kind::Added => true,
+        _ => false,
+    }
+}
+
+/// The first row index that is at most `ctx` rows before row `k`.
+pub fn window_start(k: usize, ctx: usize) -> usize {
+    if k > ctx {
+        return k - ctx;
+    }
+    0
+}
+
+/// One past the last row index that is at most `ctx` rows after row `k`. Needs `k < len`.
+pub fn window_end(k: usize, ctx: usize, len: usize) -> usize {
+    if ctx < len - k {
+        return k + ctx + 1;
+    }
+    len
+}
+
+/// True when a row at most `ctx` rows from row `k` is removed or added. Needs `k < rows.len()`.
+pub fn near_change(rows: &[Row], k: usize, ctx: usize) -> bool {
+    let mut c = window_start(k, ctx);
+    let end = window_end(k, ctx, rows.len());
+    while c < end {
+        if is_change(&rows[c]) {
+            return true;
+        }
+        c += 1;
+    }
+    false
+}
+
+/// True when the row shows an old line: a removed row or a row on both sides.
+pub fn shows_old(r: &Row) -> bool {
+    match r.kind {
+        Kind::Removed => true,
+        Kind::Same => true,
+        _ => false,
+    }
+}
+
+/// True when the row shows a new line: an added row or a row on both sides.
+pub fn shows_new(r: &Row) -> bool {
+    match r.kind {
+        Kind::Added => true,
+        Kind::Same => true,
+        _ => false,
+    }
+}
+
+/// `n + 1` when `b` is true, else `n`.
+pub fn bump(n: usize, b: bool) -> usize {
+    if b {
+        return n + 1;
+    }
+    n
+}
+
+/// Puts row `r` in the cut. A header with the numbers `old` and `new` comes first
+/// when the row before `r` is not kept.
+pub fn keep_row(out: &mut Vec<Row>, kept: bool, r: Row, old: usize, new: usize) {
+    if !kept {
+        out.push(Row {
+            kind: Kind::Header,
+            old,
+            new,
+        });
+    }
+    out.push(r);
+}
+
+/// The rows that are at most `ctx` rows from a removed or added row, with a
+/// header before each run of kept rows. A header carries the number of the next
+/// old line and of the next new line: one more than the count of old (new) lines
+/// in the rows before it. The rows must have no header.
+pub fn cut_rows(rows: &[Row], ctx: usize) -> Vec<Row> {
+    let mut out = Vec::new();
+    let mut k = 0;
+    let mut old = 1;
+    let mut new = 1;
+    // True when row `k - 1` is kept.
+    let mut kept = false;
+    while k < rows.len() {
+        let near = near_change(rows, k, ctx);
+        if near {
+            keep_row(&mut out, kept, rows[k], old, new);
+        }
+        kept = near;
+        old = bump(old, shows_old(&rows[k]));
+        new = bump(new, shows_new(&rows[k]));
+        k += 1;
+    }
+    out
 }
 
 #[cfg(test)]

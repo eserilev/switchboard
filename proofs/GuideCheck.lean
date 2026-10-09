@@ -6,3 +6,5 @@ import GuideCheck.Rebuild
 import GuideCheck.Cover
 import GuideCheck.Check
 import GuideCheck.Meaning
+import GuideCheck.Rows
+import GuideCheck.Cut

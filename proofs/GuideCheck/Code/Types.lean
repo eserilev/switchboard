@@ -18,7 +18,7 @@ set_option maxRecDepth 2048
 namespace guide_check
 
 /-- [guide_check::FileDiff]
-    Source: 'crates/guide-check/src/lib.rs', lines 25:0-30:1
+    Source: 'crates/guide-check/src/lib.rs', lines 27:0-32:1
     Visibility: public -/
 structure FileDiff where
   old : alloc.vec.Vec (alloc.vec.Vec Std.U8)
@@ -27,12 +27,30 @@ structure FileDiff where
   added : alloc.vec.Vec Bool
 
 /-- [guide_check::Span]
-    Source: 'crates/guide-check/src/lib.rs', lines 34:0-39:1
+    Source: 'crates/guide-check/src/lib.rs', lines 36:0-41:1
     Visibility: public -/
 structure Span where
   file : Std.Usize
   old : Bool
   «from» : Std.Usize
   «to» : Std.Usize
+
+/-- [guide_check::Kind]
+    Source: 'crates/guide-check/src/lib.rs', lines 270:0-277:1
+    Visibility: public -/
+@[discriminant isize]
+inductive Kind where
+| Same : Kind
+| Removed : Kind
+| Added : Kind
+| Header : Kind
+
+/-- [guide_check::Row]
+    Source: 'crates/guide-check/src/lib.rs', lines 284:0-288:1
+    Visibility: public -/
+structure Row where
+  kind : Kind
+  old : Std.Usize
+  new : Std.Usize
 
 end guide_check

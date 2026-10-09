@@ -436,3 +436,65 @@ fn big_files_are_fast_enough() {
     assert!(check(&files, &spans, 15));
     assert!(t0.elapsed().as_secs_f64() < 2.0, "{:?}", t0.elapsed());
 }
+
+/// The cut as a plain model: keep the rows near a change, a header before each run.
+fn cut_model(rows: &[Row], ctx: usize) -> Vec<Row> {
+    let near = |k: usize| {
+        rows.iter()
+            .enumerate()
+            .any(|(c, r)| is_change(r) && c.abs_diff(k) <= ctx)
+    };
+    let mut out = vec![];
+    for k in 0..rows.len() {
+        if near(k) {
+            if k == 0 || !near(k - 1) {
+                let old = 1 + rows[..k].iter().filter(|r| shows_old(r)).count();
+                let new = 1 + rows[..k].iter().filter(|r| shows_new(r)).count();
+                out.push(Row {
+                    kind: Kind::Header,
+                    old,
+                    new,
+                });
+            }
+            out.push(rows[k]);
+        }
+    }
+    out
+}
+
+#[test]
+fn rows_agree_with_the_spec_on_random_inputs() {
+    let mut r = Rng(0x5eed_d1ff);
+    let mut rebuilt = 0;
+    for _ in 0..20_000 {
+        let d = random_file(&mut r);
+        let rows = number_rows(&d.removed, &d.added);
+        assert!(rows.len() <= d.removed.len() + d.added.len());
+        let ctx = r.below(5) as usize;
+        assert_eq!(cut_rows(&rows, ctx), cut_model(&rows, ctx));
+        let rebuilds = d.removed.len() == d.old.len()
+            && d.added.len() == d.new.len()
+            && keep(&d.old, &d.removed) == keep(&d.new, &d.added);
+        if !rebuilds {
+            continue;
+        }
+        rebuilt += 1;
+        // G5 to G7: each line once, in order, and the text that the numbers name.
+        let olds: Vec<usize> = rows.iter().filter(|r| shows_old(r)).map(|r| r.old).collect();
+        let news: Vec<usize> = rows.iter().filter(|r| shows_new(r)).map(|r| r.new).collect();
+        assert_eq!(olds, (1..=d.old.len()).collect::<Vec<_>>());
+        assert_eq!(news, (1..=d.new.len()).collect::<Vec<_>>());
+        for row in &rows {
+            match row.kind {
+                Kind::Removed => assert!(d.removed[row.old - 1] && row.new == 0),
+                Kind::Added => assert!(d.added[row.new - 1] && row.old == 0),
+                Kind::Same => {
+                    assert!(!d.removed[row.old - 1] && !d.added[row.new - 1]);
+                    assert_eq!(d.old[row.old - 1], d.new[row.new - 1]);
+                }
+                Kind::Header => panic!("a header in the full rows"),
+            }
+        }
+    }
+    assert!(rebuilt > 5_000, "only {rebuilt} files rebuild");
+}

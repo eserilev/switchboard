@@ -19,7 +19,7 @@ set_option maxRecDepth 2048
 namespace guide_check
 
 /-- [guide_check::bytes_equal]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 46:4-53:1
+    Source: 'crates/guide-check/src/lib.rs', lines 48:4-55:1
     Visibility: public -/
 @[rust_loop_body]
 def bytes_equal_loop.body
@@ -38,7 +38,7 @@ def bytes_equal_loop.body
   else ok (done true)
 
 /-- [guide_check::bytes_equal]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 46:4-53:1
+    Source: 'crates/guide-check/src/lib.rs', lines 48:4-55:1
     Visibility: public -/
 @[rust_loop]
 def bytes_equal_loop
@@ -48,7 +48,7 @@ def bytes_equal_loop
     i
 
 /-- [guide_check::bytes_equal]:
-    Source: 'crates/guide-check/src/lib.rs', lines 41:0-53:1
+    Source: 'crates/guide-check/src/lib.rs', lines 43:0-55:1
     Visibility: public -/
 def bytes_equal (a : Slice Std.U8) (b : Slice Std.U8) : Result Bool := do
   let i := Slice.len a
@@ -58,7 +58,7 @@ def bytes_equal (a : Slice Std.U8) (b : Slice Std.U8) : Result Bool := do
   else bytes_equal_loop a b 0#usize
 
 /-- [guide_check::next_kept]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 58:4-65:1
+    Source: 'crates/guide-check/src/lib.rs', lines 60:4-67:1
     Visibility: public -/
 @[rust_loop_body]
 def next_kept_loop.body
@@ -76,7 +76,7 @@ def next_kept_loop.body
   else ok (done j)
 
 /-- [guide_check::next_kept]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 58:4-65:1
+    Source: 'crates/guide-check/src/lib.rs', lines 60:4-67:1
     Visibility: public -/
 @[rust_loop]
 def next_kept_loop (mask : Slice Bool) (j : Std.Usize) : Result Std.Usize := do
@@ -85,14 +85,14 @@ def next_kept_loop (mask : Slice Bool) (j : Std.Usize) : Result Std.Usize := do
     j
 
 /-- [guide_check::next_kept]:
-    Source: 'crates/guide-check/src/lib.rs', lines 56:0-65:1
+    Source: 'crates/guide-check/src/lib.rs', lines 58:0-67:1
     Visibility: public -/
 @[reducible]
 def next_kept (mask : Slice Bool) (i : Std.Usize) : Result Std.Usize := do
   next_kept_loop mask i
 
 /-- [guide_check::lines_left]:
-    Source: 'crates/guide-check/src/lib.rs', lines 68:0-73:1
+    Source: 'crates/guide-check/src/lib.rs', lines 70:0-75:1
     Visibility: public -/
 def lines_left
   (i : Std.Usize) (n : Std.Usize) (j : Std.Usize) (m : Std.Usize) :
@@ -103,7 +103,7 @@ def lines_left
   else ok (j < m)
 
 /-- [guide_check::kept_equal_from]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 1:0-103:1
+    Source: 'crates/guide-check/src/lib.rs', lines 1:0-105:1
     Visibility: public -/
 @[rust_loop_body]
 def kept_equal_from_loop.body
@@ -141,7 +141,7 @@ def kept_equal_from_loop.body
   else ok (done true)
 
 /-- [guide_check::kept_equal_from]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 1:0-103:1
+    Source: 'crates/guide-check/src/lib.rs', lines 1:0-105:1
     Visibility: public -/
 @[rust_loop]
 def kept_equal_from_loop
@@ -155,7 +155,7 @@ def kept_equal_from_loop
     (i, j)
 
 /-- [guide_check::kept_equal_from]:
-    Source: 'crates/guide-check/src/lib.rs', lines 77:0-103:1
+    Source: 'crates/guide-check/src/lib.rs', lines 79:0-105:1
     Visibility: public -/
 @[reducible]
 def kept_equal_from
@@ -167,7 +167,7 @@ def kept_equal_from
   kept_equal_from_loop old removed new added i0 j0
 
 /-- [guide_check::span_holds]:
-    Source: 'crates/guide-check/src/lib.rs', lines 106:0-117:1
+    Source: 'crates/guide-check/src/lib.rs', lines 108:0-119:1
     Visibility: public -/
 def span_holds
   (s : Span) (file : Std.Usize) (old : Bool) (line : Std.Usize) :
@@ -183,7 +183,7 @@ def span_holds
          else ok (line <= s.to)
 
 /-- [guide_check::covered]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 122:4-129:1
+    Source: 'crates/guide-check/src/lib.rs', lines 124:4-131:1
     Visibility: public -/
 @[rust_loop_body]
 def covered_loop.body
@@ -203,7 +203,7 @@ def covered_loop.body
   else ok (done false)
 
 /-- [guide_check::covered]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 122:4-129:1
+    Source: 'crates/guide-check/src/lib.rs', lines 124:4-131:1
     Visibility: public -/
 @[rust_loop]
 def covered_loop
@@ -216,7 +216,7 @@ def covered_loop
     i
 
 /-- [guide_check::covered]:
-    Source: 'crates/guide-check/src/lib.rs', lines 120:0-129:1
+    Source: 'crates/guide-check/src/lib.rs', lines 122:0-131:1
     Visibility: public -/
 @[reducible]
 def covered
@@ -226,7 +226,7 @@ def covered
   covered_loop spans file old line 0#usize
 
 /-- [guide_check::mask_covered]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 134:4-143:1
+    Source: 'crates/guide-check/src/lib.rs', lines 136:4-145:1
     Visibility: public -/
 @[rust_loop_body]
 def mask_covered_loop.body
@@ -250,7 +250,7 @@ def mask_covered_loop.body
   else ok (done true)
 
 /-- [guide_check::mask_covered]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 134:4-143:1
+    Source: 'crates/guide-check/src/lib.rs', lines 136:4-145:1
     Visibility: public -/
 @[rust_loop]
 def mask_covered_loop
@@ -263,7 +263,7 @@ def mask_covered_loop
     k
 
 /-- [guide_check::mask_covered]:
-    Source: 'crates/guide-check/src/lib.rs', lines 132:0-143:1
+    Source: 'crates/guide-check/src/lib.rs', lines 134:0-145:1
     Visibility: public -/
 @[reducible]
 def mask_covered
@@ -273,7 +273,7 @@ def mask_covered
   mask_covered_loop spans file old mask 0#usize
 
 /-- [guide_check::file_ok]:
-    Source: 'crates/guide-check/src/lib.rs', lines 146:0-160:1
+    Source: 'crates/guide-check/src/lib.rs', lines 148:0-162:1
     Visibility: public -/
 def file_ok
   (d : FileDiff) (f : Std.Usize) (spans : Slice Span) : Result Bool := do
@@ -304,7 +304,7 @@ def file_ok
       else ok false
 
 /-- [guide_check::files_ok]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 165:4-172:1
+    Source: 'crates/guide-check/src/lib.rs', lines 167:4-174:1
     Visibility: public -/
 @[rust_loop_body]
 def files_ok_loop.body
@@ -323,7 +323,7 @@ def files_ok_loop.body
   else ok (done true)
 
 /-- [guide_check::files_ok]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 165:4-172:1
+    Source: 'crates/guide-check/src/lib.rs', lines 167:4-174:1
     Visibility: public -/
 @[rust_loop]
 def files_ok_loop
@@ -335,14 +335,14 @@ def files_ok_loop
     f
 
 /-- [guide_check::files_ok]:
-    Source: 'crates/guide-check/src/lib.rs', lines 163:0-172:1
+    Source: 'crates/guide-check/src/lib.rs', lines 165:0-174:1
     Visibility: public -/
 @[reducible]
 def files_ok (files : Slice FileDiff) (spans : Slice Span) : Result Bool := do
   files_ok_loop files spans 0#usize
 
 /-- [guide_check::has_change]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 178:4-185:1
+    Source: 'crates/guide-check/src/lib.rs', lines 180:4-187:1
     Visibility: public -/
 @[rust_loop_body]
 def has_change_loop.body
@@ -359,7 +359,7 @@ def has_change_loop.body
   else ok (done false)
 
 /-- [guide_check::has_change]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 178:4-185:1
+    Source: 'crates/guide-check/src/lib.rs', lines 180:4-187:1
     Visibility: public -/
 @[rust_loop]
 def has_change_loop
@@ -369,7 +369,7 @@ def has_change_loop
     k
 
 /-- [guide_check::has_change]:
-    Source: 'crates/guide-check/src/lib.rs', lines 176:0-185:1
+    Source: 'crates/guide-check/src/lib.rs', lines 178:0-187:1
     Visibility: public -/
 def has_change
   (mask : Slice Bool) («from» : Std.Usize) («to» : Std.Usize) :
@@ -379,7 +379,7 @@ def has_change
   has_change_loop mask «to» k
 
 /-- [guide_check::dist]:
-    Source: 'crates/guide-check/src/lib.rs', lines 187:0-192:1
+    Source: 'crates/guide-check/src/lib.rs', lines 189:0-194:1
     Visibility: public -/
 def dist (a : Std.Usize) (b : Std.Usize) : Result Std.Usize := do
   if a < b
@@ -387,7 +387,7 @@ def dist (a : Std.Usize) (b : Std.Usize) : Result Std.Usize := do
   else a - b
 
 /-- [guide_check::near]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 197:4-206:1
+    Source: 'crates/guide-check/src/lib.rs', lines 199:4-208:1
     Visibility: public -/
 @[rust_loop_body]
 def near_loop.body
@@ -410,7 +410,7 @@ def near_loop.body
   else ok (done false)
 
 /-- [guide_check::near]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 197:4-206:1
+    Source: 'crates/guide-check/src/lib.rs', lines 199:4-208:1
     Visibility: public -/
 @[rust_loop]
 def near_loop
@@ -422,7 +422,7 @@ def near_loop
     k
 
 /-- [guide_check::near]:
-    Source: 'crates/guide-check/src/lib.rs', lines 195:0-206:1
+    Source: 'crates/guide-check/src/lib.rs', lines 197:0-208:1
     Visibility: public -/
 @[reducible]
 def near
@@ -430,7 +430,7 @@ def near
   near_loop mask line pad 0#usize
 
 /-- [guide_check::all_near]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 211:4-218:1
+    Source: 'crates/guide-check/src/lib.rs', lines 213:4-220:1
     Visibility: public -/
 @[rust_loop_body]
 def all_near_loop.body
@@ -447,7 +447,7 @@ def all_near_loop.body
   else ok (done true)
 
 /-- [guide_check::all_near]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 211:4-218:1
+    Source: 'crates/guide-check/src/lib.rs', lines 213:4-220:1
     Visibility: public -/
 @[rust_loop]
 def all_near_loop
@@ -459,7 +459,7 @@ def all_near_loop
     k
 
 /-- [guide_check::all_near]:
-    Source: 'crates/guide-check/src/lib.rs', lines 209:0-218:1
+    Source: 'crates/guide-check/src/lib.rs', lines 211:0-220:1
     Visibility: public -/
 def all_near
   (mask : Slice Bool) («from» : Std.Usize) («to» : Std.Usize)
@@ -470,7 +470,7 @@ def all_near
   all_near_loop mask «to» pad k
 
 /-- [guide_check::span_fits]:
-    Source: 'crates/guide-check/src/lib.rs', lines 221:0-235:1
+    Source: 'crates/guide-check/src/lib.rs', lines 223:0-237:1
     Visibility: public -/
 def span_fits
   (mask : Slice Bool) («from» : Std.Usize) («to» : Std.Usize)
@@ -493,7 +493,7 @@ def span_fits
         else ok false
 
 /-- [guide_check::span_ok]:
-    Source: 'crates/guide-check/src/lib.rs', lines 237:0-245:1
+    Source: 'crates/guide-check/src/lib.rs', lines 239:0-247:1
     Visibility: public -/
 def span_ok
   (s : Span) (files : Slice FileDiff) (pad : Std.Usize) : Result Bool := do
@@ -512,7 +512,7 @@ def span_ok
       span_fits s1 s.from s.to pad
 
 /-- [guide_check::spans_ok]: loop body 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 249:4-256:1
+    Source: 'crates/guide-check/src/lib.rs', lines 251:4-258:1
     Visibility: public -/
 @[rust_loop_body]
 def spans_ok_loop.body
@@ -532,7 +532,7 @@ def spans_ok_loop.body
   else ok (done true)
 
 /-- [guide_check::spans_ok]: loop 0:
-    Source: 'crates/guide-check/src/lib.rs', lines 249:4-256:1
+    Source: 'crates/guide-check/src/lib.rs', lines 251:4-258:1
     Visibility: public -/
 @[rust_loop]
 def spans_ok_loop
@@ -545,7 +545,7 @@ def spans_ok_loop
     i
 
 /-- [guide_check::spans_ok]:
-    Source: 'crates/guide-check/src/lib.rs', lines 247:0-256:1
+    Source: 'crates/guide-check/src/lib.rs', lines 249:0-258:1
     Visibility: public -/
 @[reducible]
 def spans_ok
@@ -555,7 +555,7 @@ def spans_ok
   spans_ok_loop spans files pad 0#usize
 
 /-- [guide_check::check]:
-    Source: 'crates/guide-check/src/lib.rs', lines 259:0-264:1
+    Source: 'crates/guide-check/src/lib.rs', lines 261:0-266:1
     Visibility: public -/
 def check
   (files : Slice FileDiff) (spans : Slice Span) (pad : Std.Usize) :
@@ -565,5 +565,448 @@ def check
   if b
   then spans_ok spans files pad
   else ok false
+
+/-- [guide_check::{impl core::clone::Clone for guide_check::Kind}::clone]:
+    Source: 'crates/guide-check/src/lib.rs', lines 269:9-269:14
+    Visibility: public -/
+def Kind.Insts.CoreCloneClone.clone (self : Kind) : Result Kind := do
+  ok self
+
+/-- Trait implementation: [guide_check::{impl core::clone::Clone for guide_check::Kind}]
+    Source: 'crates/guide-check/src/lib.rs', lines 269:9-269:14 -/
+@[reducible]
+def Kind.Insts.CoreCloneClone : core.clone.Clone Kind := {
+  clone := Kind.Insts.CoreCloneClone.clone
+}
+
+/-- Trait implementation: [guide_check::{impl core::marker::Copy for guide_check::Kind}]
+    Source: 'crates/guide-check/src/lib.rs', lines 269:16-269:20 -/
+@[reducible]
+def Kind.Insts.CoreMarkerCopy : core.marker.Copy Kind := {
+  cloneInst := Kind.Insts.CoreCloneClone
+}
+
+/-- [guide_check::{impl core::fmt::Debug for guide_check::Kind}::fmt]:
+    Source: 'crates/guide-check/src/lib.rs', lines 269:22-269:27
+    Visibility: public -/
+def Kind.Insts.CoreFmtDebug.fmt
+  (self : Kind) (f : core.fmt.Formatter) :
+  Result ((core.result.Result Unit core.fmt.Error) × core.fmt.Formatter)
+  := do
+  match self with
+  | Kind.Same => core.fmt.Formatter.write_str f (toStr "Same")
+  | Kind.Removed => core.fmt.Formatter.write_str f (toStr "Removed")
+  | Kind.Added => core.fmt.Formatter.write_str f (toStr "Added")
+  | Kind.Header => core.fmt.Formatter.write_str f (toStr "Header")
+
+/-- Trait implementation: [guide_check::{impl core::fmt::Debug for guide_check::Kind}]
+    Source: 'crates/guide-check/src/lib.rs', lines 269:22-269:27 -/
+@[reducible]
+def Kind.Insts.CoreFmtDebug : core.fmt.Debug Kind := {
+  fmt := Kind.Insts.CoreFmtDebug.fmt
+}
+
+/-- Trait implementation: [guide_check::{impl core::marker::StructuralPartialEq for guide_check::Kind}]
+    Source: 'crates/guide-check/src/lib.rs', lines 269:29-269:38 -/
+@[reducible]
+def Kind.Insts.CoreMarkerStructuralPartialEq : core.marker.StructuralPartialEq
+  Kind := {
+}
+
+/-- [guide_check::{impl core::cmp::PartialEq<guide_check::Kind> for guide_check::Kind}::eq]:
+    Source: 'crates/guide-check/src/lib.rs', lines 269:29-269:38
+    Visibility: public -/
+def Kind.Insts.CoreCmpPartialEqKind.eq
+  (self : Kind) (other : Kind) : Result Bool := do
+  let self1 := read_discriminant self
+  let other1 := read_discriminant other
+  ok (self1 = other1)
+
+/-- Trait implementation: [guide_check::{impl core::cmp::PartialEq<guide_check::Kind> for guide_check::Kind}]
+    Source: 'crates/guide-check/src/lib.rs', lines 269:29-269:38 -/
+@[reducible]
+def Kind.Insts.CoreCmpPartialEqKind : core.cmp.PartialEq Kind Kind := {
+  eq := Kind.Insts.CoreCmpPartialEqKind.eq
+}
+
+/-- [guide_check::{impl core::cmp::Eq for guide_check::Kind}::assert_fields_are_eq]:
+    Source: 'crates/guide-check/src/lib.rs', lines 269:40-269:42
+    Visibility: public -/
+def Kind.Insts.CoreCmpEq.assert_fields_are_eq (self : Kind) : Result Unit := do
+  ok ()
+
+/-- Trait implementation: [guide_check::{impl core::cmp::Eq for guide_check::Kind}]
+    Source: 'crates/guide-check/src/lib.rs', lines 269:40-269:42 -/
+@[reducible]
+def Kind.Insts.CoreCmpEq : core.cmp.Eq Kind := {
+  partialEqInst := Kind.Insts.CoreCmpPartialEqKind
+  assert_fields_are_eq := Kind.Insts.CoreCmpEq.assert_fields_are_eq
+}
+
+/-- [guide_check::{impl core::clone::Clone for guide_check::Row}::clone]:
+    Source: 'crates/guide-check/src/lib.rs', lines 283:9-283:14
+    Visibility: public -/
+def Row.Insts.CoreCloneClone.clone (self : Row) : Result Row := do
+  ok self
+
+/-- Trait implementation: [guide_check::{impl core::clone::Clone for guide_check::Row}]
+    Source: 'crates/guide-check/src/lib.rs', lines 283:9-283:14 -/
+@[reducible]
+def Row.Insts.CoreCloneClone : core.clone.Clone Row := {
+  clone := Row.Insts.CoreCloneClone.clone
+}
+
+/-- Trait implementation: [guide_check::{impl core::marker::Copy for guide_check::Row}]
+    Source: 'crates/guide-check/src/lib.rs', lines 283:16-283:20 -/
+@[reducible]
+def Row.Insts.CoreMarkerCopy : core.marker.Copy Row := {
+  cloneInst := Row.Insts.CoreCloneClone
+}
+
+/-- [guide_check::{impl core::fmt::Debug for guide_check::Row}::fmt]:
+    Source: 'crates/guide-check/src/lib.rs', lines 283:22-283:27
+    Visibility: public -/
+def Row.Insts.CoreFmtDebug.fmt
+  (self : Row) (f : core.fmt.Formatter) :
+  Result ((core.result.Result Unit core.fmt.Error) × core.fmt.Formatter)
+  := do
+  let dyn := Dyn.mk _ Kind.Insts.CoreFmtDebug self.kind
+  let dyn1 := Dyn.mk _ core.fmt.DebugUsize self.old
+  let dyn2 := Dyn.mk _ (core.fmt.DebugShared core.fmt.DebugUsize) self.new
+  core.fmt.Formatter.debug_struct_field3_finish f (toStr "Row") (toStr "kind")
+    dyn (toStr "old") dyn1 (toStr "new") dyn2
+
+/-- Trait implementation: [guide_check::{impl core::fmt::Debug for guide_check::Row}]
+    Source: 'crates/guide-check/src/lib.rs', lines 283:22-283:27 -/
+@[reducible]
+def Row.Insts.CoreFmtDebug : core.fmt.Debug Row := {
+  fmt := Row.Insts.CoreFmtDebug.fmt
+}
+
+/-- Trait implementation: [guide_check::{impl core::marker::StructuralPartialEq for guide_check::Row}]
+    Source: 'crates/guide-check/src/lib.rs', lines 283:29-283:38 -/
+@[reducible]
+def Row.Insts.CoreMarkerStructuralPartialEq : core.marker.StructuralPartialEq
+  Row := {
+}
+
+/-- [guide_check::{impl core::cmp::PartialEq<guide_check::Row> for guide_check::Row}::eq]:
+    Source: 'crates/guide-check/src/lib.rs', lines 283:29-283:38
+    Visibility: public -/
+def Row.Insts.CoreCmpPartialEqRow.eq
+  (self : Row) (other : Row) : Result Bool := do
+  let b ← Kind.Insts.CoreCmpPartialEqKind.eq self.kind other.kind
+  if b
+  then if self.old = other.old
+       then ok (self.new = other.new)
+       else ok false
+  else ok false
+
+/-- Trait implementation: [guide_check::{impl core::cmp::PartialEq<guide_check::Row> for guide_check::Row}]
+    Source: 'crates/guide-check/src/lib.rs', lines 283:29-283:38 -/
+@[reducible]
+def Row.Insts.CoreCmpPartialEqRow : core.cmp.PartialEq Row Row := {
+  eq := Row.Insts.CoreCmpPartialEqRow.eq
+}
+
+/-- [guide_check::{impl core::cmp::Eq for guide_check::Row}::assert_fields_are_eq]:
+    Source: 'crates/guide-check/src/lib.rs', lines 283:40-283:42
+    Visibility: public -/
+def Row.Insts.CoreCmpEq.assert_fields_are_eq (self : Row) : Result Unit := do
+  ok ()
+
+/-- Trait implementation: [guide_check::{impl core::cmp::Eq for guide_check::Row}]
+    Source: 'crates/guide-check/src/lib.rs', lines 283:40-283:42 -/
+@[reducible]
+def Row.Insts.CoreCmpEq : core.cmp.Eq Row := {
+  partialEqInst := Row.Insts.CoreCmpPartialEqRow
+  assert_fields_are_eq := Row.Insts.CoreCmpEq.assert_fields_are_eq
+}
+
+/-- [guide_check::next_kind]:
+    Source: 'crates/guide-check/src/lib.rs', lines 294:0-311:1
+    Visibility: public -/
+def next_kind
+  (removed : Slice Bool) (added : Slice Bool) (i : Std.Usize) (j : Std.Usize) :
+  Result Kind
+  := do
+  let i1 := Slice.len removed
+  if i < i1
+  then
+    let b ← Slice.index_usize removed i
+    if b
+    then ok Kind.Removed
+    else
+      let i2 := Slice.len added
+      if j < i2
+      then
+        let b1 ← Slice.index_usize added j
+        if b1
+        then ok Kind.Added
+        else
+          let i3 := Slice.len removed
+          if i < i3
+          then
+            let i4 := Slice.len added
+            if j < i4
+            then ok Kind.Same
+            else ok Kind.Header
+          else ok Kind.Header
+      else
+        let i3 := Slice.len removed
+        if i < i3
+        then
+          let i4 := Slice.len added
+          if j < i4
+          then ok Kind.Same
+          else ok Kind.Header
+        else ok Kind.Header
+  else
+    let i2 := Slice.len added
+    if j < i2
+    then
+      let b ← Slice.index_usize added j
+      if b
+      then ok Kind.Added
+      else
+        let i3 := Slice.len removed
+        if i < i3
+        then
+          let i4 := Slice.len added
+          if j < i4
+          then ok Kind.Same
+          else ok Kind.Header
+        else ok Kind.Header
+    else
+      let i3 := Slice.len removed
+      if i < i3
+      then
+        let i4 := Slice.len added
+        if j < i4
+        then ok Kind.Same
+        else ok Kind.Header
+      else ok Kind.Header
+
+/-- [guide_check::number_rows]: loop body 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 320:4-342:1
+    Visibility: public -/
+@[rust_loop_body]
+def number_rows_loop.body
+  (removed : Slice Bool) (added : Slice Bool) (out : alloc.vec.Vec Row)
+  (i : Std.Usize) (j : Std.Usize) :
+  Result (ControlFlow ((alloc.vec.Vec Row) × Std.Usize × Std.Usize)
+    (alloc.vec.Vec Row))
+  := do
+  let i1 := Slice.len removed
+  let i2 := Slice.len added
+  let b ← lines_left i i1 j i2
+  if b
+  then
+    let kind ← next_kind removed added i j
+    match kind with
+    | Kind.Same =>
+      let i3 ← i + 1#usize
+      let j1 ← j + 1#usize
+      let out1 ←
+        alloc.vec.Vec.push out ({ kind := Kind.Same, old := i3, new := j1 } :
+          Row)
+      ok (cont (out1, i3, j1))
+    | Kind.Removed =>
+      let i3 ← i + 1#usize
+      let out1 ←
+        alloc.vec.Vec.push out
+          ({ kind := Kind.Removed, old := i3, new := 0#usize } : Row)
+      ok (cont (out1, i3, j))
+    | Kind.Added =>
+      let j1 ← j + 1#usize
+      let out1 ←
+        alloc.vec.Vec.push out
+          ({ kind := Kind.Added, old := 0#usize, new := j1 } : Row)
+      ok (cont (out1, i, j1))
+    | Kind.Header => ok (done out)
+  else ok (done out)
+
+/-- [guide_check::number_rows]: loop 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 320:4-342:1
+    Visibility: public -/
+@[rust_loop]
+def number_rows_loop
+  (removed : Slice Bool) (added : Slice Bool) (out : alloc.vec.Vec Row)
+  (i : Std.Usize) (j : Std.Usize) :
+  Result (alloc.vec.Vec Row)
+  := do
+  loop
+    (fun (out1, i1, j1) => number_rows_loop.body removed added out1 i1 j1)
+    (out, i, j)
+
+/-- [guide_check::number_rows]:
+    Source: 'crates/guide-check/src/lib.rs', lines 316:0-342:1
+    Visibility: public -/
+@[reducible]
+def number_rows
+  (removed : Slice Bool) (added : Slice Bool) :
+  Result (alloc.vec.Vec Row)
+  := do
+  number_rows_loop removed added (alloc.vec.Vec.new Row) 0#usize 0#usize
+
+/-- [guide_check::is_change]:
+    Source: 'crates/guide-check/src/lib.rs', lines 344:0-350:1
+    Visibility: public -/
+def is_change (r : Row) : Result Bool := do
+  match r.kind with
+  | Kind.Same => ok false
+  | Kind.Removed => ok true
+  | Kind.Added => ok true
+  | Kind.Header => ok false
+
+/-- [guide_check::window_start]:
+    Source: 'crates/guide-check/src/lib.rs', lines 353:0-358:1
+    Visibility: public -/
+def window_start (k : Std.Usize) (ctx : Std.Usize) : Result Std.Usize := do
+  if k > ctx
+  then k - ctx
+  else ok 0#usize
+
+/-- [guide_check::window_end]:
+    Source: 'crates/guide-check/src/lib.rs', lines 361:0-366:1
+    Visibility: public -/
+def window_end
+  (k : Std.Usize) (ctx : Std.Usize) (len : Std.Usize) : Result Std.Usize := do
+  let i ← len - k
+  if ctx < i
+  then let i1 ← k + ctx
+       i1 + 1#usize
+  else ok len
+
+/-- [guide_check::near_change]: loop body 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 372:4-379:1
+    Visibility: public -/
+@[rust_loop_body]
+def near_change_loop.body
+  (rows : Slice Row) («end» : Std.Usize) (c : Std.Usize) :
+  Result (ControlFlow Std.Usize Bool)
+  := do
+  if c < «end»
+  then
+    let r ← Slice.index_usize rows c
+    let b ← is_change r
+    if b
+    then ok (done true)
+    else let c1 ← c + 1#usize
+         ok (cont c1)
+  else ok (done false)
+
+/-- [guide_check::near_change]: loop 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 372:4-379:1
+    Visibility: public -/
+@[rust_loop]
+def near_change_loop
+  (rows : Slice Row) (c : Std.Usize) («end» : Std.Usize) : Result Bool := do
+  loop
+    (fun c1 => near_change_loop.body rows «end» c1)
+    c
+
+/-- [guide_check::near_change]:
+    Source: 'crates/guide-check/src/lib.rs', lines 369:0-379:1
+    Visibility: public -/
+def near_change
+  (rows : Slice Row) (k : Std.Usize) (ctx : Std.Usize) : Result Bool := do
+  let c ← window_start k ctx
+  let i := Slice.len rows
+  let «end» ← window_end k ctx i
+  near_change_loop rows c «end»
+
+/-- [guide_check::shows_old]:
+    Source: 'crates/guide-check/src/lib.rs', lines 382:0-388:1
+    Visibility: public -/
+def shows_old (r : Row) : Result Bool := do
+  match r.kind with
+  | Kind.Same => ok true
+  | Kind.Removed => ok true
+  | Kind.Added => ok false
+  | Kind.Header => ok false
+
+/-- [guide_check::shows_new]:
+    Source: 'crates/guide-check/src/lib.rs', lines 391:0-397:1
+    Visibility: public -/
+def shows_new (r : Row) : Result Bool := do
+  match r.kind with
+  | Kind.Same => ok true
+  | Kind.Removed => ok false
+  | Kind.Added => ok true
+  | Kind.Header => ok false
+
+/-- [guide_check::bump]:
+    Source: 'crates/guide-check/src/lib.rs', lines 400:0-405:1
+    Visibility: public -/
+def bump (n : Std.Usize) (b : Bool) : Result Std.Usize := do
+  if b
+  then n + 1#usize
+  else ok n
+
+/-- [guide_check::keep_row]:
+    Source: 'crates/guide-check/src/lib.rs', lines 409:0-418:1
+    Visibility: public -/
+def keep_row
+  (out : alloc.vec.Vec Row) (kept : Bool) (r : Row) (old : Std.Usize)
+  (new : Std.Usize) :
+  Result (alloc.vec.Vec Row)
+  := do
+  let out1 ←
+    if kept
+    then ok out
+    else alloc.vec.Vec.push out ({ kind := Kind.Header, old, new } : Row)
+  alloc.vec.Vec.push out1 r
+
+/-- [guide_check::cut_rows]: loop body 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 431:4-440:5
+    Visibility: public -/
+@[rust_loop_body]
+def cut_rows_loop.body
+  (rows : Slice Row) (ctx : Std.Usize) (out : alloc.vec.Vec Row)
+  (k : Std.Usize) (old : Std.Usize) (new : Std.Usize) (kept : Bool) :
+  Result (ControlFlow ((alloc.vec.Vec Row) × Std.Usize × Std.Usize ×
+    Std.Usize × Bool) (alloc.vec.Vec Row))
+  := do
+  let i := Slice.len rows
+  if k < i
+  then
+    let near1 ← near_change rows k ctx
+    let out1 ←
+      if near1
+      then do
+           let r ← Slice.index_usize rows k
+           keep_row out kept r old new
+      else ok out
+    let r ← Slice.index_usize rows k
+    let b ← shows_old r
+    let old1 ← bump old b
+    let b1 ← shows_new r
+    let new1 ← bump new b1
+    let k1 ← k + 1#usize
+    ok (cont (out1, k1, old1, new1, near1))
+  else ok (done out)
+
+/-- [guide_check::cut_rows]: loop 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 431:4-440:5
+    Visibility: public -/
+@[rust_loop]
+def cut_rows_loop
+  (rows : Slice Row) (ctx : Std.Usize) (out : alloc.vec.Vec Row)
+  (k : Std.Usize) (old : Std.Usize) (new : Std.Usize) (kept : Bool) :
+  Result (alloc.vec.Vec Row)
+  := do
+  loop
+    (fun (out1, k1, old1, new1, kept1) => cut_rows_loop.body rows ctx out1 k1
+      old1 new1 kept1)
+    (out, k, old, new, kept)
+
+/-- [guide_check::cut_rows]:
+    Source: 'crates/guide-check/src/lib.rs', lines 424:0-442:1
+    Visibility: public -/
+@[reducible]
+def cut_rows
+  (rows : Slice Row) (ctx : Std.Usize) : Result (alloc.vec.Vec Row) := do
+  cut_rows_loop rows ctx (alloc.vec.Vec.new Row) 0#usize 1#usize 1#usize false
 
 end guide_check
