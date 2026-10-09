@@ -9,12 +9,14 @@
   const savePlace = (id) => {
     const l = R.get(id);
     if (!l) return;
-    try { localStorage.setItem(placeKey(id), JSON.stringify({ cur: l.cur, active: l.active, all: l.all })); } catch (_) {}
+    try { localStorage.setItem(placeKey(id), JSON.stringify({ cur: l.cur, active: l.active, all: l.all, mode: l.mode, file: l.file, viewed: [...l.viewed], vhead: l.vhead })); } catch (_) {}
   };
   const local = (id) => {
     if (!R.has(id)) {
       const p = loadPlace(id);
-      R.set(id, { cur: p.cur || 0, anchor: null, active: p.active || null, all: !!p.all, pending: new Map(), diff: new Map(), busy: new Set() });
+      R.set(id, { cur: p.cur || 0, anchor: null, active: p.active || null, all: !!p.all, pending: new Map(), diff: new Map(), busy: new Set(), loading: new Set(),
+        // Guide shows the steps; Files shows every changed file, like GitHub's "Files changed".
+        mode: p.mode === "files" ? "files" : "guide", file: p.file || null, files: null, viewed: new Set(p.viewed || []), vhead: p.vhead || null });
     }
     return R.get(id);
   };
@@ -58,7 +60,6 @@
     $("#rask").addEventListener("submit", (e) => { e.preventDefault(); ask(id); });
     $("#rq").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(id); } });
     update(r, true);
-    if (steps(r).length) loadDiff(id, l.cur);
   }
 
   function update(r, fresh) {
@@ -66,13 +67,140 @@
     if (!fresh && !$("#rsteps")) return draw(r.id);
     const l = local(r.id);
     l.cur = Math.min(l.cur, Math.max(0, steps(r).length - 1));
+    // Viewed marks belong to one head. New commits clear them, as on GitHub.
+    if (l.vhead !== r.head) { l.viewed = new Set(); l.vhead = r.head; }
     drawHead(r);
-    drawSteps(r);
-    drawGuide(r);
+    if (l.mode === "files") {
+      if (!l.files) loadFiles(r.id);
+      drawFiles(r);
+      drawFileHead(r);
+    } else {
+      drawSteps(r);
+      drawGuide(r);
+    }
     drawThreads(r);
     drawDrafts(r);
-    if (!fresh && steps(r).length && !l.diff.has(steps(r)[l.cur].id)) loadDiff(r.id, l.cur);
+    const key = diffKey(r);
+    if (key && !l.diff.has(key)) loadDiff(r.id);
     else drawDiff(r);
+  }
+
+  // The key of the diff on screen: a step id, or "file:" and a path.
+  function diffKey(r) {
+    const l = local(r.id);
+    if (l.mode === "files") return l.file ? `file:${l.file}` : null;
+    return steps(r)[l.cur]?.id || null;
+  }
+
+  const curFile = (l) => (l.files || []).find((f) => f.path === l.file);
+
+  async function loadFiles(id) {
+    const l = local(id);
+    if (l.loading.has("files")) return;
+    l.loading.add("files");
+    try {
+      l.files = await invoke("review_files", { id });
+    } catch (e) {
+      l.files = [];
+      toast(e);
+    }
+    l.loading.delete("files");
+    if (!curFile(l)) l.file = l.files[0]?.path || null;
+    const r = S.reviews.get(id);
+    if (r && S.tab === id) update(r);
+  }
+
+  function setMode(id, mode) {
+    const l = local(id);
+    if (l.mode === mode) return;
+    l.mode = mode;
+    l.anchor = null;
+    l.compose = null;
+    l.active = null;
+    savePlace(id);
+    update(S.reviews.get(id));
+  }
+
+  function goFile(id, i) {
+    const l = local(id);
+    const files = l.files || [];
+    if (!files.length) return;
+    const f = files[Math.max(0, Math.min(files.length - 1, i))];
+    if (f.path === l.file) return;
+    l.file = f.path;
+    l.anchor = null;
+    l.compose = null;
+    l.active = null;
+    savePlace(id);
+    update(S.reviews.get(id));
+    $(`#rsteps [data-f="${CSS.escape(f.path)}"]`)?.scrollIntoView({ block: "nearest" });
+  }
+
+  const fileIndex = (l) => (l.files || []).findIndex((f) => f.path === l.file);
+
+  function toggleViewed(id, path) {
+    const l = local(id);
+    if (l.viewed.has(path)) l.viewed.delete(path);
+    else l.viewed.add(path);
+    savePlace(id);
+    update(S.reviews.get(id));
+  }
+
+  function drawFiles(r) {
+    const l = local(r.id);
+    if (!l.files) { $("#rsteps").innerHTML = `<li class="empty-review">Loading the files…</li>`; return; }
+    const stepNo = (sid) => steps(r).findIndex((x) => x.id === sid) + 1;
+    const head = `<li class="fhead">${l.files.length} file${l.files.length === 1 ? "" : "s"} · ${l.viewed.size} viewed</li>`;
+    $("#rsteps").innerHTML = head + l.files.map((f) => {
+      const slash = f.path.lastIndexOf("/");
+      const dir = slash >= 0 ? f.path.slice(0, slash + 1) : "";
+      const name = f.path.slice(slash + 1);
+      const nums = f.steps.map(stepNo).filter((n) => n > 0);
+      const n = r.threads.filter((t) => t.path === f.path).length;
+      return `<li class="fitem${l.viewed.has(f.path) ? " viewed" : ""}" tabindex="0" data-f="${esc(f.path)}" ${f.path === l.file ? 'aria-current="step"' : ""}>
+        <span class="vbox" aria-hidden="true">${l.viewed.has(f.path) ? "✓" : ""}</span>
+        <div class="fbody" title="${esc(f.path)}"><div class="fname">${esc(name)}</div>${dir ? `<div class="fdir">${esc(dir)}</div>` : ""}
+        <div class="fmeta"><span class="plus">+${f.added}</span><span class="minus">−${f.removed}</span>${nums.length ? `<span>step ${nums.join(", ")}</span>` : ""}${n ? `<span class="badge th">${n}</span>` : ""}${f.note ? `<span class="fnote">${esc(f.note)}</span>` : ""}</div></div></li>`;
+    }).join("");
+    $("#rsteps").onclick = (e) => {
+      const it = e.target.closest(".fitem");
+      if (it) goFile(r.id, l.files.findIndex((f) => f.path === it.dataset.f));
+    };
+  }
+
+  function drawFileHead(r) {
+    const l = local(r.id);
+    const f = curFile(l);
+    if (!f) { $("#rguide").innerHTML = ""; return; }
+    const i = fileIndex(l);
+    const chips = f.steps.map((sid) => {
+      const si = steps(r).findIndex((x) => x.id === sid);
+      return si >= 0 ? `<button class="chip link" data-step="${si}">Step ${si + 1}: ${mdi(steps(r)[si].title)}</button>` : "";
+    }).join("");
+    $("#rguide").innerHTML = `
+      <div class="eyebrow">File ${i + 1} of ${l.files.length}</div>
+      <h4 class="fpath">${esc(f.path)}</h4>
+      <div class="fmeta big"><span class="plus">+${f.added}</span><span class="minus">−${f.removed}</span>${f.old_path && f.old_path !== f.path ? `<span>from ${esc(f.old_path)}</span>` : ""}${f.note ? `<span class="fnote">${esc(f.note)}</span>` : ""}</div>
+      ${chips ? `<div class="ctx"><span class="clabel">In the guide:</span>${chips}</div>` : ""}
+      <div class="gactions">
+        <button class="btn" data-act="viewed">${l.viewed.has(f.path) ? "Unmark viewed" : "Mark viewed"}</button>
+        ${i < l.files.length - 1 ? `<button class="btn primary" data-act="nextfile">Next file</button>` : ""}
+      </div>`;
+    $("#rguide").onclick = (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      if (b.dataset.step) { setMode(r.id, "guide"); go(r.id, +b.dataset.step); }
+      if (b.dataset.act === "viewed") toggleViewed(r.id, f.path);
+      if (b.dataset.act === "nextfile") nextFile(r.id);
+    };
+  }
+
+  function nextFile(id) {
+    const l = local(id);
+    if (l.file && !l.viewed.has(l.file)) { l.viewed.add(l.file); savePlace(id); }
+    const i = fileIndex(l);
+    if (i < (l.files || []).length - 1) goFile(id, i + 1);
+    else update(S.reviews.get(id));
   }
 
   // The result of the verified checker, in one line.
@@ -92,11 +220,13 @@
     const retry = r.status === "error" ? `<button class="btn small" data-act="retry">Retry</button>` : "";
     $("#rhead").innerHTML = `<div><div class="t">${esc(r.title)}</div><div class="m">${esc(r.repo)} #${esc(r.number)} · ${esc(short(r.head))}${r.tree ? " · " + esc(r.tree) : ""}</div></div>
       ${status ? `<span class="status${r.status === "error" ? " error" : ""}">${esc(status)}</span>` : ""}${coverageLine(r)}${newHead}
-      <div class="right">${retry}<button class="btn small" data-act="close">Close review</button></div>
+      <div class="right"><div class="seg" id="rmode" title="Switch with f"><button type="button" data-mode="guide" aria-pressed="${local(r.id).mode === "guide"}">Guide</button><button type="button" data-mode="files" aria-pressed="${local(r.id).mode === "files"}">Files</button></div>${retry}<button class="btn small" data-act="close">Close review</button></div>
       ${r.error ? `<div class="rerror" style="flex-basis:100%;padding:0">${esc(r.error)}</div>` : ""}`;
     $("#rhead").onclick = async (e) => {
+      const mode = e.target.closest("[data-mode]")?.dataset.mode;
+      if (mode) return setMode(r.id, mode);
       const act = e.target.closest("[data-act]")?.dataset.act;
-      if (act === "update") { local(r.id).diff.clear(); call("review_update", { id: r.id }); }
+      if (act === "update") { local(r.id).diff.clear(); local(r.id).files = null; call("review_update", { id: r.id }); }
       if (act === "retry") call("review_retry", { id: r.id });
       if (act === "close") call("review_close", { id: r.id });
     };
@@ -150,29 +280,32 @@
     });
   }
 
-  async function loadDiff(id, i) {
-    const r = S.reviews.get(id);
-    const s = steps(r)[i];
-    if (!s) return;
+  async function loadDiff(id) {
     const l = local(id);
-    if (!l.diff.has(s.id)) {
-      try {
-        l.diff.set(s.id, await invoke("review_diff", { id, step: s.id }));
-      } catch (e) {
-        l.diff.set(s.id, { path: s.file, rows: [], error: String(e) });
-      }
+    const key = diffKey(S.reviews.get(id));
+    if (!key || l.diff.has(key) || l.loading.has(key)) return;
+    l.loading.add(key);
+    try {
+      l.diff.set(key, key.startsWith("file:")
+        ? await invoke("review_file_diff", { id, path: key.slice(5) })
+        : await invoke("review_diff", { id, step: key }));
+    } catch (e) {
+      l.diff.set(key, { sections: [], error: String(e) });
     }
-    if (S.tab === id && local(id).cur === i) drawDiff(S.reviews.get(id));
+    l.loading.delete(key);
+    const r = S.reviews.get(id);
+    if (S.tab === id && diffKey(r) === key) drawDiff(r);
   }
 
   function drawDiff(r) {
     const l = local(r.id);
-    const s = steps(r)[l.cur];
-    const d = s && l.diff.get(s.id);
-    if (!s || !d || !d.sections?.length) { $("#rdiff").innerHTML = d?.error ? `<div class="rerror">${esc(d.error)}</div>` : ""; return; }
+    const s = l.mode === "files" ? null : steps(r)[l.cur];
+    const key = diffKey(r);
+    const d = key && l.diff.get(key);
+    if (!d || !d.sections?.length) { $("#rdiff").innerHTML = d?.error ? `<div class="rerror">${esc(d.error)}</div>` : ""; return; }
     const html = d.sections.map((sec, si) => {
       const inRange = (side, num) => sec.ranges.some((g) => g.side === side && num >= g.from && num <= g.to);
-      const anchored = new Set(r.threads.filter((t) => t.step === s.id && t.line && t.path === sec.path).map((t) => `${t.side || "new"}:${t.line}`));
+      const anchored = new Set(r.threads.filter((t) => (!s || t.step === s.id) && t.line && t.path === sec.path).map((t) => `${t.side || "new"}:${t.line}`));
       const pathOf = (side) => (side === "old" ? sec.old_path || sec.path : sec.path);
       const c = l.compose && l.compose.sec === sec.path ? l.compose : null;
       const rows = sec.rows.map((row) => {
@@ -230,9 +363,9 @@
       drawThreads(r);
       $("#rq").focus();
     };
-    const first = $("#rdiff tr.focus");
-    if (first && !l.scrolled?.has(s.id)) {
-      (l.scrolled ||= new Set()).add(s.id);
+    const first = $("#rdiff tr.focus") || $("#rdiff tr.add, #rdiff tr.del");
+    if (first && !l.scrolled?.has(key)) {
+      (l.scrolled ||= new Set()).add(key);
       first.scrollIntoView({ block: "center" });
     }
   }
@@ -297,9 +430,11 @@
     const s = steps(r)[l.cur];
     if (!s) { $("#rthreads").innerHTML = ""; return; }
     const all = l.all;
-    const mine = all ? r.threads : r.threads.filter((t) => t.step === s.id);
+    const mine = all ? r.threads : l.mode === "files" ? r.threads.filter((t) => t.path && (t.path === l.file || t.path === curFile(l)?.old_path)) : r.threads.filter((t) => t.step === s.id);
     const stepIndex = (sid) => steps(r).findIndex((x) => x.id === sid);
     document.querySelectorAll("#rscope button").forEach((b) => b.setAttribute("aria-pressed", String((b.dataset.v === "all") === all)));
+    const one = $('#rscope [data-v="step"]');
+    if (one) one.textContent = l.mode === "files" ? "File" : "Step";
     $("#rtcount").textContent = r.threads.length ? `${r.threads.length} in review` : "";
     // Keep the scroll place; stay at the bottom when you were at the bottom.
     const box = $("#rthreads");
@@ -339,7 +474,7 @@
       if (!th) return;
       const t = r.threads.find((x) => x.id === th.dataset.t);
       const si = t ? stepIndex(t.step) : -1;
-      if (si >= 0 && si !== l.cur) {
+      if (l.mode !== "files" && si >= 0 && si !== l.cur) {
         // A thread of another step: go there, with the thread active.
         go(r.id, si);
         l.active = t.id;
@@ -496,7 +631,8 @@
   async function ask(id) {
     const r = S.reviews.get(id);
     const l = local(id);
-    const s = steps(r)[l.cur];
+    // In Files, a question belongs to the first step that covers the file.
+    const s = l.mode === "files" ? steps(r).find((x) => x.id === curFile(l)?.steps[0]) || steps(r)[l.cur] : steps(r)[l.cur];
     const text = $("#rq").value.trim();
     if (!s || !text) return;
     const busy = l.active && (l.busy.has(l.active) || r.threads.find((t) => t.id === l.active)?.busy);
@@ -539,7 +675,6 @@
     l.active = null;
     savePlace(id);
     update(r);
-    loadDiff(id, l.cur);
     $(`#rsteps [data-i="${l.cur}"]`)?.scrollIntoView({ block: "nearest" });
   }
 
@@ -556,9 +691,11 @@
     if (e.target.closest?.("textarea, input, select, [contenteditable='true']")) return;
     const id = S.tab;
     const l = local(id);
-    if (e.key === "j") go(id, l.cur + 1);
-    else if (e.key === "k") go(id, l.cur - 1);
-    else if (e.key === "n") next(id);
+    const files = l.mode === "files";
+    if (e.key === "f") setMode(id, files ? "guide" : "files");
+    else if (e.key === "j") files ? goFile(id, fileIndex(l) + 1) : go(id, l.cur + 1);
+    else if (e.key === "k") files ? goFile(id, fileIndex(l) - 1) : go(id, l.cur - 1);
+    else if (e.key === "n") files ? nextFile(id) : next(id);
     else if (e.key === "d" && l.active) call("review_draft", { id, thread: l.active });
     else return;
     e.preventDefault();
@@ -570,6 +707,7 @@
       const l = local(r.id);
       if (l.head !== r.head || l.guideLen !== JSON.stringify(r.guide || "").length) {
         l.diff.clear();
+        l.files = null;
         l.head = r.head;
         l.guideLen = JSON.stringify(r.guide || "").length;
       }

@@ -235,6 +235,30 @@
   await wait(100);
   check("n marks the step", called("review_mark").some((c) => c[1].step === "s2" && c[1].checked));
 
+  // Files: every changed file, like GitHub's "Files changed".
+  $('#rmode [data-mode="files"]').click();
+  await wait(150);
+  check("Files lists every changed file", $$("#rsteps .fitem").length === 2 && $("#rsteps").textContent.includes("gloas.rs") && $("#rsteps").textContent.includes("binary file"), $("#rsteps").textContent.slice(0, 120));
+  check("a file diff loads from the model", called("review_file_diff").some((c) => c[1].path === "beacon_node/gloas.rs") && !!$("#rdiff tr.add"));
+  check("the file head links to its step", !!$('#rguide [data-step="1"]') && $("#rguide .fpath").textContent === "beacon_node/gloas.rs");
+  check("the + comment works in Files", !!$('#rdiff [data-cm][data-n="12"]'));
+  docKey("n");
+  await wait(150);
+  check("n marks the file viewed and opens the next one", $('#rsteps .fitem.viewed[data-f="beacon_node/gloas.rs"]') && $('#rsteps [aria-current="step"]')?.dataset.f === "docs/img.png");
+  check("a binary file shows its note", $("#rdiff").textContent.includes("binary file"));
+  docKey("k");
+  await wait(150);
+  check("k goes to the previous file", $('#rsteps [aria-current="step"]')?.dataset.f === "beacon_node/gloas.rs");
+  check("the mode and file are saved for a restart", (() => { const p = JSON.parse(localStorage.getItem("sb.review.place.r1") || "{}"); return p.mode === "files" && p.file === "beacon_node/gloas.rs" && p.viewed.includes("beacon_node/gloas.rs"); })());
+  $('#rguide [data-step="1"]').click();
+  await wait(150);
+  check("a step link goes back to the guide at that step", $('#rmode [data-mode="guide"]').getAttribute("aria-pressed") === "true" && $('#rsteps [aria-current="step"]')?.dataset.i === "1");
+  docKey("f");
+  await wait(150);
+  check("f switches to Files", $('#rmode [data-mode="files"]').getAttribute("aria-pressed") === "true" && $$("#rsteps .fitem").length === 2);
+  docKey("f");
+  await wait(150);
+
   // Back to the board with the leader.
   key(" ", { ctrl: true, code: "Space" });
   key("b");

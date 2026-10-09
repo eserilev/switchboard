@@ -132,6 +132,8 @@ commands! {
     review_open(url: String) -> String => |h| h.review_open(&url);
     review_view(id: String) -> Value => |h| h.review_view(&id).map(|v| json!(v));
     review_diff(id: String, step: String) -> Value => |h| h.review_diff(&id, &step).map(|v| json!(v));
+    review_files(id: String) -> Value => |h| h.review_files(&id).map(|v| json!(v));
+    review_file_diff(id: String, path: String) -> Value => |h| h.review_file_diff(&id, &path).map(|v| json!(v));
     review_mark(id: String, step: String, checked: bool) -> () => |h| h.review_mark(&id, &step, checked);
     review_ask(id: String, step: String, anchor: Option<Anchor>, thread: Option<String>, text: String) -> String => |h| h.review_ask(&id, &step, anchor, thread, &text);
     review_pin(id: String, thread: String) -> () => |h| h.review_pin(&id, &thread);
@@ -261,6 +263,8 @@ fn main() {
             review_open,
             review_view,
             review_diff,
+            review_files,
+            review_file_diff,
             review_mark,
             review_ask,
             review_pin,

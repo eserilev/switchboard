@@ -130,6 +130,46 @@ pub struct DiffSection {
     pub note: Option<String>,
 }
 
+/// One changed file in the Files view.
+#[derive(Serialize, Clone, Debug)]
+pub struct FileEntry {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub added: usize,
+    pub removed: usize,
+    pub note: Option<String>,
+    /// The ids of the guide steps that cover the file.
+    pub steps: Vec<String>,
+}
+
+/// Why a file has no lines to show, or `None`.
+fn note(f: &coverage::ChangedFile) -> Option<String> {
+    if f.binary {
+        Some("binary file".to_owned())
+    } else if f.submodule {
+        Some("submodule".to_owned())
+    } else if f.needs_name() {
+        Some(match (&f.old_path, &f.new_path) {
+            (Some(o), Some(n)) if o != n => format!("renamed from {o}, no line changed"),
+            _ => "mode change, no line changed".to_owned(),
+        })
+    } else {
+        None
+    }
+}
+
+/// The diff section of one file, with no step ranges.
+fn section(f: &coverage::ChangedFile) -> DiffSection {
+    DiffSection {
+        path: f.path().to_owned(),
+        old_path: f.old_path.clone(),
+        rows: coverage::rows(f, 12),
+        context: false,
+        ranges: vec![],
+        note: note(f),
+    }
+}
+
 type Res<T> = Result<T, String>;
 
 fn e(x: impl std::fmt::Display) -> String {
@@ -698,31 +738,13 @@ impl Hub {
         let mut sections: Vec<DiffSection> = vec![];
         let add = |fi: usize, range: Option<coverage::Range>, sections: &mut Vec<DiffSection>| {
             let f = &model.files[fi];
-            let path = f.path().to_owned();
-            if let Some(sec) = sections.iter_mut().find(|sec| sec.path == path) {
+            if let Some(sec) = sections.iter_mut().find(|sec| sec.path == f.path()) {
                 sec.ranges.extend(range);
                 return;
             }
-            let note = if f.binary {
-                Some("binary file".to_owned())
-            } else if f.submodule {
-                Some("submodule".to_owned())
-            } else if f.needs_name() {
-                Some(match (&f.old_path, &f.new_path) {
-                    (Some(o), Some(n)) if o != n => format!("renamed from {o}, no line changed"),
-                    _ => "mode change, no line changed".to_owned(),
-                })
-            } else {
-                None
-            };
-            sections.push(DiffSection {
-                path,
-                old_path: f.old_path.clone(),
-                rows: coverage::rows(f, 12),
-                context: false,
-                ranges: range.into_iter().collect(),
-                note,
-            });
+            let mut sec = section(f);
+            sec.ranges.extend(range);
+            sections.push(sec);
         };
         for r in ranges.drain(..) {
             let fi = model.files.iter().position(|f| {
@@ -743,6 +765,64 @@ impl Hub {
             }
         }
         Ok(DiffView { sections })
+    }
+
+    /// Every changed file of the PR, in path order, with the steps that cover it.
+    pub fn review_files(&self, id: &str) -> Res<Vec<FileEntry>> {
+        let model = self.model(id)?;
+        let guide: Option<Value> = self
+            .reviews
+            .lock()
+            .unwrap()
+            .get(id)
+            .and_then(|r| r.row.guide.as_deref().and_then(|g| serde_json::from_str(g).ok()));
+        let steps: Vec<Value> = guide
+            .and_then(|g| g.get("steps").and_then(Value::as_array).cloned())
+            .unwrap_or_default();
+        let mut files: Vec<FileEntry> = model
+            .files
+            .iter()
+            .map(|f| {
+                let covers = |s: &Value| {
+                    let by_range = coverage::step_ranges(s).iter().any(|r| {
+                        let p = if r.side == "old" { &f.old_path } else { &f.new_path };
+                        p.as_deref() == Some(r.file.as_str())
+                    });
+                    let named = s
+                        .get("files")
+                        .and_then(Value::as_array)
+                        .is_some_and(|a| a.iter().any(|n| n.as_str() == Some(f.path())));
+                    by_range || named
+                };
+                FileEntry {
+                    path: f.path().to_owned(),
+                    old_path: f.old_path.clone(),
+                    added: f.added.iter().filter(|m| **m).count(),
+                    removed: f.removed.iter().filter(|m| **m).count(),
+                    note: note(f),
+                    steps: steps
+                        .iter()
+                        .filter(|s| covers(s))
+                        .filter_map(|s| s.get("id").and_then(Value::as_str).map(str::to_owned))
+                        .collect(),
+                }
+            })
+            .collect();
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(files)
+    }
+
+    /// The diff of one whole file, from the verified model.
+    pub fn review_file_diff(&self, id: &str, path: &str) -> Res<DiffView> {
+        let model = self.model(id)?;
+        let f = model
+            .files
+            .iter()
+            .find(|f| f.path() == path)
+            .ok_or(format!("The PR does not change {path}."))?;
+        Ok(DiffView {
+            sections: vec![section(f)],
+        })
     }
 
     pub fn review_mark(&self, id: &str, step: &str, checked: bool) -> Res<()> {

@@ -61,6 +61,11 @@ window.__TAURI__ = {
         case "nvim_open": case "review_nvim": return "p3";
         case "review_drafts_text": return "beacon_node/gloas.rs:11: nit: use safe_sub";
         case "review_open": return "r1";
+        case "review_files": return [
+          { path: "beacon_node/gloas.rs", old_path: "beacon_node/gloas.rs", added: 2, removed: 1, note: null, steps: ["s2"] },
+          { path: "docs/img.png", old_path: null, added: 0, removed: 0, note: "binary file", steps: [] },
+        ];
+        case "review_file_diff": return args.path === "beacon_node/gloas.rs" ? d.diff : { sections: [{ path: args.path, old_path: null, context: false, ranges: [], rows: [], note: "binary file" }] };
         case "review_post_preview": return { login: "eserilev", token: "tok1", plan: { head: "ac92ae9aaaa", errors: [],
           inline: [{ draft: 1, path: "beacon_node/gloas.rs", side: "RIGHT", line: 11, start_line: null, text: "nit: use safe_sub" }],
           outside: [{ draft: 2, at: "beacon_node/gloas.rs:40", reason: "the line is outside GitHub's diff", text: "far away" }] } };
