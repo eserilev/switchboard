@@ -159,8 +159,12 @@ pub fn info(path: &Path, last_used: u64) -> Option<Repo> {
     })
 }
 
-/// Parses `git worktree list --porcelain`, without the main checkout.
+/// Parses `git worktree list --porcelain`, without the main checkout. git prints
+/// real paths, so `main` is compared as a real path: through a symlink (macOS
+/// `/var` is `/private/var`) the two texts differ.
 pub fn parse_worktrees(text: &str, main: &Path) -> Vec<Worktree> {
+    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let main = real(main);
     let mut out = vec![];
     for block in text.split("\n\n") {
         let mut path = None;
@@ -173,7 +177,7 @@ pub fn parse_worktrees(text: &str, main: &Path) -> Vec<Worktree> {
             }
         }
         if let Some(p) = path {
-            if Path::new(&p) != main {
+            if real(Path::new(&p)) != main {
                 out.push(Worktree { path: p, branch });
             }
         }
@@ -283,6 +287,18 @@ mod tests {
         )
         .unwrap();
         repo
+    }
+
+    #[test]
+    fn the_main_checkout_is_left_out_through_a_symlink() {
+        let repo = temp_repo("link");
+        add_worktree(&repo, "feat/y").unwrap();
+        let link = repo.parent().unwrap().join("linked");
+        std::os::unix::fs::symlink(&repo, &link).unwrap();
+        let r = info(&link, 0).unwrap();
+        assert_eq!(r.worktrees.len(), 1, "{:?}", r.worktrees);
+        assert_eq!(r.worktrees[0].branch, "feat/y");
+        std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
     }
 
     #[test]
