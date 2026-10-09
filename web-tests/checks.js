@@ -53,6 +53,19 @@
   check("click expands", called("pane_expand").some((c) => c[1].id === "p1"));
   check("live section shows", !$("#live").hidden && $("#view-board").classList.contains("has-live"));
   check("live pane is not in the strip", !$('#board .pane[data-id="p1"]'));
+  // Many tiles with a live pane: they wrap in rows and stay inside the window.
+  {
+    const extra = Array.from({ length: 14 }, (_, i) => Object.assign(structuredClone(window.__data.panes[2]), { id: `px${i}`, tree: `/c/extra-${i}` }));
+    window.__emit("panes", [...window.__data.panes, ...extra]);
+    await wait(150);
+    const tiles = $$("#board .pane");
+    const right = Math.max(...tiles.map((t) => t.getBoundingClientRect().right));
+    const rows = new Set(tiles.map((t) => Math.round(t.getBoundingClientRect().top))).size;
+    check("tiles wrap into rows and stay inside the window", right <= window.innerWidth + 1 && rows > 1 && document.documentElement.scrollWidth <= window.innerWidth, `right=${right} width=${window.innerWidth} rows=${rows}`);
+    check("the tile rows scroll under the live pane", $("#board").scrollHeight > $("#board").clientHeight && $("#live").getBoundingClientRect().height >= 228, `${$("#board").scrollHeight} ${$("#board").clientHeight} live=${$("#live").getBoundingClientRect().height}`);
+    window.__emit("panes", window.__data.panes);
+    await wait(100);
+  }
   check("pane_resize before expand", window.__calls.findIndex((c) => c[0] === "pane_resize") < window.__calls.findIndex((c) => c[0] === "pane_expand"));
   await wait(100);
   check("terminal drew the screen", screen().includes("hello from the live pane"), screen().slice(0, 80));

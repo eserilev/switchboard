@@ -63,9 +63,13 @@ button { font: inherit; }
 .menu .at { color: var(--limit); font-size: 11px; }
 
 /* ---------- board ---------- */
-.board-wrap { min-height: 0; display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
-.board { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); grid-auto-rows: min-content; gap: 10px; padding: 12px; overflow-y: auto; min-height: 0; }
-.board-wrap.has-live .board { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 280px; grid-template-rows: 1fr; overflow-x: auto; overflow-y: hidden; height: 190px; }
+/* min-width: 0 keeps every part inside the window. Tiles wrap to the next row; they never go off screen. */
+.board-wrap { min-height: 0; min-width: 0; display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); overflow: hidden; }
+.board { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); grid-auto-rows: min-content; gap: 10px; padding: 12px; overflow-y: auto; overflow-x: hidden; min-height: 0; min-width: 0; align-content: start; }
+/* With a live pane: the live pane takes the space, and the other tiles wrap in rows under it. Two rows show; more rows scroll. */
+.board-wrap.has-live { grid-template-rows: minmax(240px, 1fr) auto; }
+.board-wrap.has-live .board { --tile-h: 136px; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); grid-auto-rows: var(--tile-h); max-height: calc(2 * var(--tile-h) + 10px + 24px); scroll-snap-type: y mandatory; scroll-padding: 12px; }
+.board-wrap.has-live .pane { scroll-snap-align: start; }
 .board-wrap.has-live .pane .term-tail { display: none; }
 .board:empty::after { content: ""; }
 
@@ -104,7 +108,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .term-tail { margin: 0; padding: 8px 12px; font: 12px/1.5 var(--mono); color: var(--muted); white-space: pre; overflow: hidden; }
 
 /* ---------- live pane ---------- */
-.live { display: grid; grid-template-rows: auto 1fr; height: calc(100vh - 54px - 214px); min-height: 240px; margin: 12px 12px 0; border: 1px solid var(--accent); border-radius: 8px; overflow: hidden; }
+.live { display: grid; grid-template-rows: auto 1fr; min-height: 0; min-width: 0; margin: 12px 12px 0; border: 1px solid var(--accent); border-radius: 8px; overflow: hidden; }
 .live .term { min-height: 0; padding: 6px 0 0 8px; background: var(--bg); }
 
 /* ---------- launcher ---------- */
