@@ -826,16 +826,16 @@ G5 to G7 and G10 need `removed + added ≤ usize::MAX` lines. G8, G9 and S1 to S
 
 - Claude runs the `PreToolUse` hook (`sb state working`), then the `PermissionRequest` hook (`sb permit`). The dialog shows in the pane at the same time. The first answer wins (S2).
 - `sb state` writes its line and exits. It does not wait for the hub. So the hub can read a `working` line after the `Permit` request that came after it.
-- `sb permit` sends `Permit` and waits for one reply line. The hub thread of that connection runs `on_permit`. It makes the id `{pane}-{now_nanos}`, sets `Pane.permit`, then puts `(pane, Sender)` in `permits`. These are two steps under two locks.
-- A tile click calls `permit_answer(id, allow)`. It removes the entry of that id and sends the answer on its own channel. Then it sets `Pane.permit = None` and the lamp to Working. An id with no entry gives the error "the request is gone".
-- `answer_permits(pane, None)` removes every entry of the pane and replies "none" to each. `sb permit` then prints nothing, and the dialog in the pane stays. It runs on `working`, `turn`, `limit` and `error` lines, on a key from `input`, and on `close`.
+- `sb permit` sends `Permit` and waits for one reply line. The hub thread of that connection runs `on_permit`. The id is `{pane}-{n}`, with `n` from a counter. Under the `permits` lock, `on_permit` sets `Pane.permit` and puts `(pane, Sender)` in `permits`. A pane whose process exited (`Pane.dead`) gets no buttons, and `sb permit` gets "none".
+- A tile click calls `permit_answer(id, allow)`. Under the `permits` lock, it removes the entry of that id and sends the answer on its own channel. Then it clears `Pane.permit` and sets the lamp, but only if `Pane.permit` holds this id. An id with no entry gives the error "the request is gone".
+- `answer_permits(pane, None)` removes every entry of the pane, replies "none" to each, and clears `Pane.permit`, all under the `permits` lock. `sb permit` then prints nothing, and the dialog in the pane stays. It runs on `working`, `turn`, `limit` and `error` lines, on a key from `input`, on `close`, when `tick` sees the process exit, and in `respawn_claude`.
 - A key in the pane goes to the dialog that shows when the key arrives. It has no request id.
-- A process exit (`tick`) and a resume (`respawn_claude`) do not touch `permits` or `Pane.permit`.
 - The hook timeout is 600 s. Claude then kills `sb permit`, and the hub thread waits on until another event clears the entry.
+- Lock order: `permits`, then `panes`, then `store` and `live`. No code takes `permits` while it holds `panes`.
 
 ### Properties that hold
 
-In 200,000 random runs of 50 steps with crashes, resumes and closes, and 200,000 more with none, over two panes and four requests:
+`check-models.sh` runs four sets of 100,000 random runs of 50 steps, over two panes and four requests: with and without crashes, resumes and closes, and with and without the timing rule below.
 
 - **P1.** A tool runs only after an Allow for that request.
 - **P2.** A tile answer applies only to the request that the clicked tile showed. On the hub side, "allow" and "deny" go only to the socket of that request.
@@ -843,26 +843,35 @@ In 200,000 random runs of 50 steps with crashes, resumes and closes, and 200,000
 - **P4.** A Deny never leads to the tool running.
 - **P5.** An answer for pane A never answers a request of pane B.
 - **P6.** A tile answer never reaches a request of a later process start of the pane.
+- **T3.** A click never takes the buttons of another request.
+- **T4.** Each entry in `permits` has its own id.
+
+With the timing rule (the hub reads each `Permit` line before its request ends: before Claude reads an answer key, times out the hook, or exits), these also hold when nothing is in flight:
+
+- **T1.** A request whose `sb permit` waits in `permits` has its buttons on the tile.
+- **T2.** The tile shows buttons only for a request that waits.
+
+Without the timing rule, a `Permit` line that a hub thread reads after its request ended shows buttons for that ended request. They go at the next hook event of the pane. A click on them answers only the dead `sb permit`.
 
 P2 and P6 hold because each request has its own socket and channel, so a reply cannot reach another request. P3 also needs the S2 rule: Claude takes the first answer.
 
 ### Findings
 
-`models/permit_test.qnt` holds a fixed trace for each finding. `crates/sb/tests/permit_races.rs` shows F2 and F6 on the real hub, as ignored tests.
+`models/permit_test.qnt` holds a fixed trace for each finding. The traces of fixed findings now end in a good state. `crates/sb/tests/permit_races.rs` checks F1, F2 and F6 on the real hub; each test failed before its fix. A unit test in `hub.rs` checks F5.
 
-| ID | Finding | Effect | Fix |
-|---|---|---|---|
-| F1 | A `working` line that the hub reads between the two halves of `on_permit` takes `Pane.permit`, but the entry stays. | The request waits with no buttons. Answer in the pane. | Hold the `permits` lock across `update_pane` and the insert. |
-| F2 | Claude exits while a request waits. The tile keeps Allow and Deny on an Ended tile, also after a resume, until the next prompt. | A click does nothing. | Call `answer_permits(id, None)` in `tick` on a process exit, and in `respawn_claude`. |
-| F3 | You type the Allow key for request 1 in the pane. A tile click answers request 1 first, and request 2 opens. The key answers request 2. | A tool runs that you did not see. A terminal key has no request id. | No fix in the app. Do not answer in the pane and on the tile at the same time. |
-| F4 | The `working` line of a request arrives after its `Permit` (F1 is one case), or a subagent sends `working`. `answer_permits` replies "none". | The buttons go at once. Answer in the pane. | `sb state` waits for an ack line from the hub, so the hub reads the lines in order. |
-| F5 | `now_nanos` can give the same value twice (a clock step back, or 0 before 1970). Then a click on old buttons allows the new request. | P2 fails. Very unlikely. | Make the id from a counter (`AtomicU64`), not the clock. |
-| F6 | `permit_answer` sets `Pane.permit = None` and does not check its id. A click on an old entry takes the buttons of a newer request of the pane. Two entries of one pane need a `Permit` line that a hub thread reads very late. | The new request waits with no buttons, and the lamp says Working. | Clear `Pane.permit` and set the lamp only when `Pane.permit` holds this id. |
+| ID | Finding | Status |
+|---|---|---|
+| F1 | A `working` line that the hub read between the two halves of `on_permit` took `Pane.permit`, but the entry stayed. The request waited with no buttons. | Fixed: `on_permit` holds the `permits` lock across both. `answer_permits` and `permit_answer` hold it across their `Pane.permit` change. |
+| F2 | Claude exited while a request waited. The Ended tile kept Allow and Deny, also after a resume. | Fixed: `tick` calls `answer_permits` on a process exit, and so does `respawn_claude`. `on_permit` gives no buttons to a pane with `Pane.dead`. |
+| F3 | You type the Allow key for request 1 in the pane. A tile click answers request 1 first, and request 2 opens. The key answers request 2. | Open. A terminal key has no request id. Do not answer in the pane and on the tile at the same time. |
+| F4 | The `working` line of a request arrives after its `Permit`, or a subagent sends `working`. `answer_permits` replies "none", and the buttons go at once. Answer in the pane. | Open. A fix: `sb state` waits for an ack line from the hub, so the hub reads the lines in order. |
+| F5 | The id came from `now_nanos`, which can give the same value twice. Then a click on old buttons could allow the new request. | Fixed: the id comes from a counter (`next_permit`). |
+| F6 | `permit_answer` set `Pane.permit = None` with no id check. A click on an old entry took the buttons of a newer request of the pane. | Fixed: it clears `Pane.permit` and sets the lamp only when `Pane.permit` holds this id. |
 
 ### What the model leaves out
 
-- Time. A trace can delay one thread for as long as it likes. F6 needs such a delay.
-- Claude itself. The model trusts S2: one dialog for each pane, the first answer wins, and a hook answer applies only to its own request. Two dialogs at once (subagents) are not in the model.
+- Time. A trace can delay one thread for as long as it likes, except for the timing rule above.
+- Claude itself. The model trusts S2: one dialog for each pane, the first answer wins, and a hook answer applies only to its own request. Two dialogs at once (subagents) are not in the model. After an answer, Claude sends a next hook event (`PreToolUse` or `Stop`).
 - Pane answers from a tmux client outside the app.
 - The `needs` notification, the lamps other than the buttons, and the store.
 - The window draws all tiles from the `pane` events. The model has one copy of each tile, and it can be old.

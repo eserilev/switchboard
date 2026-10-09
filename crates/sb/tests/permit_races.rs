@@ -1,9 +1,9 @@
 //! Findings of the model check of the permission flow (SPEC 25), on the real
-//! hub. Each test states the correct behavior and fails on the current code, so
-//! it is ignored. Run them with `cargo test -p sb --test permit_races -- --ignored`.
+//! hub. Each test failed before its fix.
 
 use serde_json::{json, Value};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -176,7 +176,6 @@ fn decision(out: &std::process::Output) -> Option<String> {
 /// F2: Claude exits while a request waits. The request is gone, so the tile
 /// must lose its Allow and Deny buttons.
 #[test]
-#[ignore = "bug: SPEC 25 F2, the buttons outlive the process"]
 fn buttons_go_when_the_process_ends() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let b = board("f2");
@@ -195,7 +194,6 @@ fn buttons_go_when_the_process_ends() {
 /// process is gone, and a new one). A click on the old buttons must not take
 /// the buttons of the new request.
 #[test]
-#[ignore = "bug: SPEC 25 F6, a click clears Pane.permit with no id check"]
 fn an_old_click_keeps_the_new_buttons() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let b = board("f6");
@@ -222,6 +220,41 @@ fn an_old_click_keeps_the_new_buttons() {
         "the click on the old request took the new buttons"
     );
     assert_eq!(lamp, Lamp::Needs);
+}
+
+/// F1: a `working` line that the hub reads while `on_permit` runs. When both
+/// are done, a request that still waits has its buttons on the tile.
+#[test]
+fn a_waiting_request_keeps_its_buttons() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let b = board("f1");
+    let sock = switchboard_core::paths::Paths::from_env().sock();
+    let line = |req: Value| {
+        let mut s = UnixStream::connect(&sock).unwrap();
+        writeln!(s, "{req}").unwrap();
+        s
+    };
+    let working = || json!({"kind":"state","v":1,"pane":b.pane,"event":"working","time":0});
+    for round in 0..200 {
+        let s = line(json!({"kind":"permit","pane":b.pane,"tool":"Bash","input":{"command":"ls"}}));
+        drop(line(working()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut reply = String::new();
+            let _ = BufReader::new(s).read_line(&mut reply);
+            let _ = tx.send(reply);
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        let waits = rx.try_recv().is_err();
+        let shown = b.permit().is_some();
+        // Clean up: one more line ends a request that still waits.
+        drop(line(working()));
+        reader.join().unwrap();
+        assert!(
+            !waits || shown,
+            "round {round}: the request waits with no buttons"
+        );
+    }
 }
 
 /// The guard of P2 on the real hub: a click with the id of the first request

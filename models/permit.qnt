@@ -40,7 +40,7 @@ module permit {
   // One answer that Claude applied. `src` is "tile" or "pane". `meant` is the
   // request that the user saw when they gave the answer (0: no request).
   type Applied = { src: str, answer: str, meant: int }
-  // The permit id of the hub is "{pane}-{now_nanos}". `t` is the nanos part.
+  // The permit id of the hub is "{pane}-{counter}". `t` is the counter part.
   // `req` is a ghost: the request that the permit view on the tile describes.
   type View = { t: int, req: int }
   // One entry of `Hub.permits`. `req` names the socket of its `Sender`.
@@ -73,8 +73,6 @@ module permit {
     // In flight between threads and processes.
     // `sb permit` connected, and the hub did not run `on_permit` yet.
     conns: Set[int],
-    // `on_permit` set the tile, and did not put the entry in `permits` yet.
-    half: Set[Entry],
     // `sb state` lines that the hub did not read yet.
     msgs: Set[Msg],
     // Reply lines that `sb permit` did not read yet.
@@ -88,6 +86,8 @@ module permit {
     n: int,
     // The hub.
     hubPanes: Set[str],
+    // `Pane.dead`: `tick` saw the process exit.
+    dead: str -> bool,
     permits: Set[Entry],
     // `Pane.permit`. t = 0: no buttons.
     tile: str -> View,
@@ -109,10 +109,14 @@ module permit {
   // ---------- helpers ----------
 
   // Claude applies an answer to the dialog of request `r`. The first answer
-  // wins: the dialog closes, so a later answer finds no dialog.
+  // wins: the dialog closes, so a later answer finds no dialog. Then Claude
+  // goes on, and its next hook event is a `PreToolUse` or a `Stop`. Both clear
+  // the buttons of the pane; the model sends "working" for both.
   pure def resolve(st: State, r: int, src: str, answer: str, meant: int): State = {
     val q = st.reqs.get(r)
     { ...st,
+      msgs: st.msgs.union(Set({ pane: q.pane, event: "working", n: st.n })),
+      n: st.n + 1,
       reqs: st.reqs.set(r, { ...q, status: if (answer == "allow") "allowed" else "denied" }),
       dialog: st.dialog.set(q.pane, 0),
       ran: if (answer == "allow") st.ran.union(Set(r)) else st.ran,
@@ -238,39 +242,25 @@ module permit {
 
   // ---------- the hub ----------
 
-  // hub.rs:serve, `Request::Permit`, first half of hub.rs:on_permit. The
-  // `update_pane` call sets `Pane.permit` to the new id. If the pane is not in
-  // the list, `serve` replies "none" at once.
-  // `fresh` is the nanos value of `now_nanos`.
-  action HubPermitTile(r: int, fresh: int): bool = all {
+  // hub.rs:serve, `Request::Permit`, and hub.rs:on_permit. The id takes the
+  // next value of the counter `next_permit`, so it is new. Under the `permits`
+  // lock, `update_pane` sets `Pane.permit` and the entry goes in `permits`: one
+  // step. If the pane is not in the list, or `tick` saw its process exit,
+  // `serve` replies "none" at once.
+  action HubPermit(r: int): bool = all {
     s.conns.contains(r),
     val p = s.reqs.get(r).pane
+    val t = s.clock + 1
     val st = { ...s, conns: s.conns.exclude(Set(r)) }
     val none = { req: r, answer: "none", meant: 0, n: s.n }
-    s' = if (s.hubPanes.contains(p)) { ...st,
-      tile: st.tile.set(p, { t: fresh, req: r }),
-      half: st.half.union(Set({ pane: p, t: fresh, req: r })),
-      clock: if (fresh > s.clock) fresh else s.clock
+    s' = if (s.hubPanes.contains(p) and not(s.dead.get(p))) { ...st,
+      tile: st.tile.set(p, { t: t, req: r }),
+      permits: st.permits.union(Set({ pane: p, t: t, req: r })),
+      clock: t
     } else { ...st,
       replies: st.replies.union(Set(none)),
       sent: st.sent.union(Set(none)),
       n: st.n + 1
-    }
-  }
-
-  // Second half of hub.rs:on_permit: `permits.insert(id, (pane, reply))`.
-  // An entry with the same id is replaced. Its `Sender` drops, so `rx.recv()`
-  // of the old thread fails and that thread replies "none".
-  action HubPermitInsert(h: Entry): bool = all {
-    s.half.contains(h),
-    val old = s.permits.filter(e => e.pane == h.pane and e.t == h.t)
-    val out = old.map(e => { req: e.req, answer: "none", meant: 0, n: s.n })
-    s' = { ...s,
-      half: s.half.exclude(Set(h)),
-      permits: s.permits.exclude(old).union(Set(h)),
-      replies: s.replies.union(out),
-      sent: s.sent.union(out),
-      n: s.n + 1
     }
   }
 
@@ -282,9 +272,9 @@ module permit {
     s' = if (s.hubPanes.contains(m.pane)) answerPermits(st, m.pane, "state", 0) else st
   }
 
-  // hub.rs:permit_answer. It removes the entry of this id and sends the answer
-  // on its socket. Then `with_pane` sets `Pane.permit = None`. It does not check
-  // that `Pane.permit` still holds this id.
+  // hub.rs:permit_answer. Under the `permits` lock, it removes the entry of
+  // this id and sends the answer on its socket. Then `with_pane` sets
+  // `Pane.permit = None`, but only if `Pane.permit` holds this id.
   // No entry: an error ("the request is gone"), and no change.
   action HubClick(c: Click): bool = all {
     s.clicks.contains(c),
@@ -293,12 +283,14 @@ module permit {
     s' = if (hit == Set()) st else {
       val e = hit.getOnlyElement()
       val rep = { req: e.req, answer: c.answer, meant: c.meant, n: s.n }
+      val clear = st.hubPanes.contains(e.pane) and st.tile.get(e.pane).t == e.t
       { ...st,
         permits: st.permits.exclude(hit),
         replies: st.replies.union(Set(rep)),
         sent: st.sent.union(Set(rep)),
-        tile: if (st.hubPanes.contains(e.pane)) st.tile.set(e.pane, NO_VIEW) else st.tile,
-        taken: if (st.hubPanes.contains(e.pane) and st.tile.get(e.pane).t != 0 and st.tile.get(e.pane).req != e.req)
+        tile: if (clear) st.tile.set(e.pane, NO_VIEW) else st.tile,
+        // The ghost: a clear of buttons that show another request.
+        taken: if (clear and st.tile.get(e.pane).req != e.req)
           st.taken.union(Set(st.tile.get(e.pane).req))
         else st.taken,
         n: st.n + 1
@@ -325,14 +317,29 @@ module permit {
     s' = if (s.permits.exists(e => e.pane == c.pane)) answerPermits(st, c.pane, "input", c.meant) else st
   }
 
-  // hub.rs:resume and respawn_claude. A new Claude starts in the same pane, with
-  // the same pane id. `Pane.permit` and `permits` stay as they are.
+  // hub.rs:tick. It sees that the process of the pane exited, sets `Pane.dead`,
+  // and then calls `answer_permits(pane, None)`.
+  action HubTickExit(p: str): bool = all {
+    s.hubPanes.contains(p),
+    not(s.alive.get(p)),
+    not(s.dead.get(p)),
+    s' = answerPermits({ ...s, dead: s.dead.set(p, true) }, p, "exit", 0)
+  }
+
+  // hub.rs:resume and respawn_claude. First `answer_permits(pane, None)`, then
+  // a new Claude starts in the same pane, with the same pane id.
   action HubResume(p: str): bool = all {
     s.hubPanes.contains(p),
     not(s.alive.get(p)),
     s.gen.get(p) < MAX_GEN,
     s.n < MAX_EVENTS,
-    s' = { ...s, alive: s.alive.set(p, true), gen: s.gen.set(p, s.gen.get(p) + 1), n: s.n + 1 }
+    val st = answerPermits(s, p, "resume", 0)
+    s' = { ...st,
+      alive: st.alive.set(p, true),
+      dead: st.dead.set(p, false),
+      gen: st.gen.set(p, st.gen.get(p) + 1),
+      n: st.n + 1
+    }
   }
 
   // hub.rs:close. It removes the pane from the list, kills the tmux pane, then
@@ -395,7 +402,6 @@ module permit {
     ran: Set(),
     applied: REQ_IDS.mapBy(_ => List()),
     conns: Set(),
-    half: Set(),
     msgs: Set(),
     replies: Set(),
     clicks: Set(),
@@ -403,6 +409,7 @@ module permit {
     clears: Set(),
     n: 0,
     hubPanes: PANES,
+    dead: PANES.mapBy(_ => false),
     permits: Set(),
     tile: PANES.mapBy(_ => NO_VIEW),
     clock: 0,
@@ -412,9 +419,13 @@ module permit {
     taken: Set()
   }
 
-  // `fresh` gives the nanos of a new permit id. With `crash` false, Claude never
-  // exits and the user never closes a pane: more runs reach the tile answers.
-  action stepWith(fresh: int => int, crash: bool): bool = {
+  // With `crash` false, Claude never exits and the user never closes a pane:
+  // more runs reach the tile answers.
+  // With `prompt` true, the hub reads each `Permit` line before its request
+  // ends: before Claude reads an answer key, times out the hook, or exits.
+  // `sb permit` connects in a few ms, and you answer in no less than 100 ms.
+  // Without it, a hub thread can wait for any time, also past the 600 s timeout.
+  action stepWith(crash: bool, prompt: bool): bool = {
     nondet p = PANES.oneOf()
     nondet a = ANSWERS.oneOf()
     nondet k = KEYS.oneOf()
@@ -424,13 +435,13 @@ module permit {
     any {
       ClaudeAsk(p),
       ClaudeEvent(p, ev),
-      ClaudeReadKey(p),
-      all { crash == true, ClaudeDies(p) },
-      HookTimeout(r),
+      all { prompt == false or not(s.conns.contains(s.dialog.get(p))), ClaudeReadKey(p) },
+      all { crash == true, prompt == false or not(s.conns.contains(s.dialog.get(p))), ClaudeDies(p) },
+      all { prompt == false or not(s.conns.contains(r)), HookTimeout(r) },
       HookKilled(r),
       all { s.replies != Set(), nondet x = s.replies.oneOf() ClaudeReadReply(x) },
-      HubPermitTile(r, fresh(s.clock)),
-      all { s.half != Set(), nondet x = s.half.oneOf() HubPermitInsert(x) },
+      HubPermit(r),
+      HubTickExit(p),
       all { s.msgs != Set(), nondet x = s.msgs.oneOf() HubState(x) },
       all { s.clicks != Set(), nondet x = s.clicks.oneOf() HubClick(x) },
       all { s.inputs != Set(), nondet x = s.inputs.oneOf() HubInput(x) },
@@ -443,16 +454,10 @@ module permit {
     }
   }
 
-  // The clock only goes up, so each permit id is new.
-  action step = stepWith(c => c + 1, true)
-  action stepNoCrash = stepWith(c => c + 1, false)
-
-  // `now_nanos` reads `SystemTime`. That clock can go back (an NTP step), and
-  // it is 0 before 1970 (`unwrap_or(0)`). Then an id can repeat (F5).
-  action stepRepeat = {
-    nondet back = 0.to(1).oneOf()
-    stepWith(c => if (c > 0) c + 1 - back else c + 1, true)
-  }
+  action step = stepWith(true, false)
+  action stepNoCrash = stepWith(false, false)
+  action stepPrompt = stepWith(true, true)
+  action stepPromptNoCrash = stepWith(false, true)
 
   // ---------- properties that must hold ----------
 
@@ -490,6 +495,34 @@ module permit {
     s.applied.get(r).select(x => x.src == "tile").foldl(true, (ok, x) =>
       ok and s.reqs.get(x.meant).gen == s.reqs.get(r).gen))
 
+  // Nothing is in flight, the window shows the tiles as they are, and `tick`
+  // saw every process exit.
+  val quiet = and {
+    s.conns == Set(), s.msgs == Set(), s.replies == Set(),
+    s.clicks == Set(), s.inputs == Set(), s.clears == Set(),
+    PANES.forall(p => s.keys.get(p).length() == 0),
+    PANES.forall(p => s.shown.get(p) == (if (s.hubPanes.contains(p)) s.tile.get(p) else NO_VIEW)),
+    s.hubPanes.forall(p => s.alive.get(p) or s.dead.get(p))
+  }
+
+  // T1 (was F1). When all is quiet, an open dialog whose `sb permit` waits in
+  // `permits` has its buttons on the tile.
+  val ButtonsForWaitingRequest = quiet implies s.hubPanes.forall(p =>
+    val r = s.dialog.get(p)
+    (s.alive.get(p) and r != 0 and s.permits.exists(e => e.req == r)) implies s.tile.get(p).req == r)
+
+  // T2 (was F2). When all is quiet, the tile shows buttons only for a request
+  // that waits.
+  val NoButtonsForEndedRequest = quiet implies s.hubPanes.forall(p =>
+    s.tile.get(p).t != 0 implies s.reqs.get(s.tile.get(p).req).status == "pending")
+
+  // T3 (was F6). A click never takes the buttons of another request.
+  val ClickTakesOnlyItsButtons = s.taken == Set()
+
+  // T4 (was F5). Each entry in `permits` has its own id.
+  val IdsAreUnique = s.permits.forall(a => s.permits.forall(b =>
+    (a.pane == b.pane and a.t == b.t) implies a == b))
+
   val Safety = and {
     ToolRunsOnlyAfterAllow,
     TileAnswerMatchesRequest,
@@ -500,25 +533,20 @@ module permit {
     AnswerStaysInProcess
   }
 
-  // ---------- known findings: these fail (SPEC 25) ----------
+  // These hold in every run, with or without `prompt`.
+  val Always = and { Safety, ClickTakesOnlyItsButtons, IdsAreUnique }
 
-  // Nothing is in flight, and the window shows the tiles as they are.
-  val quiet = and {
-    s.conns == Set(), s.half == Set(), s.msgs == Set(), s.replies == Set(),
-    s.clicks == Set(), s.inputs == Set(), s.clears == Set(),
-    PANES.forall(p => s.keys.get(p).length() == 0),
-    PANES.forall(p => s.shown.get(p) == (if (s.hubPanes.contains(p)) s.tile.get(p) else NO_VIEW))
+  // The tile properties need `prompt` (see `stepWith`). Without it, a `Permit`
+  // line that a hub thread reads after its request ended shows buttons for
+  // that ended request, until the next hook event of the pane.
+  val Tiles = and {
+    ButtonsForWaitingRequest,
+    NoButtonsForEndedRequest,
+    ClickTakesOnlyItsButtons,
+    IdsAreUnique
   }
 
-  // F1. When all is quiet, an open dialog whose `sb permit` waits in `permits`
-  // has its buttons on the tile.
-  val ButtonsForWaitingRequest = quiet implies s.hubPanes.forall(p =>
-    val r = s.dialog.get(p)
-    (s.alive.get(p) and r != 0 and s.permits.exists(e => e.req == r)) implies s.tile.get(p).req == r)
-
-  // F2. When all is quiet, the tile shows buttons only for a request that waits.
-  val NoButtonsForEndedRequest = quiet implies s.hubPanes.forall(p =>
-    s.tile.get(p).t != 0 implies s.reqs.get(s.tile.get(p).req).status == "pending")
+  // ---------- open findings: these fail (SPEC 25) ----------
 
   // F3. A key typed in the pane answers the dialog that the user saw.
   val PaneAnswerMatchesRequest = REQ_IDS.forall(r =>
@@ -527,8 +555,4 @@ module permit {
   // F4. The buttons of an open dialog go only because of a key typed in that
   // dialog, or a close.
   val NoSpuriousClear = s.spurious == Set()
-
-  // F6. A click never takes the buttons of another request. `permit_answer`
-  // sets `Pane.permit = None` and does not check the id in it.
-  val ClickTakesOnlyItsButtons = s.taken == Set()
 }

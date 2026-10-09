@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::Duration;
@@ -121,7 +122,15 @@ pub struct Hub {
     pub(crate) panes: Mutex<Vec<Pane>>,
     /// (our id, tmux id) of the live pane. The tmux reader thread reads it.
     live: Live,
+    /// Waiting `sb permit` requests: permit id -> (pane id, reply channel).
+    /// Lock order: `permits`, then `panes`, then `store`. `on_permit`,
+    /// `permit_answer` and `answer_permits` hold `permits` while they change
+    /// `Pane.permit`, so the two always agree (SPEC 25). No code takes
+    /// `permits` while it holds `panes`.
     permits: Mutex<HashMap<String, (String, Sender<PermitReply>)>>,
+    /// The number part of the next permit id. A counter, not the clock: the
+    /// clock can repeat a value (SPEC 25, F5).
+    next_permit: AtomicU64,
     pub(crate) sink: Arc<dyn Sink>,
     pub(crate) sb: PathBuf,
     pub(crate) reviews: Mutex<HashMap<String, crate::hub_review::ReviewState>>,
@@ -175,6 +184,7 @@ impl Hub {
             panes: Mutex::default(),
             live,
             permits: Mutex::default(),
+            next_permit: AtomicU64::new(1),
             sink,
             sb,
             reviews: Mutex::default(),
@@ -778,10 +788,17 @@ impl Hub {
     }
 
     fn on_permit(&self, pane: &str, tool: &str, input: &Value, reply: Sender<PermitReply>) -> bool {
-        let id = format!("{pane}-{}", now_nanos());
+        let id = permit_id(&self.next_permit, pane);
         let summary = hooks::permit_summary(tool, input);
+        // Hold `permits` across the tile change and the insert. Else a
+        // `working` line between the two takes the buttons and leaves the entry.
+        let mut permits = self.permits.lock().unwrap();
+        // A request from a process that `tick` saw exit gets no buttons.
         let ok = self
             .update_pane(pane, |p| {
+                if p.dead {
+                    return false;
+                }
                 p.permit = Some(PermitView {
                     id: id.clone(),
                     summary: summary.clone(),
@@ -792,12 +809,9 @@ impl Hub {
                 p.row.summary = Some(summary.clone());
                 true
             })
-            .is_ok();
+            .unwrap_or(false);
         if ok {
-            self.permits
-                .lock()
-                .unwrap()
-                .insert(id, (pane.to_owned(), reply));
+            permits.insert(id, (pane.to_owned(), reply));
         }
         ok
     }
@@ -805,22 +819,25 @@ impl Hub {
     /// Answers one permission request from the tile.
     pub fn permit_answer(&self, permit: &str, allow: bool) -> Res<()> {
         tracing::info!(target: "sb::hub", permit, allow, "permit answer");
-        let (pane, tx) = self
-            .permits
-            .lock()
-            .unwrap()
+        let mut permits = self.permits.lock().unwrap();
+        let (pane, tx) = permits
             .remove(permit)
             .ok_or("the request is gone: it was answered in the pane")?;
         let _ = tx.send(PermitReply {
             behavior: Some(if allow { "allow" } else { "deny" }.into()),
         });
-        self.with_pane(&pane, false, |p| {
-            p.permit = None;
-            p.row.unseen = false;
-            if allow {
-                p.row.lamp = Lamp::Working.as_str().into();
+        // Only the buttons of this request go. A newer request keeps its own.
+        let res = self.with_pane(&pane, false, |p| {
+            if p.permit.as_ref().map(|v| v.id == permit).unwrap_or(false) {
+                p.permit = None;
+                p.row.unseen = false;
+                if allow {
+                    p.row.lamp = Lamp::Working.as_str().into();
+                }
             }
-        })
+        });
+        drop(permits);
+        res
     }
 
     fn answer_permits(&self, pane: &str, behavior: Option<&str>) {
@@ -837,13 +854,15 @@ impl Hub {
                 });
             }
         }
-        drop(permits);
+        // Still under `permits`: an `on_permit` cannot run between the two parts.
         let mut panes = self.panes.lock().unwrap();
         if let Some(p) = panes.iter_mut().find(|p| p.row.id == pane) {
             if p.permit.take().is_some() {
                 self.emit_pane(p, false);
             }
         }
+        drop(panes);
+        drop(permits);
     }
 
     /// Answers the folder trust dialog (SPEC 6.6).
@@ -890,6 +909,8 @@ impl Hub {
         connection: &str,
         session: &str,
     ) -> Res<()> {
+        // A request of the old process is gone: its buttons go too.
+        self.answer_permits(id, None);
         let (argv, env) = self.command("claude", id, tree, Some(connection), Some(session))?;
         let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
         let env_ref: Vec<(&str, &str)> =
@@ -1351,6 +1372,7 @@ impl Hub {
             .map(|p| (p.row.id.clone(), p.tmux.clone()))
             .collect();
         let mut gone = vec![];
+        let mut ended = vec![];
         for (id, tid) in ids {
             let Some(tid) = tid else { continue };
             let Some(&(dead, status, pid)) = state.get(&tid) else {
@@ -1386,6 +1408,7 @@ impl Hub {
             if dead && !p.dead {
                 p.dead = true;
                 if p.row.kind == "claude" {
+                    ended.push(id.clone());
                     p.row.lamp = if status == 0 {
                         Lamp::Ended
                     } else {
@@ -1451,6 +1474,11 @@ impl Hub {
                 self.emit_pane(p, alert);
             }
         }
+        // After the loop: `answer_permits` takes `permits`, and that lock
+        // comes before `panes`.
+        for id in ended {
+            self.answer_permits(&id, None);
+        }
         for id in gone {
             let kind = self
                 .panes
@@ -1465,6 +1493,7 @@ impl Hub {
                         p.tmux = None;
                         p.row.lamp = Lamp::Ended.as_str().into();
                     });
+                    self.answer_permits(&id, None);
                 }
                 Some(_) => {
                     let _ = self.close(&id);
@@ -1494,6 +1523,11 @@ fn apply_state(p: &mut Pane, m: &StateMsg) {
     }
 }
 
+/// A new permit id: the pane, then the counter. Two calls never give the same id.
+fn permit_id(next: &AtomicU64, pane: &str) -> String {
+    format!("{pane}-{}", next.fetch_add(1, Ordering::Relaxed))
+}
+
 /// Drops trailing blank lines and keeps the last few.
 fn trim_tail(mut lines: Vec<String>) -> Vec<String> {
     while lines.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
@@ -1514,16 +1548,20 @@ fn request_kind(r: &Request) -> &'static str {
     }
 }
 
-fn now_nanos() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permit_ids_never_repeat() {
+        // The old ids came from the clock, and two calls in the same
+        // nanosecond gave the same id (SPEC 25, F5).
+        let next = AtomicU64::new(1);
+        let a = permit_id(&next, "p1");
+        let b = permit_id(&next, "p1");
+        assert_ne!(a, b);
+        assert!(a.starts_with("p1-") && b.starts_with("p1-"));
+    }
 
     #[test]
     fn tail_drops_blanks_and_keeps_the_end() {
