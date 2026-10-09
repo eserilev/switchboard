@@ -1047,6 +1047,17 @@ impl Hub {
         })
     }
 
+    /// Every row of one file, for the expand buttons of the diff.
+    pub fn review_file_rows(&self, id: &str, path: &str) -> Res<Vec<Row>> {
+        let model = self.model(id)?;
+        let f = model
+            .files
+            .iter()
+            .find(|f| f.path() == path)
+            .ok_or(format!("The PR does not change {path}."))?;
+        Ok(coverage::all_rows(f))
+    }
+
     pub fn review_mark(&self, id: &str, step: &str, checked: bool) -> Res<()> {
         self.store
             .lock()

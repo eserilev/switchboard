@@ -737,6 +737,15 @@ pub fn rows(f: &ChangedFile, ctx: usize) -> Vec<crate::diff::Row> {
     draw(f, &guide_check::cut_rows(&all, ctx))
 }
 
+/// Every row of a file, with no cut and no header: the proved numbering (G5 to G7,
+/// G10). The window takes hidden rows from here when you expand a gap.
+pub fn all_rows(f: &ChangedFile) -> Vec<crate::diff::Row> {
+    if f.removed.len() != f.old.len() || f.added.len() != f.new.len() {
+        return vec![];
+    }
+    draw(f, &guide_check::number_rows(&f.removed, &f.added))
+}
+
 /// The rows of one step: only the parts of the file that the step's ranges name.
 /// Each part is a slice of the numbered rows, cut by the proved `cut_rows`, so every
 /// row keeps its proved number and kind (G5 to G10). Only the slice bounds are plain
@@ -894,6 +903,17 @@ mod tests {
         // Every row is a row of the full diff, with the same kind and numbers.
         let full = rows_all(&f);
         assert!(shown.iter().all(|r| full.contains(r)));
+    }
+
+    #[test]
+    fn all_rows_have_every_line_once_and_no_header() {
+        let f = two_hunks();
+        let rows = all_rows(&f);
+        assert!(rows.iter().all(|r| r.kind != '@'));
+        assert_eq!(rows.iter().filter(|r| r.old.is_some()).count(), 40);
+        assert_eq!(rows.iter().filter(|r| r.new.is_some()).count(), 40);
+        let cut: Vec<_> = super::rows(&f, 3).into_iter().filter(|r| r.kind != '@').collect();
+        assert!(cut.iter().all(|r| rows.contains(r)));
     }
 
     #[test]

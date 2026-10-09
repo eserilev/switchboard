@@ -289,7 +289,7 @@ Opening a layout starts all its panes. Panes that already run are not started ag
 | Column | Content |
 |---|---|
 | Steps | The guide in reading order. Each step: title, path and lines, a check mark, the thread count, a stale mark (11.7). |
-| Guide + diff | The current step: what the code does, what to check, pins, context links. Under it, the diff at the PR head: only the parts of each file that the step's ranges name, with 6 rows of context. A bar counts the other changed lines of the file, links the steps that cover them, and opens the whole file in the Files view. |
+| Guide + diff | The current step: what the code does, what to check, pins, context links. Under it, the diff at the PR head: only the parts of each file that the step's ranges name, with 6 rows of context. A bar counts the other changed lines of the file, links the steps that cover them, and opens the whole file in the Files view. Each gap in a diff has buttons that show 20 hidden lines above or below, or the whole gap. The hidden lines come from `all_rows`: the proved numbering with no cut. |
 | Threads | The threads of the current step. Below them, the drafts. |
 
 A review has its own tab. More than one review can be open, one tab for each PR.

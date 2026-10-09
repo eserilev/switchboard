@@ -16,6 +16,7 @@
       const p = loadPlace(id);
       R.set(id, { cur: p.cur || 0, anchor: null, active: p.active || null, all: !!p.all, pending: new Map(), diff: new Map(), busy: new Set(), loading: new Set(),
         // Guide shows the steps; Files shows every changed file, like GitHub's "Files changed".
+        full: new Map(), shown: new Map(),
         mode: p.mode === "files" ? "files" : "guide", file: p.file || null, files: null, viewed: new Set(p.viewed || []), vhead: p.vhead || null });
     }
     return R.get(id);
@@ -319,7 +320,9 @@
       const anchored = new Set(r.threads.filter((t) => (!s || t.step === s.id) && t.line && t.path === sec.path).map((t) => `${t.side || "new"}:${t.line}`));
       const pathOf = (side) => (side === "old" ? sec.old_path || sec.path : sec.path);
       const c = l.compose && l.compose.sec === sec.path ? l.compose : null;
-      const rows = sec.rows.map((row) => {
+      const rows = items(l, key, sec).map((it) => {
+        if (it.gap) return gapRow(si, it);
+        const row = it.row;
         if (row.kind === "@") return `<tr class="hunk"><td class="cm"></td><td class="ln"></td><td class="src">${esc(row.text)}</td></tr>`;
         const rowSide = row.kind === "-" ? "old" : "new";
         const num = rowSide === "old" ? row.old : row.new;
@@ -363,6 +366,8 @@
         setMode(r.id, "files");
         return;
       }
+      const xb = e.target.closest("[data-exp]");
+      if (xb) { expand(r, d, xb); return; }
       const cm = e.target.closest("[data-cm]");
       if (cm) { compose(r, d, cm, e.shiftKey); return; }
       const nv = e.target.closest("[data-nvim]");
@@ -392,6 +397,92 @@
       (l.scrolled ||= new Set()).add(key);
       first.scrollIntoView({ block: "center" });
     }
+  }
+
+  // ---------- expand: hidden rows of a file, like GitHub ----------
+  const isHeader = (row) => row.kind === "@" && row.text.startsWith("@@");
+  const isNote = (row) => row.kind === "@" && !row.text.startsWith("@@");
+  const rowKey = (row) => (row ? `${row.kind}|${row.old ?? ""}|${row.new ?? ""}` : "");
+  const STEP = 20;
+
+  // The rows of a file as lines, each with its "No newline" note.
+  function fileLines(full) {
+    const lines = [];
+    for (const row of full) {
+      if (isNote(row)) { if (lines.length) lines[lines.length - 1].note = row; }
+      else lines.push({ row });
+    }
+    return lines;
+  }
+
+  // What to draw for a section: rows, and gaps of hidden rows with expand buttons.
+  // Before the first expand, the app does not have the file, so each header is a gap
+  // of unknown size, and one more gap waits at the end.
+  function items(l, key, sec) {
+    const full = l.full.get(sec.path);
+    if (!full) {
+      const out = [];
+      sec.rows.forEach((row, k) => {
+        if (!isHeader(row)) return out.push({ row });
+        const prev = [...sec.rows.slice(0, k)].reverse().find((x) => x.kind !== "@");
+        const next = sec.rows.slice(k + 1).find((x) => x.kind !== "@");
+        out.push({ gap: true, text: row.text, prev: rowKey(prev), next: rowKey(next) });
+      });
+      const last = [...sec.rows].reverse().find((x) => x.kind !== "@");
+      if (last && !sec.note) out.push({ gap: true, text: "", prev: rowKey(last), next: "" });
+      return out;
+    }
+    const lines = fileLines(full);
+    const index = new Map(lines.map((x, k) => [rowKey(x.row), k]));
+    const shown = new Set(l.shown.get(`${key}|${sec.path}`) || []);
+    for (const row of sec.rows) if (!isHeader(row) && !isNote(row) && index.has(rowKey(row))) shown.add(index.get(rowKey(row)));
+    const out = [];
+    let from = null;
+    const gap = (a, b) => out.push({ gap: true, from: a, to: b, count: b - a + 1, prev: rowKey(lines[a - 1]?.row), next: rowKey(lines[b + 1]?.row), nextRow: lines[b + 1]?.row });
+    lines.forEach((x, k) => {
+      if (!shown.has(k)) { if (from === null) from = k; return; }
+      if (from !== null) { gap(from, k - 1); from = null; }
+      out.push({ row: x.row });
+      if (x.note) out.push({ row: x.note });
+    });
+    if (from !== null) gap(from, lines.length - 1);
+    return out;
+  }
+
+  function gapRow(si, it) {
+    const at = `data-sec="${si}" data-prev="${esc(it.prev)}" data-next="${esc(it.next)}"`;
+    const n = it.count;
+    const up = it.prev !== "" && it.next !== "";
+    let btns;
+    if (n !== undefined && n <= STEP) btns = `<button type="button" class="xb" data-exp="all" ${at}>↕ Show ${n} line${n === 1 ? "" : "s"}</button>`;
+    else btns = [
+      it.next !== "" ? `<button type="button" class="xb" data-exp="up" ${at} title="Show ${STEP} more lines above">↑</button>` : "",
+      it.prev !== "" ? `<button type="button" class="xb" data-exp="down" ${at} title="Show ${STEP} more lines below">↓</button>` : "",
+      up || n !== undefined ? `<button type="button" class="xb" data-exp="all" ${at}>Show all${n !== undefined ? ` ${n}` : ""}</button>` : "",
+    ].join("");
+    const nr = it.nextRow;
+    const text = n === undefined ? it.text : nr ? `@@ old ${nr.old ?? "–"} · new ${nr.new ?? "–"} @@` : "";
+    const hidden = n !== undefined ? `<span class="hidden">${n} hidden line${n === 1 ? "" : "s"}</span>` : "";
+    return `<tr class="hunk gap"><td class="cm"></td><td class="ln"></td><td class="src"><div class="gapbar">${btns}${text ? `<span class="htext">${esc(text)}</span>` : ""}${hidden}</div></td></tr>`;
+  }
+
+  async function expand(r, d, b) {
+    const l = local(r.id);
+    const key = diffKey(r);
+    const sec = d.sections[+b.dataset.sec];
+    if (!l.full.has(sec.path)) {
+      try { l.full.set(sec.path, await invoke("review_file_rows", { id: r.id, path: sec.path })); } catch (e) { toast(e); return; }
+    }
+    const g = items(l, key, sec).find((it) => it.gap && it.prev === b.dataset.prev && it.next === b.dataset.next);
+    if (g) {
+      const set = new Set(l.shown.get(`${key}|${sec.path}`) || []);
+      let a = g.from, z = g.to;
+      if (b.dataset.exp === "up") a = Math.max(g.from, g.to - STEP + 1);
+      if (b.dataset.exp === "down") z = Math.min(g.to, g.from + STEP - 1);
+      for (let k = a; k <= z; k++) set.add(k);
+      l.shown.set(`${key}|${sec.path}`, set);
+    }
+    drawDiff(S.reviews.get(r.id) || r);
   }
 
   // Kind to class: the only input to the row color.
@@ -732,6 +823,8 @@
       if (l.head !== r.head || l.guideLen !== JSON.stringify(r.guide || "").length) {
         l.diff.clear();
         l.files = null;
+        l.full.clear();
+        l.shown.clear();
         l.head = r.head;
         l.guideLen = JSON.stringify(r.guide || "").length;
       }

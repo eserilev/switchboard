@@ -235,6 +235,19 @@
   await wait(100);
   check("n marks the step", called("review_mark").some((c) => c[1].step === "s2" && c[1].checked));
 
+  // Expand: hidden rows above and below a part of the file, like GitHub.
+  check("each gap has expand buttons", !!$('#rdiff [data-exp="up"]') && !!$('#rdiff [data-exp="down"]'));
+  $('#rdiff [data-exp="up"]').click();
+  await wait(150);
+  check("up shows the hidden lines above", called("review_file_rows").length === 1 && !!$('#rdiff td.ln[data-side="new"][data-ln="1"]') && $$("#rdiff .gapbar").length === 1 && $("#rdiff .gapbar").textContent.includes("49 hidden lines"), $$("#rdiff .gapbar").map((x) => x.textContent).join(" | "));
+  $('#rdiff [data-exp="down"]').click();
+  await wait(150);
+  check("down shows 20 lines below", !!$('#rdiff td.ln[data-side="new"][data-ln="32"]') && !$('#rdiff td.ln[data-side="new"][data-ln="33"]') && $("#rdiff .gapbar")?.textContent.includes("29 hidden lines"), $$("#rdiff .gapbar").map((x) => x.textContent).join(" | "));
+  check("revealed rows keep their numbers and colors", $$("#rdiff tr.add").length === 2 && $$("#rdiff tr.del").length === 1);
+  $('#rdiff [data-exp="all"]').click();
+  await wait(150);
+  check("show all ends the gap", !!$('#rdiff td.ln[data-side="new"][data-ln="61"]') && !$("#rdiff .gapbar"));
+
   // A step shows only its part of a file; a bar names the other changes.
   check("the bar names the other changes and their steps", $("#rdiff .other")?.textContent.includes("4 more changed lines are in") && !!$('#rdiff .other [data-ostep="0"]'), $("#rdiff .other")?.textContent);
   $("#rdiff [data-whole]").click();
