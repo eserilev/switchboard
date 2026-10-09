@@ -552,7 +552,7 @@
         const text = ta.value.trim();
         if (!c || !text) return;
         try {
-          await call("review_comment", { id: r.id, path: c.path, side: c.side, line: c.line, startLine: c.start < c.line ? c.start : null, text, head: d.head || "", lineText: lineText(l, d, c) });
+          await call("review_comment", { id: r.id, comment: { path: c.path, side: c.side, line: c.line, start_line: c.start < c.line ? c.start : null, text, head: d.head || "", line_text: lineText(l, d, c) } });
           // Place again: the old draft goes only when this is the same comment.
           if (l.placing && text === l.placing.text.trim()) await call("review_draft_edit", { id: r.id, draft: l.placing.id, text: null }).catch(() => {});
           l.placing = null;

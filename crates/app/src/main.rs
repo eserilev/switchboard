@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
 use switchboard_core::hub::{Hub, OpenReq, Sink};
-use switchboard_core::hub_review::Anchor;
+use switchboard_core::hub_review::{Anchor, NewComment};
 use switchboard_core::paths::Paths;
 use tauri::{AppHandle, Emitter, Manager, State, UserAttentionType};
 
@@ -142,7 +142,7 @@ commands! {
     review_pin_edit(id: String, pin: i64, text: Option<String>) -> () => |h| h.review_pin_edit(&id, pin, text);
     review_draft_edit(id: String, draft: i64, text: Option<String>) -> () => |h| h.review_draft_edit(&id, draft, text);
     review_drafts_text(id: String) -> String => |h| h.review_drafts_text(&id);
-    review_comment(id: String, path: String, side: String, line: u32, start_line: Option<u32>, text: String, head: String, line_text: String) -> () => |h| h.review_comment(&id, &path, &side, line, start_line, &text, &head, &line_text);
+    review_comment(id: String, comment: NewComment) -> () => |h| h.review_comment(&id, comment);
     review_summary(id: String, text: String) -> () => |h| h.review_summary(&id, &text);
     review_post_preview(id: String) -> Value => |h| h.review_post_preview(&id).map(|v| json!(v));
     review_post(id: String, event: String, summary: String, token: String) -> String => |h| h.review_post(&id, &event, &summary, &token);

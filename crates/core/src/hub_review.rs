@@ -162,6 +162,22 @@ const STALE_VIEW: &str = "The diff on screen is from an older commit. It reloads
 /// Rows of context around a step's ranges. The ranges already hold some context.
 const STEP_CONTEXT: usize = 6;
 
+/// A comment that you write on a line or a range of lines (`review_comment`).
+#[derive(Deserialize, Debug, Clone)]
+pub struct NewComment {
+    pub path: String,
+    /// `old` or `new`.
+    pub side: String,
+    /// The last line. With `start_line`, the comment covers a range.
+    pub line: u32,
+    #[serde(default)]
+    pub start_line: Option<u32>,
+    pub text: String,
+    /// The head of the diff on screen, and the text of `line` there.
+    pub head: String,
+    pub line_text: String,
+}
+
 /// One changed file in the Files view.
 #[derive(Serialize, Clone, Debug)]
 pub struct FileEntry {
@@ -1395,17 +1411,17 @@ impl Hub {
 
     /// A comment that you write on a line or a range of lines. The line must exist
     /// in the diff model at the reviewed head.
-    pub fn review_comment(
-        &self,
-        id: &str,
-        path: &str,
-        side: &str,
-        line: u32,
-        start_line: Option<u32>,
-        text: &str,
-        head: &str,
-        line_text: &str,
-    ) -> Res<()> {
+    pub fn review_comment(&self, id: &str, c: NewComment) -> Res<()> {
+        let NewComment {
+            path,
+            side,
+            line,
+            start_line,
+            text,
+            head,
+            line_text,
+        } = c;
+        let (path, side, head, line_text) = (path.as_str(), side.as_str(), head.as_str(), line_text.as_str());
         let text = text.trim();
         if text.is_empty() {
             return Err("The comment is empty.".into());

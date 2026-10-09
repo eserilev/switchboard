@@ -212,8 +212,8 @@
   $("#rctext").value = "Both lines need a test.";
   $("#rcform").requestSubmit();
   await wait(100);
-  const cm = called("review_comment")[0]?.[1];
-  check("Add to review sends path, side, range, head and line text", cm && cm.path === "beacon_node/gloas.rs" && cm.side === "new" && cm.line === 12 && cm.startLine === 11 && cm.text === "Both lines need a test." && cm.head === "ac92ae9aaaa" && cm.lineText === "let b = 2;", JSON.stringify(cm));
+  const cm = called("review_comment")[0]?.[1].comment;
+  check("Add to review sends path, side, range, head and line text", cm && cm.path === "beacon_node/gloas.rs" && cm.side === "new" && cm.line === 12 && cm.start_line === 11 && cm.text === "Both lines need a test." && cm.head === "ac92ae9aaaa" && cm.line_text === "let b = 2;", JSON.stringify(cm));
   check("the form closes after the add", !$("#rcform"));
   // Finish review: preview from GitHub, pick a type, send only on the click.
   $("#rdrafts [data-finish]").click();
@@ -374,7 +374,7 @@
     $("#rcform").requestSubmit();
     await wait(150);
     const drop = called("review_draft_edit").slice(before).find((c) => c[1].draft === 1 && c[1].text === null);
-    check("Place again adds the comment and removes the stale draft", called("review_comment").slice(-1)[0]?.[1].line === 12 && !!drop);
+    check("Place again adds the comment and removes the stale draft", called("review_comment").slice(-1)[0]?.[1].comment.line === 12 && !!drop);
     // Place again, then Cancel, then a different comment: the stale draft stays.
     $('#rdrafts [data-place="1"]').click();
     await wait(50);
