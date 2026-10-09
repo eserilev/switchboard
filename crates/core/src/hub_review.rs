@@ -943,7 +943,7 @@ impl Hub {
 
         let prompt = match &t.fork_session {
             // A plain follow-up can start with "-", and claude would read it as a flag.
-            Some(_) => format!("Follow-up question: {text}"),
+            Some(_) => format!("Respond tersely. Follow-up question: {text}"),
             None => thread_prompt(&self.step(id, &t.step)?, &t, &pins, text),
         };
         let (resume, fork) = match &t.fork_session {
@@ -1489,7 +1489,7 @@ fn thread_prompt(step: &Value, t: &ThreadRow, pins: &[String], question: &str) -
             p += &format!("- {pin}\n");
         }
     }
-    p += "\nRules: you only read. Do not call the guide tools. Answer short, in simple English. Name file:line for each claim.\n\nQuestion: ";
+    p += "\nDo not call the guide tools. Respond tersely.\n\nQuestion: ";
     p += question;
     p
 }
