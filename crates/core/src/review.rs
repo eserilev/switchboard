@@ -737,7 +737,7 @@ mod tests {
     /// the move, its comment goes to GitHub on the old number, which is another line.
     #[test]
     fn a_draft_moves_with_its_code_after_an_update() {
-        use crate::post::{block_text, model_file, move_block};
+        use crate::post::{anchor_at, block_text, model_file, move_anchor};
         let dir = std::env::temp_dir().join(format!("sb-move-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -771,14 +771,20 @@ mod tests {
         // Without a move, line 40 at B is another line.
         assert_ne!(block_text(fb, false, 40, 40).unwrap(), text);
         // The move finds it at 43.
-        assert_eq!(move_block(fb, false, &text, 40), Some(43));
+        let a = anchor_at(fa, false, 40, 40).unwrap();
+        let moved = move_anchor(fb, false, &a.text, Some(&a.before), Some(&a.after), 40).unwrap();
+        assert_eq!(moved.line, 43);
         // A range moves as one block.
         let range = block_text(fa, false, 39, 41).unwrap();
-        assert_eq!(move_block(fb, false, &range, 39), Some(42));
+        let r = anchor_at(fa, false, 39, 41).unwrap();
+        assert_eq!(r.text, range);
+        let moved = move_anchor(fb, false, &r.text, Some(&r.before), Some(&r.after), 39).unwrap();
+        assert_eq!((moved.start_line, moved.line), (Some(42), 44));
         // Line 50 at A is gone at B: the draft is stale.
         let gone = block_text(fa, false, 50, 50).unwrap();
         assert_eq!(gone, "line 50");
-        assert_eq!(move_block(fb, false, &gone, 50), None);
+        let g = anchor_at(fa, false, 50, 50).unwrap();
+        assert_eq!(move_anchor(fb, false, &g.text, Some(&g.before), Some(&g.after), 50), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

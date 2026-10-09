@@ -517,6 +517,8 @@ impl Hub {
             r.model = Some(model.clone());
             r.coverage = Some(view);
         }
+        // The drafts follow the head in the same step as the model.
+        self.move_drafts(id, &model)?;
         Ok(model)
     }
 
@@ -1279,14 +1281,23 @@ impl Hub {
             head: None,
             line_text: None,
             stale: false,
+            before: None,
+            after: None,
         };
-        // The text of the thread's line, so the draft can move with the code.
+        // The draft goes on the thread's line only when that line still has the text
+        // that the question was about. Else it is stale, and you place it yourself.
         let d = match (&d.path, d.line, self.model(id)) {
             (Some(path), Some(n), Ok(m)) => {
                 let old = d.side.as_deref() == Some("old");
-                let text = crate::post::model_file(&m, path, old).and_then(|f| crate::post::block_text(f, old, n, n));
-                DraftRow { head: Some(m.head.clone()), line_text: text, ..d }
+                let at = crate::post::model_file(&m, path, old).and_then(|f| crate::post::anchor_at(f, old, n, n));
+                let asked = t.line_text.as_deref().map(str::trim);
+                let good = !t.removed && at.as_ref().is_some_and(|a| asked.is_none_or(|q| a.text.trim() == q));
+                match at.filter(|_| good) {
+                    Some(a) => DraftRow { head: Some(m.head.clone()), line_text: Some(a.text), before: Some(a.before), after: Some(a.after), ..d },
+                    None => DraftRow { head: Some(m.head.clone()), stale: true, ..d },
+                }
             }
+            (Some(_), Some(_), Err(_)) => DraftRow { stale: true, ..d },
             _ => d,
         };
         self.store.lock().unwrap().add_draft(id, &d).map_err(e)?;
@@ -1368,8 +1379,14 @@ impl Hub {
             text: text.to_owned(),
             agent: false,
             head: Some(model.head.clone()),
-            line_text: crate::post::block_text(f, side == "old", start, line),
+            line_text: None,
             stale: false,
+            before: None,
+            after: None,
+        };
+        let d = match crate::post::anchor_at(f, side == "old", start, line) {
+            Some(a) => DraftRow { line_text: Some(a.text), before: Some(a.before), after: Some(a.after), ..d },
+            None => d,
         };
         self.store.lock().unwrap().add_draft(id, &d).map_err(e)?;
         self.emit_review(id);
@@ -1601,7 +1618,6 @@ impl Hub {
             }
         }
         self.reanchor(id, &f.tree, &f.head)?;
-        self.move_drafts(id)?;
         let prompt = format!(
             "The PR has new commits. The head is now {}. The worktree is checked out at it. Changed files since {old}: {}. \
              Read the new code. Call guide_set_steps with the full guide for the new head. Keep the id of each step \
@@ -1615,34 +1631,37 @@ impl Hub {
         Ok(())
     }
 
-    /// Moves each draft to its text at the new head. A draft whose text is gone gets
-    /// `stale`, and the send refuses it until you place it again.
-    fn move_drafts(&self, id: &str) -> Res<()> {
-        let model = self.model(id)?;
+    /// Puts each draft on its code at the model's head. Runs on every model load, so
+    /// every path that changes the head (update, retry, restart) moves the drafts.
+    /// - At the draft's own head: a draft with no stored text gets it.
+    /// - At a new head: the draft moves to the same code (`post::move_anchor`), or
+    ///   becomes stale. A draft with no stored text cannot move, so it is stale.
+    fn move_drafts(&self, id: &str, model: &coverage::DiffModel) -> Res<()> {
         let drafts = self.store.lock().unwrap().drafts(id).map_err(e)?;
         for d in drafts {
-            let (Some(path), Some(line), Some(text)) = (&d.path, d.line, &d.line_text) else {
+            let (Some(path), Some(line)) = (&d.path, d.line) else {
                 continue;
             };
-            if d.head.as_deref() == Some(model.head.as_str()) {
-                continue;
-            }
             let old = d.side.as_deref() == Some("old");
             let start = d.start_line.unwrap_or(line);
-            let found = crate::post::model_file(&model, path, old)
-                .and_then(|f| crate::post::move_block(f, old, text, start));
-            let store = self.store.lock().unwrap();
-            match found {
-                Some(s) => store.move_draft(
-                    d.id,
-                    Some(s + (line - start)),
-                    d.start_line.map(|_| s),
-                    &model.head,
-                    false,
-                ),
-                None => store.move_draft(d.id, d.line, d.start_line, &model.head, true),
+            let f = crate::post::model_file(model, path, old);
+            let same_head = d.head.as_deref() == Some(model.head.as_str());
+            let at = match (&d.line_text, same_head) {
+                (Some(_), true) => continue,
+                (None, true) if !d.stale => f.and_then(|f| crate::post::anchor_at(f, old, start, line)),
+                (None, _) => None,
+                (Some(text), false) => f.and_then(|f| {
+                    crate::post::move_anchor(f, old, text, d.before.as_deref(), d.after.as_deref(), start)
+                }),
+            };
+            if d.stale && same_head {
+                continue;
             }
-            .map_err(e)?;
+            self.store
+                .lock()
+                .unwrap()
+                .place_draft(d.id, &model.head, at.as_ref())
+                .map_err(e)?;
         }
         Ok(())
     }

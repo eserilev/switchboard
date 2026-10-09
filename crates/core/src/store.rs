@@ -49,6 +49,13 @@ const SCHEMA: &[&str] = &[
     "ALTER TABLE draft ADD COLUMN head TEXT;
      ALTER TABLE draft ADD COLUMN line_text TEXT;
      ALTER TABLE draft ADD COLUMN stale INTEGER NOT NULL DEFAULT 0;",
+    // Version 6: up to 2 lines of code above and below a draft, so a draft on a common
+    // line (`}`, a blank line) moves only to the same place. A draft from before
+    // version 5 belongs to the head of its review.
+    "ALTER TABLE draft ADD COLUMN before TEXT;
+     ALTER TABLE draft ADD COLUMN after TEXT;
+     UPDATE draft SET head = (SELECT head FROM review WHERE review.id = draft.review)
+       WHERE head IS NULL AND line IS NOT NULL;",
 ];
 
 pub struct Store {
@@ -150,6 +157,11 @@ pub struct DraftRow {
     /// go out until you place it again.
     #[serde(default)]
     pub stale: bool,
+    /// Up to 2 lines above and below the lines, joined with "\n".
+    #[serde(default)]
+    pub before: Option<String>,
+    #[serde(default)]
+    pub after: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -482,9 +494,9 @@ impl Store {
 
     pub fn add_draft(&self, review: &str, d: &DraftRow) -> R<i64> {
         self.db.execute(
-            "INSERT INTO draft (review, path, side, line, start_line, text, agent, head, line_text, stale)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![review, d.path, d.side, d.line, d.start_line, d.text, d.agent, d.head, d.line_text, d.stale],
+            "INSERT INTO draft (review, path, side, line, start_line, text, agent, head, line_text, stale, before, after)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![review, d.path, d.side, d.line, d.start_line, d.text, d.agent, d.head, d.line_text, d.stale, d.before, d.after],
         )?;
         Ok(self.db.last_insert_rowid())
     }
@@ -497,12 +509,17 @@ impl Store {
         Ok(())
     }
 
-    /// Moves a draft to its lines at a new head, or marks it stale.
-    pub fn move_draft(&self, id: i64, line: Option<u32>, start_line: Option<u32>, head: &str, stale: bool) -> R<()> {
-        self.db.execute(
-            "UPDATE draft SET line = ?2, start_line = ?3, head = ?4, stale = ?5 WHERE id = ?1",
-            params![id, line, start_line, head, stale],
-        )?;
+    /// Puts a draft on its lines at a head, with the text of the lines and of the code
+    /// around them. With `stale`, only the head and the flag change.
+    pub fn place_draft(&self, id: i64, head: &str, at: Option<&crate::post::Anchor>) -> R<()> {
+        match at {
+            Some(a) => self.db.execute(
+                "UPDATE draft SET line = ?2, start_line = ?3, head = ?4, line_text = ?5, before = ?6, after = ?7, stale = 0
+                 WHERE id = ?1",
+                params![id, a.line, a.start_line, head, a.text, a.before, a.after],
+            )?,
+            None => self.db.execute("UPDATE draft SET head = ?2, stale = 1 WHERE id = ?1", params![id, head])?,
+        };
         Ok(())
     }
 
@@ -513,7 +530,7 @@ impl Store {
 
     pub fn drafts(&self, review: &str) -> R<Vec<DraftRow>> {
         let mut s = self.db.prepare(
-            "SELECT id, path, side, line, start_line, text, agent, head, line_text, stale FROM draft
+            "SELECT id, path, side, line, start_line, text, agent, head, line_text, stale, before, after FROM draft
              WHERE review = ?1 ORDER BY id",
         )?;
         let rows = s.query_map([review], |r| {
@@ -528,6 +545,8 @@ impl Store {
                 head: r.get(7)?,
                 line_text: r.get(8)?,
                 stale: r.get(9)?,
+                before: r.get(10)?,
+                after: r.get(11)?,
             })
         })?;
         rows.collect()
@@ -724,6 +743,19 @@ mod tests {
     }
 
     #[test]
+    fn version_4_drafts_get_the_head_of_their_review() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(&format!("{}; PRAGMA user_version = 4;", SCHEMA[..4].join(";"))).unwrap();
+        db.execute("INSERT INTO review (id, url, repo, number, title, head, base, tree, opened) VALUES ('r1', 'u', 'o/r', 1, 't', 'headA', 'b', '/w', 1)", []).unwrap();
+        db.execute("INSERT INTO draft (review, path, side, line, text) VALUES ('r1', 'a.rs', 'new', 3, 'on a line')", []).unwrap();
+        db.execute("INSERT INTO draft (review, text) VALUES ('r1', 'general')", []).unwrap();
+        let s = Store::init(db).unwrap();
+        let d = s.drafts("r1").unwrap();
+        assert_eq!(d[0].head.as_deref(), Some("headA"));
+        assert_eq!(d[1].head, None);
+    }
+
+    #[test]
     fn version_2_drafts_migrate_as_agent_drafts() {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch(&format!("{}; {}; PRAGMA user_version = 2;", SCHEMA[0], SCHEMA[1]))
@@ -796,6 +828,8 @@ mod tests {
                     head: None,
                     line_text: None,
                     stale: false,
+                    before: None,
+                    after: None,
                 },
             )
             .unwrap();
@@ -828,6 +862,8 @@ mod tests {
             head: None,
             line_text: None,
             stale: false,
+            before: None,
+            after: None,
         };
         let sent = s.add_draft("r1", &draft("sent")).unwrap();
         s.add_draft("r1", &draft("kept")).unwrap();

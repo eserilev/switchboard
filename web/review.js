@@ -507,7 +507,7 @@
       const hi = Math.max(c.start, c.line, n);
       l.compose = { ...c, start: lo, line: hi };
     } else {
-      l.compose = { sec: sec.path, path, side, start: n, line: n, text: c?.text || "" };
+      l.compose = { sec: sec.path, path, side, start: n, line: n, text: c?.text || l.placing?.text || "" };
     }
     drawDiff(r);
     $("#rctext")?.focus();
@@ -532,6 +532,7 @@
         if (!c || !text) return;
         try {
           await call("review_comment", { id: r.id, path: c.path, side: c.side, line: c.line, startLine: c.start < c.line ? c.start : null, text });
+          if (l.placing) { await call("review_draft_edit", { id: r.id, draft: l.placing.id, text: null }).catch(() => {}); l.placing = null; }
           l.compose = null;
           drawDiff(S.reviews.get(r.id) || r);
         } catch (_) {}
@@ -628,10 +629,17 @@
         const lines = d.start_line ? `${d.start_line}-${d.line}` : d.line;
         const loc = d.path ? `${d.path}${d.line ? ":" + lines : ""}${d.side === "old" ? " (old)" : ""}` : "";
         const long = d.text.split("\n").length > 2 || d.text.length > 240;
-        const stale = d.stale ? `<em class="stalenote">The code changed after you wrote this. Delete it, or write it again on the new line.</em>` : "";
+        const stale = d.stale ? `<em class="stalenote">The code changed after you wrote this. Place it again or delete it.</em><span class="stalebtns"><button class="btn small" data-place="${d.id}">Place again</button><button class="btn small" data-drop="${d.id}">Delete</button></span>` : "";
         return `<div class="draft${long ? " long" : ""}${d.agent ? " agent" : ""}${d.stale ? " stale" : ""}" data-d="${d.id}"><b>${esc(loc)}${d.agent ? ' <i>agent</i>' : ""}</b>${stale}<span contenteditable="true">${esc(d.text)}</span></div>`;
       }).join("");
     $("#rdrafts [data-finish]").onclick = () => openFinish(r.id);
+    // Place again: the next + opens the form with this text; the add removes the old draft.
+    $("#rdrafts").querySelectorAll("[data-place]").forEach((b) => (b.onclick = () => {
+      const d = r.drafts.find((x) => x.id === +b.dataset.place);
+      local(r.id).placing = d ? { id: d.id, text: d.text } : null;
+      toast("Click + on the line for this comment.");
+    }));
+    $("#rdrafts").querySelectorAll("[data-drop]").forEach((b) => (b.onclick = () => call("review_draft_edit", { id: r.id, draft: +b.dataset.drop, text: null })));
     $("#rdrafts").querySelectorAll("[data-d] span").forEach((el) => {
       el.addEventListener("blur", () => call("review_draft_edit", { id: r.id, draft: +el.parentElement.dataset.d, text: el.textContent.trim() || null }));
       el.addEventListener("keydown", (e) => e.stopPropagation());

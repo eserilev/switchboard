@@ -177,19 +177,75 @@ pub fn block_text(f: &ChangedFile, old: bool, from: u32, to: u32) -> Option<Stri
     lines.map(|l| l.join("\n"))
 }
 
-/// Where the lines `block` start in `f`, nearest to line `near`. All lines must be
-/// the same, in order, with the same spaces. `None` when the block is gone.
-pub fn move_block(f: &ChangedFile, old: bool, block: &str, near: u32) -> Option<u32> {
-    let want: Vec<&str> = block.split('\n').collect();
-    let count = if old { f.old.len() } else { f.new.len() } as u32;
-    let fits = |start: u32| {
-        want.iter()
-            .enumerate()
-            .all(|(k, w)| line_text(f, old, start + k as u32).as_deref() == Some(*w))
+/// Lines of code that two drafts place: the lines, and up to 2 lines around them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Anchor {
+    pub line: u32,
+    pub start_line: Option<u32>,
+    pub text: String,
+    pub before: String,
+    pub after: String,
+}
+
+/// How many lines around a draft the anchor keeps.
+const AROUND: u32 = 2;
+
+fn lines_of(f: &ChangedFile, old: bool) -> u32 {
+    (if old { f.old.len() } else { f.new.len() }) as u32
+}
+
+/// The anchor of lines `from` to `to` of one side.
+pub fn anchor_at(f: &ChangedFile, old: bool, from: u32, to: u32) -> Option<Anchor> {
+    let text = block_text(f, old, from, to)?;
+    let lo = from.saturating_sub(AROUND).max(1);
+    let hi = (to + AROUND).min(lines_of(f, old));
+    let before = if lo < from { block_text(f, old, lo, from - 1)? } else { String::new() };
+    let after = if to < hi { block_text(f, old, to + 1, hi)? } else { String::new() };
+    Some(Anchor {
+        line: to,
+        start_line: (from < to).then_some(from),
+        text,
+        before,
+        after,
+    })
+}
+
+/// Where a block of lines is now, after the code changed. The lines must be the
+/// same, in order, with the same spaces. With the code around the block stored:
+/// - the code above or the code below must be the same too; a place where both are
+///   the same wins, then the place nearest to the old one;
+/// - else `None`: the draft is stale. So a common line (`}`, a blank line) never
+///   jumps to other code.
+///
+/// With no code around stored (a draft from before the app kept it), only the one
+/// place in the file with these lines counts.
+pub fn move_anchor(
+    f: &ChangedFile,
+    old: bool,
+    text: &str,
+    before: Option<&str>,
+    after: Option<&str>,
+    near: u32,
+) -> Option<Anchor> {
+    let size = text.split('\n').count() as u32;
+    let count = lines_of(f, old);
+    if size == 0 || size > count {
+        return None;
+    }
+    let hits: Vec<Anchor> = (1..=count - size + 1)
+        .filter_map(|s| anchor_at(f, old, s, s + size - 1))
+        .filter(|a| a.text == text)
+        .collect();
+    if before.is_none() && after.is_none() {
+        return (hits.len() == 1).then(|| hits[0].clone());
+    }
+    let score = |a: &Anchor| {
+        u32::from(before.is_some_and(|b| a.before == b)) + u32::from(after.is_some_and(|x| a.after == x))
     };
-    (1..=count)
-        .filter(|&s| s + want.len() as u32 - 1 <= count && fits(s))
-        .min_by_key(|s| s.abs_diff(near))
+    let first = |a: &Anchor| a.start_line.unwrap_or(a.line);
+    hits.into_iter()
+        .filter(|a| score(a) > 0)
+        .min_by_key(|a| (std::cmp::Reverse(score(a)), first(a).abs_diff(near)))
 }
 
 /// The index of the row that shows line `n` of one side in GitHub's diff.
@@ -239,6 +295,12 @@ pub fn plan(m: &DiffModel, gh: &[GhFile], drafts: &[DraftRow], old_on_github: bo
         } else {
             format!("{path}:{line}")
         };
+        if d.stale {
+            p.errors.push(format!(
+                "{at}: the code of this comment changed after you wrote it. Place it again or delete it."
+            ));
+            continue;
+        }
         let Some(f) = model_file(m, path, old) else {
             p.errors.push(format!("{at}: the PR does not change this file."));
             continue;
@@ -253,10 +315,10 @@ pub fn plan(m: &DiffModel, gh: &[GhFile], drafts: &[DraftRow], old_on_github: bo
             continue;
         };
         // The comment was written on some text. That text must still be at its lines.
-        let moved = d.stale || d.line_text.as_deref().is_some_and(|t| t != ours.join("\n"));
-        if moved {
+        // A draft with no text is from before the app kept it: it cannot be checked.
+        if d.line_text.as_deref() != Some(ours.join("\n").as_str()) {
             p.errors.push(format!(
-                "{at}: the code of this comment changed after you wrote it. Move the comment or delete it."
+                "{at}: the code of this comment changed after you wrote it. Place it again or delete it."
             ));
             continue;
         }
@@ -495,8 +557,12 @@ Binary files /dev/null and b/img.png differ
         }
     }
 
+    /// A draft with the text of its lines in the test model, as the app stores it.
     fn draft(id: i64, path: &str, side: &str, start: Option<u32>, line: u32) -> DraftRow {
+        let old = side == "old";
+        let text = model_file(&model(), path, old).and_then(|f| block_text(f, old, start.unwrap_or(line), line));
         DraftRow {
+            line_text: text,
             id,
             path: Some(path.into()),
             side: Some(side.into()),
@@ -505,8 +571,9 @@ Binary files /dev/null and b/img.png differ
             text: format!("comment {id}"),
             agent: false,
             head: None,
-            line_text: None,
             stale: false,
+            before: None,
+            after: None,
         }
     }
 
@@ -712,17 +779,40 @@ Binary files /dev/null and b/img.png differ
     }
 
     #[test]
-    fn a_block_moves_to_its_text() {
+    fn an_anchor_moves_only_to_the_same_place() {
         let m = model();
         let f = &m.files[0];
-        // "twenty" / "new" is at new 20-21; from a guess of 5 it still finds it.
-        assert_eq!(move_block(f, false, "twenty\nnew", 5), Some(20));
-        // The nearest copy wins: "l7" is only at line 7.
-        assert_eq!(move_block(f, false, "l7", 30), Some(7));
-        assert_eq!(move_block(f, false, "twenty\nnot here", 20), None);
-        assert_eq!(move_block(f, false, "gone", 1), None);
-        // Spaces count: a changed indent is changed code.
-        assert_eq!(move_block(f, false, " l7", 7), None);
+        // "twenty" / "new" is unique: it moves from a far guess.
+        let a = anchor_at(f, false, 20, 21).unwrap();
+        assert_eq!(a.before, "l18\nl19");
+        assert_eq!(move_anchor(f, false, &a.text, Some(&a.before), Some(&a.after), 5).map(|x| x.line), Some(21));
+        // The lines are gone: stale.
+        assert_eq!(move_anchor(f, false, "twenty\nnot here", None, None, 20), None);
+        // Spaces count.
+        assert_eq!(move_anchor(f, false, " l7", None, None, 7), None);
+    }
+
+    #[test]
+    fn a_common_line_does_not_jump_to_another_copy() {
+        // A file with "}" on lines 3 and 6.
+        let lines = |s: &[&str]| s.iter().map(|l| format!("{l}\n").into_bytes()).collect::<Vec<_>>();
+        let mut f = model().files[0].clone();
+        f.new = lines(&["fn a() {", "  x();", "}", "fn b() {", "  y();", "}"]);
+        f.added = vec![false; 6];
+        let a = anchor_at(&f, false, 3, 3).unwrap();
+        assert_eq!((a.text.as_str(), a.before.as_str(), a.after.as_str()), ("}", "fn a() {\n  x();", "fn b() {\n  y();"));
+        // Same code: it stays.
+        assert_eq!(move_anchor(&f, false, &a.text, Some(&a.before), Some(&a.after), 3).map(|x| x.line), Some(3));
+        // fn a is gone. The only "}" left is the one of fn b: other code, so stale.
+        f.new = lines(&["fn b() {", "  y();", "}"]);
+        assert_eq!(move_anchor(&f, false, &a.text, Some(&a.before), Some(&a.after), 3), None);
+        // With no stored context (an old draft), a unique copy is enough.
+        assert_eq!(move_anchor(&f, false, "  y();", None, None, 9).map(|x| x.line), Some(2));
+        f.new = lines(&["}", "}"]);
+        assert_eq!(move_anchor(&f, false, "}", None, None, 1), None);
+        // A line above fn a's "}" changed, but the code below is the same: it moves.
+        f.new = lines(&["// new", "fn a() {", "  x2();", "}", "fn b() {", "  y();", "}"]);
+        assert_eq!(move_anchor(&f, false, "}", Some("fn a() {\n  x();"), Some("fn b() {\n  y();"), 3).map(|x| x.line), Some(4));
     }
 
     #[test]

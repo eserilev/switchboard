@@ -365,6 +365,16 @@
     window.__emit("review", r);
     await wait(100);
     check("a stale draft shows a note in the list and not in the diff", $("#rdrafts .draft.stale .stalenote")?.textContent.includes("code changed") && !$('#rdiff .dcard[data-d="1"]'), $("#rdrafts").textContent);
+    $('#rdrafts [data-place="1"]').click();
+    await wait(50);
+    $('#rdiff [data-cm][data-side="new"][data-n="12"]').click();
+    await wait(50);
+    check("Place again opens the form with the draft's text", $("#rctext")?.value === "nit: use safe_sub");
+    const before = called("review_draft_edit").length;
+    $("#rcform").requestSubmit();
+    await wait(150);
+    const drop = called("review_draft_edit").slice(before).find((c) => c[1].draft === 1 && c[1].text === null);
+    check("Place again adds the comment and removes the stale draft", called("review_comment").slice(-1)[0]?.[1].line === 12 && !!drop);
     window.__emit("review", window.__data.reviews[0]);
     await wait(100);
   }

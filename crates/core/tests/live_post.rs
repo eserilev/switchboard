@@ -40,6 +40,8 @@ fn check_pr(repo: &std::path::Path, url: &str) -> Seen {
             for (k, changed) in mask.iter().enumerate() {
                 if *changed {
                     id += 1;
+                    let old = side == "old";
+                    let text = post::block_text(f, old, k as u32 + 1, k as u32 + 1);
                     drafts.push(DraftRow {
                         id,
                         path: path.clone(),
@@ -49,8 +51,10 @@ fn check_pr(repo: &std::path::Path, url: &str) -> Seen {
                         text: "x".into(),
                         agent: false,
                         head: None,
-                        line_text: None,
+                        line_text: text,
                         stale: false,
+                        before: None,
+                        after: None,
                     });
                 }
             }

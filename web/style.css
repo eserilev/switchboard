@@ -328,3 +328,4 @@ tr.anchored td.ln::after { content: "●"; color: var(--accent); margin-left: 4p
 tr.gap .hidden { color: var(--muted); font-size: 11px; }
 .draft.stale { box-shadow: inset 3px 0 0 var(--error); }
 .draft .stalenote { font: 12px/1.4 var(--body); font-style: normal; color: var(--error); }
+.draft .stalebtns { display: flex; gap: 6px; }
