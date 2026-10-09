@@ -165,6 +165,21 @@
     window.__emit("review", window.__data.reviews[0]);
     await wait(100);
   }
+  // Step / All: the thread of step 2 shows from step 1 under All, and a click jumps to it.
+  docKey("k");
+  await wait(100);
+  check("Step view hides threads of other steps", !$$("#rthreads .thread").length);
+  $('#rscope [data-v="all"]').click();
+  await wait(50);
+  check("All shows every thread with its step", $$("#rthreads .thread").length === 1 && $("#rthreads .anchor").textContent.startsWith("Step 2"), $("#rthreads").textContent.slice(0, 80));
+  $("#rthreads .thread").click();
+  await wait(100);
+  check("a click jumps to the thread's step and makes it active", $('#rsteps [aria-current="step"]')?.dataset.i === "1" && $("#rthreads .thread.active"));
+  check("the place is saved for a restart", JSON.parse(localStorage.getItem("sb.review.place.r1") || "{}").cur === 1);
+  $('#rscope [data-v="step"]').click();
+  await wait(50);
+  $("#rthreads .thread.active")?.click();
+  await wait(50);
   check("drafts list with copy", $("#rdrafts").textContent.includes("nit: use safe_sub") && !!$("#rdrafts [data-copy]"));
   $(".thread[data-t='t1']").click();
   await wait(50);

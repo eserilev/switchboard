@@ -188,6 +188,9 @@ tr.focus td.ln { color: var(--accent); font-weight: 700; }
 tr.anchor td.ln { box-shadow: inset 3px 0 0 var(--accent); color: var(--accent); }
 tr.anchored td.ln::after { content: "●"; color: var(--accent); margin-left: 4px; font-size: 9px; }
 /* min-height: 0 lets the list shrink inside the column, so it scrolls instead of overflowing. */
+.tbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px 0; }
+.tbar .seg button { padding: 5px 9px; font-size: 11px; }
+.tcount { font: 500 11px/1 var(--mono); color: var(--muted); }
 .threads { overflow-y: auto; flex: 1 1 0; min-height: 0; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
 /* A card keeps its full height; the list scrolls, not the card. */
 .threads > * { flex: none; }

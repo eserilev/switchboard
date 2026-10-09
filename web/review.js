@@ -3,8 +3,19 @@
 (() => {
   const { S, call, invoke, esc, toast, $ } = window.SB;
   const R = new Map(); // review id -> { cur, anchor, active, pending: Map(thread -> text), diff: Map(step -> view), busy: Set }
+  // Your place in each review survives a restart: the step, the active thread, Step or All.
+  const placeKey = (id) => `sb.review.place.${id}`;
+  const loadPlace = (id) => { try { return JSON.parse(localStorage.getItem(placeKey(id)) || "{}"); } catch (_) { return {}; } };
+  const savePlace = (id) => {
+    const l = R.get(id);
+    if (!l) return;
+    try { localStorage.setItem(placeKey(id), JSON.stringify({ cur: l.cur, active: l.active, all: l.all })); } catch (_) {}
+  };
   const local = (id) => {
-    if (!R.has(id)) R.set(id, { cur: 0, anchor: null, active: null, pending: new Map(), diff: new Map(), busy: new Set() });
+    if (!R.has(id)) {
+      const p = loadPlace(id);
+      R.set(id, { cur: p.cur || 0, anchor: null, active: p.active || null, all: !!p.all, pending: new Map(), diff: new Map(), busy: new Set() });
+    }
     return R.get(id);
   };
   const view = () => $("#view-review");
@@ -36,6 +47,7 @@
         <div class="col"><ol class="steps" id="rsteps"></ol></div>
         <div class="col center" id="rcenter"><div class="guide" id="rguide"></div><div id="rdiff"></div></div>
         <div class="col">
+          <div class="tbar"><div class="seg" id="rscope"><button type="button" data-v="step">Step</button><button type="button" data-v="all">All</button></div><span class="tcount" id="rtcount"></span></div>
           <div class="threads" id="rthreads"></div>
           <div class="anchorchip" id="ranchor"></div>
           <form class="ask" id="rask"><label for="rq" hidden>Question</label><textarea id="rq"></textarea><button class="btn primary" type="submit">Ask</button></form>
@@ -211,13 +223,20 @@
     const l = local(r.id);
     const s = steps(r)[l.cur];
     if (!s) { $("#rthreads").innerHTML = ""; return; }
-    const mine = r.threads.filter((t) => t.step === s.id);
+    const all = l.all;
+    const mine = all ? r.threads : r.threads.filter((t) => t.step === s.id);
+    const stepIndex = (sid) => steps(r).findIndex((x) => x.id === sid);
+    document.querySelectorAll("#rscope button").forEach((b) => b.setAttribute("aria-pressed", String((b.dataset.v === "all") === all)));
+    $("#rtcount").textContent = r.threads.length ? `${r.threads.length} in review` : "";
     // Keep the scroll place; stay at the bottom when you were at the bottom.
     const box = $("#rthreads");
     const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
     const top = box.scrollTop;
     box.innerHTML = mine.map((t) => {
-      const where = t.line ? `${(t.path || "").split("/").pop()}:${t.line}${t.side === "old" ? " (old)" : ""}` : `Step ${l.cur + 1}`;
+      const si = stepIndex(t.step);
+      const stepName = si >= 0 ? `Step ${si + 1}` : "Old step";
+      const at = t.line ? `${(t.path || "").split("/").pop()}:${t.line}${t.side === "old" ? " (old)" : ""}` : "";
+      const where = all ? [stepName, at].filter(Boolean).join(" · ") : at || stepName;
       const busy = t.busy || l.busy.has(t.id);
       const msgs = t.messages.map((m, i) => {
         if (m.me) return `<div class="msg me">${esc(m.text)}</div>`;
@@ -245,9 +264,28 @@
       }
       const th = e.target.closest(".thread");
       if (!th) return;
+      const t = r.threads.find((x) => x.id === th.dataset.t);
+      const si = t ? stepIndex(t.step) : -1;
+      if (si >= 0 && si !== l.cur) {
+        // A thread of another step: go there, with the thread active.
+        go(r.id, si);
+        l.active = t.id;
+        savePlace(r.id);
+        drawThreads(r);
+        $("#rq").focus();
+        return;
+      }
       l.active = l.active === th.dataset.t ? null : th.dataset.t;
+      savePlace(r.id);
       drawThreads(r);
       if (l.active) $("#rq").focus();
+    };
+    $("#rscope").onclick = (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      l.all = b.dataset.v === "all";
+      savePlace(r.id);
+      drawThreads(r);
     };
   }
 
@@ -294,6 +332,7 @@
       const t = await invoke("review_ask", { id, step: s.id, anchor: l.active ? null : l.anchor, thread: l.active, text });
       l.active = t;
       l.anchor = null;
+      savePlace(id);
       l.busy.add(t);
       l.pending.set(t, "");
       const fresh = await invoke("review_view", { id });
@@ -324,6 +363,7 @@
     l.cur = Math.max(0, Math.min(steps(r).length - 1, i));
     l.anchor = null;
     l.active = null;
+    savePlace(id);
     update(r);
     loadDiff(id, l.cur);
     $(`#rsteps [data-i="${l.cur}"]`)?.scrollIntoView({ block: "nearest" });
