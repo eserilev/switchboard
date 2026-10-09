@@ -723,75 +723,52 @@ pub fn compare_github(
     (errors, warnings)
 }
 
-/// The diff rows of a file, from the verified model itself: the old and new lines
-/// and the masks, walked in the order of the rebuild check. Rows more than `ctx`
-/// lines from a change are left out, and a `@` row marks each gap.
+/// The diff rows of a file, from the verified kernel. `number_rows` numbers every
+/// line in the order of the rebuild check, and `cut_rows` keeps the rows at most
+/// `ctx` rows from a change, with a header before each run (SPEC 24, G5 to G9).
+/// Here a row only gets its text, by one lookup with its own number, and a note
+/// when the line has no newline.
 pub fn rows(f: &ChangedFile, ctx: usize) -> Vec<crate::diff::Row> {
     use crate::diff::Row;
+    use guide_check::Kind;
+    // Only a model that failed the rebuild check has other lengths, and that stops the review.
+    if f.removed.len() != f.old.len() || f.added.len() != f.new.len() {
+        return vec![];
+    }
     let text = |l: &[u8]| String::from_utf8_lossy(l.strip_suffix(b"\n").unwrap_or(l)).into_owned();
-    let mut all: Vec<Row> = vec![];
-    let (mut i, mut j) = (0, 0);
-    while i < f.old.len() || j < f.new.len() {
-        let (kind, line) = if i < f.old.len() && f.removed.get(i) == Some(&true) {
-            i += 1;
-            ('-', &f.old[i - 1])
-        } else if j < f.new.len() && f.added.get(j) == Some(&true) {
-            j += 1;
-            ('+', &f.new[j - 1])
-        } else if i < f.old.len() && j < f.new.len() {
-            i += 1;
-            j += 1;
-            (' ', &f.new[j - 1])
-        } else {
-            // Only after a failed rebuild check, which stops the review first.
-            break;
+    let number = |n: usize| (n > 0).then_some(n as u32);
+    let all = guide_check::number_rows(&f.removed, &f.added);
+    let mut out: Vec<Row> = vec![];
+    for r in guide_check::cut_rows(&all, ctx) {
+        let (kind, line) = match r.kind {
+            Kind::Header => {
+                out.push(Row {
+                    kind: '@',
+                    old: None,
+                    new: None,
+                    text: format!("@@ old {} · new {} @@", r.old, r.new),
+                });
+                continue;
+            }
+            Kind::Removed => ('-', &f.old[r.old - 1]),
+            Kind::Added => ('+', &f.new[r.new - 1]),
+            // The old and the new line are equal (G5).
+            Kind::Same => (' ', &f.new[r.new - 1]),
         };
-        let (old, new) = match kind {
-            '-' => (Some(i as u32), None),
-            '+' => (None, Some(j as u32)),
-            _ => (Some(i as u32), Some(j as u32)),
-        };
-        let missing_newline = !line.ends_with(b"\n");
-        all.push(Row {
+        out.push(Row {
             kind,
-            old,
-            new,
+            old: number(r.old),
+            new: number(r.new),
             text: text(line),
         });
-        if missing_newline {
-            all.push(Row {
+        if !line.ends_with(b"\n") {
+            out.push(Row {
                 kind: '@',
                 old: None,
                 new: None,
                 text: "\\ No newline at end of file".into(),
             });
         }
-    }
-    // Keep rows near a change.
-    let changed: Vec<usize> = all
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.kind == '+' || r.kind == '-')
-        .map(|(k, _)| k)
-        .collect();
-    let near = |k: usize| changed.iter().any(|c| c.abs_diff(k) <= ctx);
-    let mut out: Vec<Row> = vec![];
-    let mut last: Option<usize> = None;
-    for (k, row) in all.into_iter().enumerate() {
-        if !near(k) {
-            continue;
-        }
-        if last.is_none_or(|l| l + 1 != k) && row.kind != '@' {
-            let (o, n) = (row.old.unwrap_or(0), row.new.unwrap_or(0));
-            out.push(Row {
-                kind: '@',
-                old: None,
-                new: None,
-                text: format!("@@ old {o} · new {n} @@"),
-            });
-        }
-        last = Some(k);
-        out.push(row);
     }
     out
 }
@@ -1033,6 +1010,23 @@ mod tests {
         assert!(short.iter().filter(|r| r.kind == '@').count() >= 2);
         let fresh = m.files.iter().find(|f| f.path() == "fresh.txt").unwrap();
         assert!(rows(fresh, 3).iter().any(|r| r.text.contains("No newline")));
+        // Every number names the line that the row shows, with any context.
+        for f in m.files.iter().filter(|f| !f.needs_name()) {
+            let (old, new) = (strip(&f.old), strip(&f.new));
+            for ctx in [0, 2, usize::MAX] {
+                for r in rows(f, ctx).iter().filter(|r| r.kind != '@') {
+                    if let Some(n) = r.old {
+                        assert_eq!(old[n as usize - 1], r.text, "{}", f.path());
+                    }
+                    if let Some(n) = r.new {
+                        assert_eq!(new[n as usize - 1], r.text, "{}", f.path());
+                    }
+                }
+            }
+        }
+        // A header carries the numbers of the next old and the next new line.
+        let gone = m.files.iter().find(|f| f.path() == "gone.txt").unwrap();
+        assert_eq!(rows(gone, 3)[0].text, "@@ old 1 · new 1 @@");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

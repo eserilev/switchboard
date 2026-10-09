@@ -710,6 +710,7 @@ Where the build differs from the text above:
 - Rename works on the live title (double-click). A click on a tile expands it.
 - Drag a tile onto another tile to move it. A move of less than 6 px is a click. The order is saved in the store (schema version 2) and kept after a restart.
 - Each `claude -p` run is killed after 30 minutes. Its stderr goes to its own thread.
+- A diff header `@@ old N · new M @@` gives the number of the next old line and of the next new line, also on a side where the next row has no line. The "No newline at end of file" note follows its line and does not count for the context cut.
 
 Tests:
 
@@ -743,6 +744,16 @@ The LLM proposes the review guide. A small checker decides if you see it. The ch
 
 `Accept` also needs every range to hold a changed line, and every line of a range to be at most 20 lines (`PAD`) from a changed line.
 
+The diff rows that the window draws come from the kernel too. `number_rows` gives each row a kind and its line numbers, with no text. `cut_rows` keeps the rows near a change. These statements need a file that rebuilds (`Rebuilds`: the first three parts of `FileGood`, so `Accept` gives it):
+
+- **G5.** Every row names the right lines. An old number `n` is a line `1 ≤ n ≤` the old line count: removed for a `-` row, not removed for a context row. The same holds for new numbers. A context row pairs two equal lines.
+- **G6.** The text of the `-` and context rows, in order, is exactly the old file. The text of the `+` and context rows is exactly the new file.
+- **G7.** Each line comes once. On each side, the numbers of the rows go 1, 2, …, line count, with no gap and no repeat.
+- **G8.** The cut keeps every `+` and `-` row and only rows at most `ctx` rows from one. It changes no row and keeps the order. It starts with a header, and a header marks every gap. A header carries the numbers of the next kept row. On a side where that row has no line, it carries the number of the next line of that side.
+- **G9.** `number_rows` and `cut_rows` never panic, on any input within the size bound. The cut is correct on any rows with no header.
+
+G5 to G9 need `removed + added ≤ usize::MAX` lines (G8 and G9: twice that). This is always true: a `Vec<u8>` takes 24 bytes, so a line list has fewer than `usize::MAX / 24` lines.
+
 ### The flow
 
 1. The app fetches the PR. The head must equal GitHub's `headRefOid`. The base is the merge base of GitHub's `baseRefOid` and the head, as on GitHub.
@@ -752,17 +763,18 @@ The LLM proposes the review guide. A small checker decides if you see it. The ch
 5. A file that GitHub lists and git does not change stops the review. A count difference for the same file is a warning, because rename detection can split counts.
 6. `guide_set_steps` runs the verified `check`. A refused guide goes back to the agent with every missed line and every bad range. After 3 refusals, the app keeps the good ranges and adds a step "Not in the guide" with every missed change.
 7. When the agent ends, the app checks the stored guide again. You only ever see a guide that `check` accepted.
-8. **The diff column draws from the model.** The rows are the model's lines and masks, walked in the order of the rebuild check. There is no second `git diff`. A test checks that the rows rebuild both versions of each file.
+8. **The diff column draws from the model, through the kernel.** `number_rows` walks the model's masks in the order of the rebuild check, and `cut_rows` keeps the rows near a change. The core only gets the text of each row, with one lookup by its number, so a number and its text cannot disagree. There is no second `git diff`.
 
 ### What stays trusted
 
 - git returns the right file content for a commit. git checks object hashes itself.
-- The window draws the accepted guide, and the diff rows from the model. The drawing code itself is not proved.
+- The window draws the accepted guide and the kernel's diff rows. The line numbers and the cut are proved (G5 to G9). Not proved: the text lookup by number, the UTF-8 decoding, the "No newline at end of file" note, the header text, and the drawing code.
 - Files with no changed line have nothing for the line checker: binary files, submodules, pure renames and mode changes. A step must name each one in `files`. That rule is plain code, not proved.
 - What the agent writes about the code. No checker can prove that an explanation is true.
 
 ### Tests
 
 - 40,000 random inputs compare `check` with a plain model of the spec.
-- The last 300 Lighthouse commits (`crates/core/tests/real_diffs.rs`): 2,449 files, 119,439 changed lines, 10 renames, 2 binary files. For each commit, the file list matches the git trees, every file rebuilds, the completed guide passes the checker, and the drawn rows rebuild both versions of every file.
+- 20,000 random files compare `cut_rows` with a plain model, and check the G5 to G7 facts on the rows.
+- The last 300 Lighthouse commits (`crates/core/tests/real_diffs.rs`): 2,449 files, 119,439 changed lines, 10 renames, 2 binary files. For each commit, the file list matches the git trees, every file rebuilds, the completed guide passes the checker, the drawn rows rebuild both versions of every file, and in the cut with context 12 every line number names the line that its row shows. Next to the old row code, the kernel rows were the same in 2,257 of 2,446 files. The other 189 differed only in header numbers where a side had no line (it was 0).
 - A live review of a real PR: the agent's guide passed the checker with no added step.

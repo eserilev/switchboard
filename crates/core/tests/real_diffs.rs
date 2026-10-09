@@ -52,6 +52,16 @@ fn every_recent_commit_rebuilds_and_completes() {
             let old: Vec<String> = all.iter().filter(|r| r.kind == '-' || r.kind == ' ').map(|r| r.text.clone()).collect();
             assert_eq!(new, strip(&f.new), "{c} {}", f.path());
             assert_eq!(old, strip(&f.old), "{c} {}", f.path());
+            // In the cut that the window draws, every number names the line that the row shows.
+            let (old, new) = (strip(&f.old), strip(&f.new));
+            for r in coverage::rows(f, 12).iter().filter(|r| r.kind != '@') {
+                if let Some(n) = r.old {
+                    assert_eq!(old[n as usize - 1], r.text, "{c} {}", f.path());
+                }
+                if let Some(n) = r.new {
+                    assert_eq!(new[n as usize - 1], r.text, "{c} {}", f.path());
+                }
+            }
         }
         let changed: usize = m.files.iter().map(|f| f.changed_lines()).sum();
         assert_eq!(
