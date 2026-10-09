@@ -128,7 +128,19 @@ pub struct DiffSection {
     pub ranges: Vec<coverage::Range>,
     /// Why a file has no lines to show: binary, submodule, rename, mode change.
     pub note: Option<String>,
+    /// In a step: the changed lines of the file that the step does not show.
+    pub other: Option<OtherChanges>,
 }
+
+/// Changed lines of a file outside the current step, and the steps that cover them.
+#[derive(Serialize, Clone, Debug)]
+pub struct OtherChanges {
+    pub lines: usize,
+    pub steps: Vec<String>,
+}
+
+/// Rows of context around a step's ranges. The ranges already hold some context.
+const STEP_CONTEXT: usize = 6;
 
 /// One changed file in the Files view.
 #[derive(Serialize, Clone, Debug)]
@@ -167,6 +179,7 @@ fn section(f: &coverage::ChangedFile) -> DiffSection {
         context: false,
         ranges: vec![],
         note: note(f),
+        other: None,
     }
 }
 
@@ -764,21 +777,59 @@ impl Hub {
                 add(fi, None, &mut sections);
             }
         }
+        // A step shows only its own part of each file. The bar names the rest.
+        let all_steps = self.guide_steps(id);
+        for sec in sections.iter_mut().filter(|sec| !sec.ranges.is_empty()) {
+            let Some(f) = model.files.iter().find(|f| f.path() == sec.path) else {
+                continue;
+            };
+            let (rows, hidden) = coverage::step_rows(f, &sec.ranges, STEP_CONTEXT);
+            sec.rows = rows;
+            if hidden.is_empty() {
+                continue;
+            }
+            let steps = all_steps
+                .iter()
+                .filter(|st| st.get("id").and_then(Value::as_str) != Some(step))
+                .filter(|st| {
+                    let rs = coverage::step_ranges(st);
+                    hidden.iter().any(|&(old, n)| {
+                        let path = if old { &f.old_path } else { &f.new_path };
+                        rs.iter().any(|g| {
+                            (g.side == "old") == old
+                                && path.as_deref() == Some(g.file.as_str())
+                                && g.from <= n
+                                && n <= g.to
+                        })
+                    })
+                })
+                .filter_map(|st| st.get("id").and_then(Value::as_str).map(str::to_owned))
+                .collect();
+            sec.other = Some(OtherChanges {
+                lines: hidden.len(),
+                steps,
+            });
+        }
         Ok(DiffView { sections })
     }
 
     /// Every changed file of the PR, in path order, with the steps that cover it.
-    pub fn review_files(&self, id: &str) -> Res<Vec<FileEntry>> {
-        let model = self.model(id)?;
+    /// The steps of the current guide, or none.
+    fn guide_steps(&self, id: &str) -> Vec<Value> {
         let guide: Option<Value> = self
             .reviews
             .lock()
             .unwrap()
             .get(id)
             .and_then(|r| r.row.guide.as_deref().and_then(|g| serde_json::from_str(g).ok()));
-        let steps: Vec<Value> = guide
+        guide
             .and_then(|g| g.get("steps").and_then(Value::as_array).cloned())
-            .unwrap_or_default();
+            .unwrap_or_default()
+    }
+
+    pub fn review_files(&self, id: &str) -> Res<Vec<FileEntry>> {
+        let model = self.model(id)?;
+        let steps = self.guide_steps(id);
         let mut files: Vec<FileEntry> = model
             .files
             .iter()

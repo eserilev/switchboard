@@ -318,3 +318,5 @@ tr.anchored td.ln::after { content: "●"; color: var(--accent); margin-left: 4p
 .guide h4.fpath { font: 600 15px/1.35 var(--mono); overflow-wrap: anywhere; }
 .ctx .clabel { font: 600 11px/24px var(--mono); color: var(--muted); }
 .chip.link { color: var(--accent); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.other { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 7px 14px; font: 12px/1.4 var(--body); color: var(--muted); background: var(--panel); border-bottom: 1px solid var(--line); }
+.other span { margin-right: 4px; }

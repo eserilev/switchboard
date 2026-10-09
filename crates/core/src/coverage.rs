@@ -729,17 +729,93 @@ pub fn compare_github(
 /// Here a row only gets its text, by one lookup with its own number, and a note
 /// when the line has no newline.
 pub fn rows(f: &ChangedFile, ctx: usize) -> Vec<crate::diff::Row> {
-    use crate::diff::Row;
-    use guide_check::Kind;
     // Only a model that failed the rebuild check has other lengths, and that stops the review.
     if f.removed.len() != f.old.len() || f.added.len() != f.new.len() {
         return vec![];
     }
+    let all = guide_check::number_rows(&f.removed, &f.added);
+    draw(f, &guide_check::cut_rows(&all, ctx))
+}
+
+/// The rows of one step: only the parts of the file that the step's ranges name.
+/// Each part is a slice of the numbered rows, cut by the proved `cut_rows`, so every
+/// row keeps its proved number and kind (G5 to G10). Only the slice bounds are plain
+/// code. A part grows past its range by at most `ctx` unchanged rows, and stops at a
+/// change that the range does not name.
+///
+/// Also returns the changed lines of the file that no part shows, as (old side, number).
+pub fn step_rows(f: &ChangedFile, ranges: &[Range], ctx: usize) -> (Vec<crate::diff::Row>, Vec<(bool, usize)>) {
+    use guide_check::Kind;
+    if f.removed.len() != f.old.len() || f.added.len() != f.new.len() {
+        return (vec![], vec![]);
+    }
+    let all = guide_check::number_rows(&f.removed, &f.added);
+    let shows = |r: &guide_check::Row, g: &Range| {
+        let n = if g.side == "old" { r.old } else { r.new };
+        n > 0 && g.from <= n && n <= g.to
+    };
+    let change = |k: usize| matches!(all[k].kind, Kind::Removed | Kind::Added);
+    let mut parts: Vec<(usize, usize)> = vec![];
+    for g in ranges {
+        let Some(mut lo) = (0..all.len()).find(|&k| shows(&all[k], g)) else {
+            continue;
+        };
+        let mut hi = (lo..all.len()).rev().find(|&k| shows(&all[k], g)).unwrap_or(lo);
+        for _ in 0..ctx {
+            if lo == 0 || change(lo - 1) {
+                break;
+            }
+            lo -= 1;
+        }
+        for _ in 0..ctx {
+            if hi + 1 >= all.len() || change(hi + 1) {
+                break;
+            }
+            hi += 1;
+        }
+        parts.push((lo, hi));
+    }
+    parts.sort();
+    let mut merged: Vec<(usize, usize)> = vec![];
+    for (lo, hi) in parts {
+        match merged.last_mut() {
+            Some(last) if lo <= last.1 + 1 => last.1 = last.1.max(hi),
+            _ => merged.push((lo, hi)),
+        }
+    }
+    let mut kernel: Vec<guide_check::Row> = vec![];
+    for &(lo, hi) in &merged {
+        // The cut numbers a header from the start of its slice (G8). Add the lines
+        // of each side that come before the slice.
+        let old_before = all[..lo].iter().filter(|r| r.old > 0).count();
+        let new_before = all[..lo].iter().filter(|r| r.new > 0).count();
+        for mut r in guide_check::cut_rows(&all[lo..=hi], ctx) {
+            if r.kind == Kind::Header {
+                r.old += old_before;
+                r.new += new_before;
+            }
+            kernel.push(r);
+        }
+    }
+    let hidden = (0..all.len())
+        .filter(|&k| change(k) && !merged.iter().any(|&(lo, hi)| lo <= k && k <= hi))
+        .map(|k| match all[k].kind {
+            Kind::Removed => (true, all[k].old),
+            _ => (false, all[k].new),
+        })
+        .collect();
+    (draw(f, &kernel), hidden)
+}
+
+/// Kernel rows to window rows: each row gets its text by its own number, and a note
+/// when the line has no newline.
+fn draw(f: &ChangedFile, rows: &[guide_check::Row]) -> Vec<crate::diff::Row> {
+    use crate::diff::Row;
+    use guide_check::Kind;
     let text = |l: &[u8]| String::from_utf8_lossy(l.strip_suffix(b"\n").unwrap_or(l)).into_owned();
     let number = |n: usize| (n > 0).then_some(n as u32);
-    let all = guide_check::number_rows(&f.removed, &f.added);
     let mut out: Vec<Row> = vec![];
-    for r in guide_check::cut_rows(&all, ctx) {
+    for r in rows {
         let (kind, line) = match r.kind {
             Kind::Header => {
                 out.push(Row {
@@ -777,6 +853,76 @@ pub fn rows(f: &ChangedFile, ctx: usize) -> Vec<crate::diff::Row> {
 mod tests {
     use super::*;
     use crate::repos::git;
+
+    /// A 40-line file with line 5 and line 30 changed.
+    fn two_hunks() -> ChangedFile {
+        let old: Vec<Vec<u8>> = (1..=40).map(|i| format!("l{i}\n").into_bytes()).collect();
+        let mut new = old.clone();
+        new[4] = b"five\n".to_vec();
+        new[29] = b"thirty\n".to_vec();
+        let mut mask = vec![false; 40];
+        mask[4] = true;
+        mask[29] = true;
+        ChangedFile {
+            old_path: Some("a.rs".into()),
+            new_path: Some("a.rs".into()),
+            binary: false,
+            submodule: false,
+            old,
+            new,
+            removed: mask.clone(),
+            added: mask,
+            additions: 2,
+            deletions: 2,
+        }
+    }
+
+    fn range(side: &str, from: usize, to: usize) -> Range {
+        Range { file: "a.rs".into(), side: side.into(), from, to }
+    }
+
+    #[test]
+    fn a_step_shows_only_its_part_of_the_file() {
+        let f = two_hunks();
+        let (rows, hidden) = step_rows(&f, &[range("old", 5, 5), range("new", 5, 5)], 3);
+        assert_eq!(rows[0].kind, '@');
+        assert_eq!(rows[0].text, "@@ old 2 · new 2 @@");
+        let shown: Vec<(char, Option<u32>, Option<u32>)> = rows.iter().filter(|r| r.kind != '@').map(|r| (r.kind, r.old, r.new)).collect();
+        assert!(shown.contains(&('-', Some(5), None)) && shown.contains(&('+', None, Some(5))));
+        assert!(shown.iter().all(|r| r.1.unwrap_or(0) <= 8 && r.2.unwrap_or(0) <= 8), "{shown:?}");
+        assert_eq!(hidden, [(true, 30), (false, 30)]);
+        // Every row is a row of the full diff, with the same kind and numbers.
+        let full = rows_all(&f);
+        assert!(shown.iter().all(|r| full.contains(r)));
+    }
+
+    #[test]
+    fn two_ranges_give_two_parts_with_a_header_each() {
+        let f = two_hunks();
+        let all = [range("old", 5, 5), range("new", 5, 5), range("old", 30, 30), range("new", 30, 30)];
+        let (rows, hidden) = step_rows(&f, &all, 3);
+        assert!(hidden.is_empty());
+        assert_eq!(rows.iter().filter(|r| r.kind == '@').count(), 2);
+        // With every range, the step rows are the same as the cut of the whole file.
+        assert_eq!(rows, super::rows(&f, 3));
+    }
+
+    #[test]
+    fn a_part_does_not_grow_into_another_change() {
+        let f = two_hunks();
+        // A wide range on the new side only: the old line 30 is not named.
+        let (rows, hidden) = step_rows(&f, &[range("new", 31, 35)], 3);
+        assert_eq!(hidden, [(true, 5), (false, 5), (true, 30), (false, 30)]);
+        assert!(!rows.iter().any(|r| r.kind == '-' || r.kind == '+'), "{rows:?}");
+        // A removed line inside a range is shown: the part is one piece of the file.
+        let (rows, hidden) = step_rows(&f, &[range("new", 25, 30)], 3);
+        assert_eq!(hidden, [(true, 5), (false, 5)]);
+        assert!(rows.iter().any(|r| r.kind == '-' && r.old == Some(30)));
+    }
+
+    fn rows_all(f: &ChangedFile) -> Vec<(char, Option<u32>, Option<u32>)> {
+        super::rows(f, usize::MAX / 4).into_iter().filter(|r| r.kind != '@').map(|r| (r.kind, r.old, r.new)).collect()
+    }
 
     #[test]
     fn lines_keep_their_newline() {

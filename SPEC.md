@@ -289,7 +289,7 @@ Opening a layout starts all its panes. Panes that already run are not started ag
 | Column | Content |
 |---|---|
 | Steps | The guide in reading order. Each step: title, path and lines, a check mark, the thread count, a stale mark (11.7). |
-| Guide + diff | The current step: what the code does, what to check, pins, context links. Under it, the diff at the PR head, with the step lines marked. |
+| Guide + diff | The current step: what the code does, what to check, pins, context links. Under it, the diff at the PR head: only the parts of each file that the step's ranges name, with 6 rows of context. A bar counts the other changed lines of the file, links the steps that cover them, and opens the whole file in the Files view. |
 | Threads | The threads of the current step. Below them, the drafts. |
 
 A review has its own tab. More than one review can be open, one tab for each PR.
@@ -770,6 +770,7 @@ G5 to G10 need `removed + added ≤ usize::MAX` lines (G8 and G9: twice that). T
 
 - git returns the right file content for a commit. git checks object hashes itself.
 - The window draws the accepted guide and the kernel's diff rows. The line numbers, the row kinds and the cut are proved (G5 to G10). Not proved: the text lookup by number, the UTF-8 decoding, the "No newline at end of file" note, the header text, and the drawing code.
+- A step shows only its part of a file (`step_rows`). Each part is a slice of the proved rows, cut by the proved `cut_rows`, so rows keep their proved numbers and kinds. Not proved: the slice bounds, and the offset that the app adds to the header numbers of a slice, because the cut numbers a header from the start of its slice.
 - Files with no changed line have nothing for the line checker: binary files, submodules, pure renames and mode changes. A step must name each one in `files`. That rule is plain code, not proved.
 - What the agent writes about the code. No checker can prove that an explanation is true.
 
@@ -778,4 +779,5 @@ G5 to G10 need `removed + added ≤ usize::MAX` lines (G8 and G9: twice that). T
 - 40,000 random inputs compare `check` with a plain model of the spec.
 - 20,000 random files compare `cut_rows` with a plain model, and check the G5 to G7 facts on the rows.
 - The last 300 Lighthouse commits (`crates/core/tests/real_diffs.rs`): 2,449 files, 119,439 changed lines, 10 renames, 2 binary files. For each commit, the file list matches the git trees, every file rebuilds, the completed guide passes the checker, the drawn rows rebuild both versions of every file, and in the cut with context 12 every line number names the line that its row shows. Next to the old row code, the kernel rows were the same in 2,257 of 2,446 files. The other 189 differed only in header numbers where a side had no line (it was 0).
+- On the same 300 commits, each range of the completed guide is drawn as its own step. Every step row is a row of the full diff, every header names the numbers of its next row, and the steps together show every changed line.
 - A live review of a real PR: the agent's guide passed the checker with no added step.

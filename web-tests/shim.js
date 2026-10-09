@@ -54,7 +54,7 @@ window.__TAURI__ = {
         case "reviews": return d.reviews;
         case "layouts": return ["day"];
         case "review_view": return d.reviews[0];
-        case "review_diff": return d.diff;
+        case "review_diff": return { sections: d.diff.sections.map((x) => ({ ...x, other: { lines: 4, steps: ["s1"] } })) };
         case "review_ask": return "t2";
         case "pane_expand": return btoa("\x1b[H\x1b[2Jhello from the live pane\r\n$ ");
         case "pane_open": return pane({ id: "p9", tree: args.req.repo });

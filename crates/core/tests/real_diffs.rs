@@ -63,6 +63,42 @@ fn every_recent_commit_rebuilds_and_completes() {
                 }
             }
         }
+        // Each range of the guide as its own step: the step rows are rows of the full
+        // diff, each header names the next row, and together the steps show every change.
+        let ranges: Vec<coverage::Range> = g["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(coverage::step_ranges)
+            .collect();
+        for f in m.files.iter().filter(|f| !f.needs_name()) {
+            let key = |r: &switchboard_core::diff::Row| (r.kind, r.old, r.new);
+            let full: std::collections::HashSet<_> = coverage::rows(f, usize::MAX).iter().filter(|r| r.kind != '@').map(key).collect();
+            let mut seen = std::collections::HashSet::new();
+            for g in ranges.iter().filter(|g| {
+                let p = if g.side == "old" { &f.old_path } else { &f.new_path };
+                p.as_deref() == Some(g.file.as_str())
+            }) {
+                let (rows, _) = coverage::step_rows(f, std::slice::from_ref(g), 6);
+                for (k, r) in rows.iter().enumerate() {
+                    if r.kind == '@' {
+                        if let Some(q) = rows.get(k + 1).filter(|q| q.kind != '@') {
+                            let want = format!("@@ old {} · new {} @@", q.old.map_or_else(|| "?".into(), |n| n.to_string()), q.new.map_or_else(|| "?".into(), |n| n.to_string()));
+                            let (o, n) = (q.old.is_some(), q.new.is_some());
+                            let parts: Vec<&str> = r.text.split(' ').collect();
+                            assert!(!o || parts[2] == want.split(' ').nth(2).unwrap(), "{c} {} {} vs {want}", f.path(), r.text);
+                            assert!(!n || parts[5] == want.split(' ').nth(5).unwrap(), "{c} {} {} vs {want}", f.path(), r.text);
+                        }
+                        continue;
+                    }
+                    assert!(full.contains(&key(r)), "{c} {}: {r:?}", f.path());
+                    if r.kind != ' ' {
+                        seen.insert(key(r));
+                    }
+                }
+            }
+            assert_eq!(seen.len(), f.changed_lines(), "{c} {}: the steps show every change", f.path());
+        }
         let changed: usize = m.files.iter().map(|f| f.changed_lines()).sum();
         assert_eq!(
             missed, changed,

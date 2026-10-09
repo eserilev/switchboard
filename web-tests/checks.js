@@ -235,6 +235,12 @@
   await wait(100);
   check("n marks the step", called("review_mark").some((c) => c[1].step === "s2" && c[1].checked));
 
+  // A step shows only its part of a file; a bar names the other changes.
+  check("the bar names the other changes and their steps", $("#rdiff .other")?.textContent.includes("4 more changed lines are in") && !!$('#rdiff .other [data-ostep="0"]'), $("#rdiff .other")?.textContent);
+  $("#rdiff [data-whole]").click();
+  await wait(150);
+  check("Show the whole file opens it in Files", $('#rmode [data-mode="files"]').getAttribute("aria-pressed") === "true" && $('#rsteps [aria-current="step"]')?.dataset.f === "beacon_node/gloas.rs" && !$("#rdiff .other"));
+
   // Files: every changed file, like GitHub's "Files changed".
   $('#rmode [data-mode="files"]').click();
   await wait(150);

@@ -332,13 +332,26 @@
       }).join("");
       const moved = sec.old_path && sec.old_path !== sec.path ? ` <span class="ctxnote">from ${esc(sec.old_path)}</span>` : "";
       const note = sec.note ? ` <span class="ctxnote">${esc(sec.note)}</span>` : "";
+      // A step shows only its part of the file. This bar names the other changes.
+      const o = sec.other;
+      const links = o ? o.steps.map((sid) => steps(r).findIndex((x) => x.id === sid)).filter((i) => i >= 0)
+        .map((i) => `<button class="chip link" data-ostep="${i}">Step ${i + 1}</button>`).join("") : "";
+      const bar = o ? `<div class="other"><span>This step shows only its part of the file. ${o.lines} more changed line${o.lines === 1 ? " is" : "s are"} ${links ? "in" : "outside this step."}</span>${links}<button class="btn small" data-whole="${esc(sec.path)}">Show the whole file</button></div>` : "";
       return `<div class="file"><span>${esc(sec.path)}${moved}${note}${sec.context ? ' <span class="ctxnote">not changed by the PR</span>' : ""}</span><button class="tool" data-nvim="${si}">nvim</button></div>
-        <div class="codewrap"><table class="code">${rows}</table></div>`;
+        ${bar}<div class="codewrap"><table class="code">${rows}</table></div>`;
     }).join("");
     $("#rdiff").innerHTML = html;
     wireComments(r, d);
     $("#rdiff").onclick = async (e) => {
       if (e.target.closest(".drow, .crow")) return;
+      const os = e.target.closest("[data-ostep]");
+      if (os) { go(r.id, +os.dataset.ostep); return; }
+      const whole = e.target.closest("[data-whole]");
+      if (whole) {
+        l.file = whole.dataset.whole;
+        setMode(r.id, "files");
+        return;
+      }
       const cm = e.target.closest("[data-cm]");
       if (cm) { compose(r, d, cm, e.shiftKey); return; }
       const nv = e.target.closest("[data-nvim]");
