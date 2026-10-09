@@ -264,14 +264,20 @@ impl Hub {
     }
 
     fn review_prepare(&self, id: &str) -> Res<()> {
+        let t0 = std::time::Instant::now();
+        let ms = || t0.elapsed().as_millis() as u64;
         let (url, repo) = {
             let r = self.reviews.lock().unwrap();
             let r = r.get(id).ok_or("gone")?;
             (r.row.url.clone(), r.row.repo.clone())
         };
+        tracing::info!(target: "sb::review", review = id, %url, "review: gh pr view");
         let pr = review::gh_view(&url)?;
+        tracing::info!(target: "sb::review", review = id, ms = ms(), files = pr.files.len(), head = %pr.head_ref_oid, "review: got the PR");
         let (dir, remote) = self.find_clone(&repo)?;
+        tracing::info!(target: "sb::review", review = id, ms = ms(), clone = %dir.display(), %remote, "review: found the clone");
         let f = review::fetch(&dir, &remote, &pr)?;
+        tracing::info!(target: "sb::review", review = id, ms = ms(), tree = %f.tree.display(), "review: worktree ready");
         if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
             r.row.title = pr.title.clone();
             r.row.head = f.head.clone();
@@ -284,8 +290,13 @@ impl Hub {
 
     /// The local clone of `owner/name`, and the remote that points at it.
     fn find_clone(&self, repo: &str) -> Res<(PathBuf, String)> {
-        for r in self.repos() {
-            let p = PathBuf::from(&r.path);
+        // Only remotes matter here, so skip `git status`: it is slow in a big repo.
+        let roots: Vec<PathBuf> = self.config().scan.iter().map(|s| expand(s)).collect();
+        let candidates = repos::candidates(&self.paths.claude.join("projects"), &roots);
+        tracing::debug!(target: "sb::review", count = candidates.len(), %repo, "looking for a clone");
+        let mut by_time: Vec<(PathBuf, u64)> = candidates.into_iter().collect();
+        by_time.sort_by_key(|x| std::cmp::Reverse(x.1));
+        for (p, _) in by_time {
             if let Some(remote) = review::find_remote(&p, repo) {
                 return Ok((p, remote));
             }

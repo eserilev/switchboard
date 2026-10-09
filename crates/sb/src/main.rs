@@ -14,8 +14,31 @@ use switchboard_core::{connections, hooks, now};
 
 mod mcp;
 
+/// `sb` logs to `~/.switchboard/logs/sb.log`. `SB_LOG` sets the filter; the default is `info`.
+fn init_logs() {
+    let dir = Paths::from_env().home.join("logs");
+    let _ = std::fs::create_dir_all(&dir);
+    let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("sb.log"))
+    else {
+        return;
+    };
+    let filter =
+        tracing_subscriber::EnvFilter::try_from_env("SB_LOG").unwrap_or_else(|_| "info".into());
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(false)
+        .with_writer(std::sync::Mutex::new(file))
+        .try_init();
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The MCP server talks on stdout, so it never logs there; the file is fine.
+    init_logs();
+    let t0 = std::time::Instant::now();
     let code = match args.first().map(String::as_str) {
         Some("state") => state(args.get(1).map(String::as_str).unwrap_or("")),
         Some("permit") => permit(),
@@ -33,6 +56,7 @@ fn main() {
             2
         }
     };
+    tracing::info!(target: "sb::cli", args = ?args, code, ms = t0.elapsed().as_millis() as u64, pane = ?std::env::var("SB_PANE").ok(), "sb");
     std::process::exit(code);
 }
 
@@ -45,7 +69,10 @@ fn stdin_json() -> Value {
 /// Sends one request. With `reply`, waits for one line back.
 pub fn send(req: &Request, reply: bool) -> Result<Option<String>, String> {
     let sock = Paths::from_env().sock();
-    let mut s = UnixStream::connect(&sock).map_err(|e| format!("{}: {e}", sock.display()))?;
+    let mut s = UnixStream::connect(&sock).map_err(|e| {
+        tracing::warn!(target: "sb::cli", sock = %sock.display(), %e, "no Switchboard socket");
+        format!("{}: {e}", sock.display())
+    })?;
     writeln!(
         s,
         "{}",

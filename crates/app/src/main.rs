@@ -66,15 +66,27 @@ impl AppSink {
 type Res<T> = Result<T, String>;
 type H<'a> = State<'a, Arc<Hub>>;
 
-/// Runs blocking hub work off the async runtime.
+/// Runs blocking hub work off the async runtime. Errors and slow calls go to the log.
 async fn run<T: Send + 'static>(
+    name: &'static str,
     hub: &Arc<Hub>,
     f: impl FnOnce(&Hub) -> Res<T> + Send + 'static,
 ) -> Res<T> {
     let hub = Arc::clone(hub);
-    tauri::async_runtime::spawn_blocking(move || f(&hub))
+    let t0 = std::time::Instant::now();
+    let out = tauri::async_runtime::spawn_blocking(move || f(&hub))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let ms = t0.elapsed().as_millis() as u64;
+    match &out {
+        Err(err) => tracing::warn!(target: "sb::cmd", cmd = name, ms, %err, "command failed"),
+        Ok(_) if ms > 1000 => tracing::warn!(target: "sb::cmd", cmd = name, ms, "slow command"),
+        Ok(_) if name == "pane_input" => {
+            tracing::trace!(target: "sb::cmd", cmd = name, ms, "command")
+        }
+        Ok(_) => tracing::debug!(target: "sb::cmd", cmd = name, ms, "command"),
+    }
+    out
 }
 
 macro_rules! commands {
@@ -82,7 +94,7 @@ macro_rules! commands {
         $(
             #[tauri::command]
             async fn $name(hub: H<'_>, $($arg: $ty),*) -> Res<$ret> {
-                run(&hub, move |$h: &Hub| $body).await
+                run(stringify!($name), &hub, move |$h: &Hub| $body).await
             }
         )*
     };
@@ -141,7 +153,41 @@ async fn pane_input(hub: H<'_>, id: String, data: String, binary: bool) -> Res<(
     } else {
         data.into_bytes()
     };
-    run(&hub, move |h| h.input(&id, &bytes)).await
+    run("pane_input", &hub, move |h| h.input(&id, &bytes)).await
+}
+
+/// Log lines from the window.
+#[tauri::command]
+fn log(level: String, message: String) {
+    match level.as_str() {
+        "error" => tracing::error!(target: "sb::web", "{message}"),
+        "warn" => tracing::warn!(target: "sb::web", "{message}"),
+        "debug" => tracing::debug!(target: "sb::web", "{message}"),
+        _ => tracing::info!(target: "sb::web", "{message}"),
+    }
+}
+
+/// Logs go to `~/.switchboard/logs/switchboard.log` and to stderr.
+/// `SB_LOG` sets the filter, for example `SB_LOG=sb=trace`. The default is `info,sb=debug`.
+fn init_logs(paths: &Paths) -> tracing_appender::non_blocking::WorkerGuard {
+    use tracing_subscriber::prelude::*;
+    let dir = paths.home.join("logs");
+    let _ = std::fs::create_dir_all(&dir);
+    let (file, guard) =
+        tracing_appender::non_blocking(tracing_appender::rolling::never(&dir, "switchboard.log"));
+    let filter = tracing_subscriber::EnvFilter::try_from_env("SB_LOG")
+        .unwrap_or_else(|_| "info,sb=debug".into());
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(file)
+                .with_ansi(false),
+        )
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .init();
+    tracing::info!(target: "sb::app", version = env!("CARGO_PKG_VERSION"), log = %dir.join("switchboard.log").display(), "Switchboard starting");
+    guard
 }
 
 fn sb_path() -> PathBuf {
@@ -153,12 +199,19 @@ fn sb_path() -> PathBuf {
 }
 
 fn main() {
+    let paths = Paths::from_env();
+    let _logs = init_logs(&paths);
+    std::panic::set_hook(Box::new(
+        |info| tracing::error!(target: "sb::app", %info, "panic"),
+    ));
     tauri::Builder::default()
         .setup(|app| {
             let sink = Arc::new(AppSink {
                 handle: app.handle().clone(),
             });
-            let hub = Hub::start(Paths::from_env(), sb_path(), sink)?;
+            let hub = Hub::start(Paths::from_env(), sb_path(), sink).inspect_err(
+                |err| tracing::error!(target: "sb::app", %err, "the hub did not start"),
+            )?;
             app.manage(hub);
             Ok(())
         })
@@ -200,6 +253,7 @@ fn main() {
             review_retry,
             review_close,
             review_nvim,
+            log,
         ])
         .run(tauri::generate_context!())
         .expect("the window failed to start");

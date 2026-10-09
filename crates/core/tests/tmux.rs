@@ -207,3 +207,53 @@ fn kill_server_ends_the_client() {
     assert!(exited);
     assert!(s.tmux.panes().is_err());
 }
+
+/// Key to echo time through the control client, with tile captures running
+/// at the same time, as the ticker does. Prints the numbers.
+#[test]
+fn key_echo_latency_under_load() {
+    let s = server("latency");
+    let pane = s.tmux.new_pane(&s.dir, &["cat"], &[]).unwrap();
+    let mut others = vec![];
+    for _ in 0..8 {
+        others.push(
+            s.tmux
+                .new_pane(
+                    &s.dir,
+                    &["sh", "-c", "while :; do date; sleep 0.05; done"],
+                    &[],
+                )
+                .unwrap(),
+        );
+    }
+    for o in &others {
+        s.tmux.set_streaming(o, false).unwrap();
+    }
+    drain(&s);
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (t, st, os) = (s.tmux.clone(), stop.clone(), others.clone());
+    let load = std::thread::spawn(move || {
+        while !st.load(std::sync::atomic::Ordering::Relaxed) {
+            for o in &os {
+                let _ = t.capture(o, "-18");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    });
+    let mut times = vec![];
+    for i in 0..40 {
+        let mark = format!("k{i:02}");
+        let t0 = Instant::now();
+        s.tmux.send_bytes(&pane, mark.as_bytes()).unwrap();
+        output_until(&s, &pane, &mark);
+        times.push(t0.elapsed().as_secs_f64() * 1000.0);
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    load.join().unwrap();
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    println!(
+        "key echo ms: p50 {:.1} p90 {:.1} max {:.1}",
+        times[20], times[36], times[39]
+    );
+    assert!(times[36] < 100.0, "p90 key echo is {:.1} ms", times[36]);
+}

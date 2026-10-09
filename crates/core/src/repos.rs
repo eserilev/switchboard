@@ -25,14 +25,24 @@ pub struct Worktree {
 }
 
 pub fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let t0 = std::time::Instant::now();
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
+        .stdin(std::process::Stdio::null())
         .output()
         .map_err(|e| format!("git: {e}"))?;
+    let ms = t0.elapsed().as_millis() as u64;
     if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+        tracing::debug!(target: "sb::git", ms, dir = %dir.display(), ?args, %err, "git failed");
+        return Err(err);
+    }
+    if ms > 1000 {
+        tracing::warn!(target: "sb::git", ms, dir = %dir.display(), ?args, "slow git");
+    } else {
+        tracing::trace!(target: "sb::git", ms, dir = %dir.display(), ?args, "git");
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_owned())
 }
@@ -173,6 +183,16 @@ pub fn parse_worktrees(text: &str, main: &Path) -> Vec<Worktree> {
 
 /// The full repo list: Claude sessions first by time, then scanned repos by name.
 pub fn discover(projects: &Path, roots: &[PathBuf]) -> Vec<Repo> {
+    let mut repos: Vec<Repo> = candidates(projects, roots)
+        .into_iter()
+        .filter_map(|(p, t)| info(&p, t))
+        .collect();
+    repos.sort_by(|a, b| b.last_used.cmp(&a.last_used).then(a.name.cmp(&b.name)));
+    repos
+}
+
+/// The main checkouts, with the last session time, and no `git status`. Fast.
+pub fn candidates(projects: &Path, roots: &[PathBuf]) -> BTreeMap<PathBuf, u64> {
     let mut used: BTreeMap<PathBuf, u64> = BTreeMap::new();
     for (cwd, t) in session_dirs(projects) {
         if !cwd.is_dir() {
@@ -190,9 +210,7 @@ pub fn discover(projects: &Path, roots: &[PathBuf]) -> Vec<Repo> {
             }
         }
     }
-    let mut repos: Vec<Repo> = used.into_iter().filter_map(|(p, t)| info(&p, t)).collect();
-    repos.sort_by(|a, b| b.last_used.cmp(&a.last_used).then(a.name.cmp(&b.name)));
-    repos
+    used
 }
 
 /// The folder for a new worktree: next to the repo, `<repo>-<branch>`.

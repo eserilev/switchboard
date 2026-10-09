@@ -24,14 +24,20 @@ const S = {
   repos: [],
 };
 
+// Window logs go to the app log through the `log` command.
+const log = (level, ...parts) => invoke("log", { level, message: parts.map(String).join(" ") }).catch(() => {});
+window.addEventListener("error", (e) => log("error", "window error:", e.message, e.filename + ":" + e.lineno));
+window.addEventListener("unhandledrejection", (e) => log("error", "unhandled rejection:", e.reason));
+
 function toast(msg) {
+  log("warn", "toast:", msg);
   const t = $("#toast");
   t.textContent = String(msg);
   t.hidden = false;
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => (t.hidden = true), 7000);
 }
-const call = (cmd, args) => invoke(cmd, args).catch((e) => { toast(e); throw e; });
+const call = (cmd, args) => invoke(cmd, args).catch((e) => { log("warn", cmd, "failed:", e); toast(e); throw e; });
 
 // ---------- tabs ----------
 
@@ -100,7 +106,18 @@ function tile(p) {
   </div>`;
 }
 
+// Many pane events can come in one frame. Draw the board once per frame.
+let drawQueued = false;
 function drawBoard() {
+  if (drawQueued) return;
+  drawQueued = true;
+  // A hidden window gets no frames, so a timer backs the frame up.
+  const go = () => { if (drawQueued) { drawQueued = false; drawBoardNow(); } };
+  requestAnimationFrame(go);
+  setTimeout(go, 50);
+}
+
+function drawBoardNow() {
   // A redraw in the middle of a drag throws away the tile under the pointer.
   if (drag?.on) { drawLater = true; return; }
   const shown = S.panes.filter((p) => p.id !== S.live);
@@ -178,7 +195,7 @@ function moveTile(id, target, after) {
   if (at < 0) return;
   ids.splice(after ? at + 1 : at, 0, id);
   S.panes.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
-  drawBoard();
+  drawBoardNow();
   $(`#board .pane[data-id="${CSS.escape(id)}"]`)?.focus();
   call("pane_reorder", { ids });
 }
@@ -250,12 +267,39 @@ const fit = new FitAddon.FitAddon();
 term.loadAddon(fit);
 term.open($("#term"));
 term.attachCustomKeyEventHandler((e) => !(e.ctrlKey && e.code === "Space"));
-// Keys go one at a time, so fast typing keeps its order.
-let inputQ = Promise.resolve();
+// Keys go in order. While one send is on its way, new keys wait in a buffer,
+// and the next send takes them all at once. So fast typing costs one round trip.
+let pendingKeys = "";
+let pendingPane = null;
+let sending = false;
+async function flushKeys() {
+  if (sending || !pendingKeys) return;
+  sending = true;
+  const id = pendingPane;
+  const data = pendingKeys;
+  pendingKeys = "";
+  try {
+    await invoke("pane_input", { id, data, binary: false });
+  } catch (e) {
+    log("warn", "pane_input failed:", e);
+  }
+  sending = false;
+  flushKeys();
+}
 const send = (data, binary) => {
   if (!S.live || S.tab !== "board") return;
-  const id = S.live;
-  inputQ = inputQ.then(() => invoke("pane_input", { id, data, binary })).catch(() => {});
+  if (binary) {
+    // Mouse reports are bytes, not text: they go on their own, after the keys.
+    const id = S.live;
+    const before = pendingKeys;
+    pendingKeys = "";
+    if (before) invoke("pane_input", { id, data: before, binary: false }).catch(() => {});
+    invoke("pane_input", { id, data, binary: true }).catch(() => {});
+    return;
+  }
+  if (pendingPane !== S.live) { pendingKeys = ""; pendingPane = S.live; }
+  pendingKeys += data;
+  flushKeys();
 };
 term.onData((data) => send(data, false));
 term.onBinary((data) => send(data, true));
@@ -277,6 +321,7 @@ let fitTimer;
 new ResizeObserver(() => { clearTimeout(fitTimer); fitTimer = setTimeout(fitLive, 60); }).observe($("#live"));
 
 async function expand(id) {
+  log("info", "expand", id);
   if (!paneById(id)) return;
   if (S.tab !== "board") setTab("board");
   S.live = id;
@@ -284,7 +329,7 @@ async function expand(id) {
   drawn = false;
   held = [];
   $("#live").hidden = false;
-  drawBoard();
+  drawBoardNow();
   // Let the layout settle so the fit sees the real size.
   await new Promise((r) => setTimeout(r, 0));
   fit.fit();
@@ -297,6 +342,7 @@ async function expand(id) {
     held.splice(0).forEach((b) => term.write(b));
     drawn = true;
     term.focus();
+    log("info", "expanded", id, "cols", term.cols, "rows", term.rows, "focus in terminal:", document.activeElement === term.textarea);
   } catch (e) {
     toast(e);
     collapse();
@@ -308,7 +354,7 @@ function collapse() {
   S.live = null;
   $("#live").hidden = true;
   invoke("pane_collapse").catch(() => {});
-  drawBoard();
+  drawBoardNow();
   if (was) $(`.pane[data-id="${CSS.escape(was)}"]`)?.focus();
 }
 

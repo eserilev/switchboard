@@ -50,6 +50,8 @@ pub struct PrInfo {
     pub head_ref_name: String,
     pub base_ref_name: String,
     #[serde(default)]
+    pub base_ref_oid: String,
+    #[serde(default)]
     pub files: Vec<PrFile>,
 }
 
@@ -69,7 +71,7 @@ pub fn gh_view(url: &str) -> Result<PrInfo, String> {
             "view",
             url,
             "--json",
-            "number,title,body,headRefOid,headRefName,baseRefName,files",
+            "number,title,body,headRefOid,headRefName,baseRefName,baseRefOid,files",
         ])
         .stdin(Stdio::null())
         .output()
@@ -114,20 +116,52 @@ pub struct Fetched {
 /// Fetches the PR head and base, and puts the head in its own worktree.
 pub fn fetch(repo_dir: &Path, remote: &str, pr: &PrInfo) -> Result<Fetched, String> {
     let branch = format!("sb-pr-{}", pr.number);
-    git(
-        repo_dir,
-        &[
-            "fetch",
-            "-q",
-            remote,
-            &format!("+pull/{}/head:refs/heads/{branch}", pr.number),
-        ],
-    )?;
-    git(repo_dir, &["fetch", "-q", remote, &pr.base_ref_name])?;
-    let base_tip = git(repo_dir, &["rev-parse", "FETCH_HEAD"])?;
+    let have = |oid: &str| {
+        !oid.is_empty() && git(repo_dir, &["cat-file", "-e", &format!("{oid}^{{commit}}")]).is_ok()
+    };
+    // Fetch only what is missing. A fetch from a big remote takes long.
+    let t0 = std::time::Instant::now();
+    if have(&pr.head_ref_oid) {
+        tracing::info!(target: "sb::review", head = %pr.head_ref_oid, "PR head is already local");
+        git(
+            repo_dir,
+            &[
+                "update-ref",
+                &format!("refs/heads/{branch}"),
+                &pr.head_ref_oid,
+            ],
+        )?;
+    } else {
+        tracing::info!(target: "sb::review", remote, number = pr.number, "fetching the PR head");
+        git(
+            repo_dir,
+            &[
+                "fetch",
+                "-q",
+                "--no-tags",
+                remote,
+                &format!("+pull/{}/head:refs/heads/{branch}", pr.number),
+            ],
+        )?;
+        tracing::info!(target: "sb::review", ms = t0.elapsed().as_millis() as u64, "fetched the PR head");
+    }
+    let base_tip = if have(&pr.base_ref_oid) {
+        tracing::info!(target: "sb::review", base = %pr.base_ref_oid, "PR base is already local");
+        pr.base_ref_oid.clone()
+    } else {
+        let t1 = std::time::Instant::now();
+        tracing::info!(target: "sb::review", remote, base = %pr.base_ref_name, "fetching the PR base");
+        git(
+            repo_dir,
+            &["fetch", "-q", "--no-tags", remote, &pr.base_ref_name],
+        )?;
+        tracing::info!(target: "sb::review", ms = t1.elapsed().as_millis() as u64, "fetched the PR base");
+        git(repo_dir, &["rev-parse", "FETCH_HEAD"])?
+    };
     let head = git(repo_dir, &["rev-parse", &branch])?;
     let base = git(repo_dir, &["merge-base", &base_tip, &head])?;
     let tree = worktree_path(repo_dir, &format!("pr{}", pr.number));
+    tracing::info!(target: "sb::review", tree = %tree.display(), exists = tree.exists(), "PR worktree");
     if tree.exists() {
         git(&tree, &["checkout", "-q", "--detach", &head])?;
     } else {
@@ -366,6 +400,8 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
     });
     // A watchdog kills a run that takes too long.
     let pid = child.id();
+    let t0 = std::time::Instant::now();
+    tracing::info!(target: "sb::claude", pid, cwd = %run.cwd.display(), resume = ?run.resume, fork = run.fork, prompt = %crate::proto::first_line(run.prompt, 100), "claude -p started");
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
     let watchdog = std::thread::spawn(move || {
         if done_rx.recv_timeout(RUN_TIMEOUT).is_err() {
@@ -377,6 +413,15 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
     let mut last = None;
     for line in BufReader::new(out).lines().map_while(Result::ok) {
         if let Some(ev) = parse_stream(&line) {
+            match &ev {
+                Stream::Init { session } => {
+                    tracing::info!(target: "sb::claude", pid, %session, ms = t0.elapsed().as_millis() as u64, "claude -p session")
+                }
+                Stream::Result { error, .. } => {
+                    tracing::info!(target: "sb::claude", pid, error, ms = t0.elapsed().as_millis() as u64, "claude -p result")
+                }
+                Stream::Delta(_) => {}
+            }
             on(&ev);
             if matches!(ev, Stream::Result { .. }) {
                 last = Some(ev);
@@ -387,6 +432,10 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
     let _ = done_tx.send(());
     let killed = watchdog.join().unwrap_or(false);
     let err = err_text.join().unwrap_or_default();
+    tracing::info!(target: "sb::claude", pid, ms = t0.elapsed().as_millis() as u64, %status, killed, got_result = last.is_some(), "claude -p ended");
+    if !err.trim().is_empty() {
+        tracing::debug!(target: "sb::claude", pid, stderr = %err.trim(), "claude -p stderr");
+    }
     if killed {
         return Err(format!(
             "claude took longer than {} minutes and was stopped.",
@@ -530,6 +579,7 @@ mod tests {
             head_ref_oid: "h".into(),
             head_ref_name: "x".into(),
             base_ref_name: "unstable".into(),
+            base_ref_oid: String::new(),
             files: vec![PrFile {
                 path: "a.rs".into(),
                 additions: 3,

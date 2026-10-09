@@ -116,6 +116,8 @@ impl Store {
 
     fn init(db: Connection) -> R<Store> {
         db.pragma_update(None, "journal_mode", "WAL")?;
+        // With WAL, NORMAL is safe and skips a disk sync on every write.
+        db.pragma_update(None, "synchronous", "NORMAL")?;
         let version: usize = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
         for (i, sql) in SCHEMA.iter().enumerate().skip(version) {
             db.execute_batch(&format!(

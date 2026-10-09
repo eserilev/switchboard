@@ -64,9 +64,17 @@ impl From<io::Error> for Error {
 
 type Reply = Result<Vec<String>, Error>;
 
+/// Who gets the reply of a command.
+enum Waiter {
+    /// A caller waits for it.
+    Caller(Sender<Reply>),
+    /// Nobody waits. An error goes to the log. Keys use this, so typing never waits on tmux.
+    Log(String),
+}
+
 struct Link {
     stdin: ChildStdin,
-    waiters: VecDeque<Sender<Reply>>,
+    waiters: VecDeque<Waiter>,
     open: bool,
 }
 
@@ -109,7 +117,7 @@ impl Tmux {
         let (first_tx, first_rx) = mpsc::channel();
         let link = Arc::new(Mutex::new(Link {
             stdin,
-            waiters: VecDeque::from([first_tx]),
+            waiters: VecDeque::from([Waiter::Caller(first_tx)]),
             open: true,
         }));
 
@@ -129,6 +137,7 @@ impl Tmux {
 
     /// Runs one tmux command and returns its reply lines.
     pub fn cmd(&self, command: &str) -> Reply {
+        let t0 = std::time::Instant::now();
         let rx = {
             let mut link = self.link.lock().unwrap();
             if !link.open {
@@ -138,10 +147,28 @@ impl Tmux {
             writeln!(link.stdin, "{command}")?;
             link.stdin.flush()?;
             let (tx, rx) = mpsc::channel();
-            link.waiters.push_back(tx);
+            link.waiters.push_back(Waiter::Caller(tx));
             rx
         };
-        wait(rx)
+        let reply = wait(rx);
+        let ms = t0.elapsed().as_millis();
+        // Keys are many and long: log them at trace, the rest at debug.
+        let shown: String = command.chars().take(160).collect();
+        match &reply {
+            Err(e) => {
+                tracing::warn!(target: "sb::tmux", ms, cmd = %shown, error = %e, "tmux command failed")
+            }
+            Ok(_) if ms > 500 => {
+                tracing::warn!(target: "sb::tmux", ms, cmd = %shown, "slow tmux command")
+            }
+            Ok(_) if command.starts_with("send-keys") => {
+                tracing::trace!(target: "sb::tmux", ms, cmd = %shown, "tmux")
+            }
+            Ok(lines) => {
+                tracing::debug!(target: "sb::tmux", ms, lines = lines.len(), cmd = %shown, "tmux")
+            }
+        }
+        reply
     }
 
     /// Opens a new window with one pane and returns the pane id, for example `%3`.
@@ -166,15 +193,27 @@ impl Tmux {
     }
 
     /// Sends raw bytes to a pane, as if typed.
+    ///
+    /// It does not wait for tmux to reply: a key must not wait behind other
+    /// commands. tmux runs commands in order, so keys keep their order. An
+    /// error from tmux goes to the log.
     pub fn send_bytes(&self, pane: &str, bytes: &[u8]) -> Result<(), Error> {
+        let mut link = self.link.lock().unwrap();
+        if !link.open {
+            return Err(Error::Closed);
+        }
         for chunk in bytes.chunks(SEND_CHUNK) {
             let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
-            self.cmd(&format!(
+            writeln!(
+                link.stdin,
                 "send-keys -t {} -H {}",
                 quote(pane),
                 hex.join(" ")
-            ))?;
+            )?;
+            link.waiters
+                .push_back(Waiter::Log(format!("send-keys to {pane}")));
         }
+        link.stdin.flush()?;
         Ok(())
     }
 
@@ -316,28 +355,44 @@ fn read_loop(out: impl BufRead, link: &Mutex<Link>, on_event: impl Fn(Event)) {
         match parser.feed(&line) {
             Some(Message::Reply { ok, lines }) => {
                 let waiter = link.lock().unwrap().waiters.pop_front();
-                if let Some(w) = waiter {
-                    let _ = w.send(if ok {
-                        Ok(lines)
-                    } else {
-                        Err(Error::Tmux(lines.join("\n")))
-                    });
+                match waiter {
+                    Some(Waiter::Caller(w)) => {
+                        let _ = w.send(if ok {
+                            Ok(lines)
+                        } else {
+                            Err(Error::Tmux(lines.join("\n")))
+                        });
+                    }
+                    Some(Waiter::Log(what)) if !ok => {
+                        tracing::warn!(target: "sb::tmux", %what, error = %lines.join(" "), "tmux refused a command")
+                    }
+                    _ => {}
                 }
             }
             Some(Message::Output { pane, data }) => on_event(Event::Output { pane, data }),
             Some(Message::WindowAdd(w)) => on_event(Event::WindowAdd(w)),
             Some(Message::WindowClose(w)) => on_event(Event::WindowClose(w)),
             Some(Message::Exit(r)) => {
+                tracing::warn!(target: "sb::tmux", reason = ?r, "tmux sent %exit");
                 reason = r;
                 break;
+            }
+            Some(Message::Pause(p)) => {
+                tracing::debug!(target: "sb::tmux", pane = %p, "tmux paused a pane")
+            }
+            Some(Message::Continue(p)) => {
+                tracing::debug!(target: "sb::tmux", pane = %p, "tmux continued a pane")
             }
             _ => {}
         }
     }
+    tracing::warn!(target: "sb::tmux", "the tmux control client ended");
     let mut l = link.lock().unwrap();
     l.open = false;
     for w in l.waiters.drain(..) {
-        let _ = w.send(Err(Error::Closed));
+        if let Waiter::Caller(w) = w {
+            let _ = w.send(Err(Error::Closed));
+        }
     }
     drop(l);
     on_event(Event::Exit(reason));

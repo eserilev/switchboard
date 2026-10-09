@@ -283,7 +283,9 @@ fn hooks_permits_and_panes_end_to_end() {
             .any(|p| p.id == claude_id && p.lamp == Lamp::Limit)
     });
     // The lamp changes first; the connection mark follows right after.
-    wait_for("connection at limit", || hub.connection_view().list[0].limit_until.is_some());
+    wait_for("connection at limit", || {
+        hub.connection_view().list[0].limit_until.is_some()
+    });
 
     // Expand gives the screen and makes the pane live; collapse pauses it again.
     let screen = hub.expand(&id).unwrap();

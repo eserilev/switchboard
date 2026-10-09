@@ -59,6 +59,7 @@ window.__TAURI__ = {
         case "nvim_open": case "review_nvim": return "p3";
         case "review_drafts_text": return "beacon_node/gloas.rs:11: nit: use safe_sub";
         case "review_open": return "r1";
+        case "log": return null;
         default: return null;
       }
     },

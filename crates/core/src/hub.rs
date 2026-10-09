@@ -140,6 +140,7 @@ fn e(x: impl std::fmt::Display) -> String {
 impl Hub {
     /// Starts everything: the tmux client, the store, the socket and the ticker.
     pub fn start(paths: Paths, sb: PathBuf, sink: Arc<dyn Sink>) -> Res<Arc<Hub>> {
+        tracing::info!(target: "sb::hub", home = %paths.home.display(), sock = %paths.sock().display(), "hub starting");
         paths.create_all().map_err(e)?;
         std::fs::write(paths.tmux_conf(), tmux::CONF).map_err(e)?;
         let (config, config_error) = match Config::load(&paths.config) {
@@ -335,6 +336,7 @@ impl Hub {
                 .position(|id| *id == p.row.id)
                 .unwrap_or(usize::MAX)
         });
+        tracing::info!(target: "sb::hub", panes = panes.len(), tmux_panes = lines.len(), "reattached");
         *self.panes.lock().unwrap() = panes;
         Ok(())
     }
@@ -446,6 +448,7 @@ impl Hub {
     // ---------- open and close ----------
 
     pub fn open(&self, req: OpenReq) -> Res<PaneView> {
+        tracing::info!(target: "sb::hub", repo = %req.repo, place = %req.place, branch = ?req.branch, tree = ?req.tree, run = %req.run, "open");
         let repo = PathBuf::from(&req.repo);
         let tree = match req.place.as_str() {
             "main" => repo.clone(),
@@ -491,7 +494,10 @@ impl Hub {
         let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
         let env_ref: Vec<(&str, &str)> =
             env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let env_names: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        tracing::info!(target: "sb::hub", pane = %id, kind, tree = %tree.display(), ?argv, env = ?env_names, "spawn");
         let tid = self.tmux.new_pane(tree, &argv_ref, &env_ref).map_err(e)?;
+        tracing::info!(target: "sb::hub", pane = %id, tmux = %tid, "spawned");
         let _ = self.tmux.set_pane_option(&tid, "@sb_pane", &id);
         let _ = self.tmux.set_pane_option(&tid, "remain-on-exit", "on");
         let _ = self.tmux.set_streaming(&tid, false);
@@ -566,6 +572,7 @@ impl Hub {
     }
 
     pub fn close(&self, id: &str) -> Res<()> {
+        tracing::info!(target: "sb::hub", pane = id, "close");
         let tid = {
             let mut panes = self.panes.lock().unwrap();
             let i = panes
@@ -611,6 +618,7 @@ impl Hub {
 
     /// Puts the tiles in this order. Ids not in the list keep their place at the end.
     pub fn reorder(&self, ids: &[String]) -> Res<()> {
+        tracing::info!(target: "sb::hub", ?ids, "reorder");
         let order = {
             let mut panes = self.panes.lock().unwrap();
             panes.sort_by_key(|p| {
@@ -626,6 +634,7 @@ impl Hub {
     }
 
     pub fn rename(&self, id: &str, title: Option<String>) -> Res<()> {
+        tracing::info!(target: "sb::hub", pane = id, ?title, "rename");
         self.with_pane(id, false, |p| {
             p.row.title = title.filter(|t| !t.trim().is_empty())
         })
@@ -635,6 +644,7 @@ impl Hub {
 
     /// Makes a pane live and returns its screen: the scrollback, then the cursor.
     pub fn expand(&self, id: &str) -> Res<Vec<u8>> {
+        tracing::info!(target: "sb::hub", pane = id, "expand");
         let tid = self.tmux_id(id)?;
         let old = self
             .live
@@ -665,6 +675,7 @@ impl Hub {
     }
 
     pub fn collapse(&self) {
+        tracing::info!(target: "sb::hub", "collapse");
         // Take the value first: an `if let` on the guard keeps the lock for the whole block.
         let taken = self.live.lock().unwrap().take();
         if let Some((id, t)) = taken {
@@ -678,7 +689,10 @@ impl Hub {
     }
 
     pub fn input(&self, id: &str, bytes: &[u8]) -> Res<()> {
-        let tid = self.tmux_id(id)?;
+        tracing::trace!(target: "sb::hub", pane = id, len = bytes.len(), "input");
+        let tid = self
+            .tmux_id(id)
+            .inspect_err(|err| tracing::warn!(target: "sb::hub", pane = id, %err, "input to a pane with no process"))?;
         self.tmux.send_bytes(&tid, bytes).map_err(e)?;
         // A key in the pane answers its prompt there, so the tile buttons go.
         if self.permits.lock().unwrap().values().any(|(p, _)| p == id) {
@@ -697,17 +711,20 @@ impl Hub {
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Res<()> {
+        tracing::debug!(target: "sb::hub", cols, rows, "resize");
         *self.size.lock().unwrap() = (cols, rows);
         self.tmux.set_size(cols, rows).map_err(e)
     }
 
     pub fn seen(&self, id: &str) -> Res<()> {
+        tracing::debug!(target: "sb::hub", pane = id, "seen");
         self.with_pane(id, false, |p| p.row.unseen = false)
     }
 
     // ---------- hook events (SPEC 6, 13.3) ----------
 
     pub fn on_state(&self, m: &StateMsg) {
+        tracing::info!(target: "sb::hook", pane = %m.pane, event = %m.event, session = ?m.session, summary = ?m.summary, "hook event");
         let mut checktime = None;
         let mut limit_conn = None;
         let res = self.update_pane(&m.pane, |p| {
@@ -787,6 +804,7 @@ impl Hub {
 
     /// Answers one permission request from the tile.
     pub fn permit_answer(&self, permit: &str, allow: bool) -> Res<()> {
+        tracing::info!(target: "sb::hub", permit, allow, "permit answer");
         let (pane, tx) = self
             .permits
             .lock()
@@ -830,6 +848,7 @@ impl Hub {
 
     /// Answers the folder trust dialog (SPEC 6.6).
     pub fn trust(&self, id: &str, yes: bool) -> Res<()> {
+        tracing::info!(target: "sb::hub", pane = id, yes, "trust answer");
         if !yes {
             return self.close(id);
         }
@@ -845,6 +864,7 @@ impl Hub {
 
     /// Starts an ended Claude pane again with its session.
     pub fn resume(&self, id: &str) -> Res<()> {
+        tracing::info!(target: "sb::hub", pane = id, "resume");
         let (session, tree, tid, connection) = {
             let panes = self.panes.lock().unwrap();
             let p = panes
@@ -963,6 +983,7 @@ impl Hub {
     }
 
     pub fn connection_set(&self, name: &str) -> Res<()> {
+        tracing::info!(target: "sb::hub", name, "connection set");
         if !connections::names(&self.config()).iter().any(|n| n == name) {
             return Err(format!("no connection named {name}"));
         }
@@ -977,6 +998,7 @@ impl Hub {
 
     /// Moves a Limit pane to the next free connection and resumes its session there.
     pub fn connection_resume(&self, id: &str) -> Res<String> {
+        tracing::info!(target: "sb::hub", pane = id, "connection resume");
         let (session, tree, tid, current) = {
             let panes = self.panes.lock().unwrap();
             let p = panes
@@ -1039,6 +1061,7 @@ impl Hub {
 
     /// Opens nvim in a worktree, at a file and line when given. Returns the pane id.
     pub fn nvim_open(&self, tree: &Path, file: Option<(&str, u32)>) -> Res<String> {
+        tracing::info!(target: "sb::hub", tree = %tree.display(), file = ?file, "nvim open");
         if !nvim::installed() {
             return Err("nvim is not on PATH".into());
         }
@@ -1108,11 +1131,17 @@ impl Hub {
     // ---------- repos and layouts ----------
 
     pub fn repos(&self) -> Vec<Repo> {
-        let roots: Vec<PathBuf> = self.config().scan.iter().map(|s| expand(s)).collect();
-        repos::discover(&self.paths.claude.join("projects"), &roots)
+        let t0 = std::time::Instant::now();
+        let list = {
+            let roots: Vec<PathBuf> = self.config().scan.iter().map(|s| expand(s)).collect();
+            repos::discover(&self.paths.claude.join("projects"), &roots)
+        };
+        tracing::info!(target: "sb::hub", ms = t0.elapsed().as_millis() as u64, count = list.len(), "repo list");
+        list
     }
 
     pub fn layout_save(&self, name: &str) -> Res<()> {
+        tracing::info!(target: "sb::hub", name, "layout save");
         let list: Vec<Value> = self
             .panes
             .lock()
@@ -1140,6 +1169,7 @@ impl Hub {
     }
 
     pub fn layout_open(&self, name: &str) -> Res<()> {
+        tracing::info!(target: "sb::hub", name, "layout open");
         let text = self
             .store
             .lock()
@@ -1207,8 +1237,10 @@ impl Hub {
             return;
         }
         let Ok(req) = serde_json::from_str::<Request>(&line) else {
+            tracing::warn!(target: "sb::socket", line = %line.trim(), "bad request on the socket");
             return;
         };
+        tracing::debug!(target: "sb::socket", kind = request_kind(&req), "request");
         let reply = match req {
             Request::State(m) => {
                 self.on_state(&m);
@@ -1277,7 +1309,12 @@ impl Hub {
                 loop {
                     std::thread::sleep(Duration::from_secs(1));
                     let Some(hub) = me.upgrade() else { break };
+                    let t0 = std::time::Instant::now();
                     hub.tick(n);
+                    let ms = t0.elapsed().as_millis() as u64;
+                    if ms > 800 {
+                        tracing::warn!(target: "sb::tick", ms, "slow tick");
+                    }
                     n += 1;
                 }
             })
@@ -1334,6 +1371,7 @@ impl Hub {
             let Some(p) = panes.iter_mut().find(|p| p.row.id == id) else {
                 continue;
             };
+            let row_before = p.row.clone();
             let mut changed = false;
             let mut alert = false;
             if p.tail != tail {
@@ -1405,7 +1443,11 @@ impl Hub {
                 continue;
             }
             if changed {
-                let _ = self.store.lock().unwrap().save_pane(&p.row);
+                // The tail and RSS are not stored. Write only when the row changed:
+                // a write holds the pane lock, and keys wait for that lock.
+                if p.row != row_before {
+                    let _ = self.store.lock().unwrap().save_pane(&p.row);
+                }
                 self.emit_pane(p, alert);
             }
         }
@@ -1460,6 +1502,16 @@ fn trim_tail(mut lines: Vec<String>) -> Vec<String> {
     let lines: Vec<String> = lines.into_iter().filter(|l| !l.trim().is_empty()).collect();
     let start = lines.len().saturating_sub(TAIL_LINES);
     lines[start..].to_vec()
+}
+
+fn request_kind(r: &Request) -> &'static str {
+    match r {
+        Request::State(_) => "state",
+        Request::Permit { .. } => "permit",
+        Request::Open { .. } => "open",
+        Request::GuideSet { .. } => "guide_set",
+        Request::GuideUpdate { .. } => "guide_update",
+    }
 }
 
 fn now_nanos() -> u128 {
