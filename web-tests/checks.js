@@ -126,6 +126,9 @@
   docKey("j");
   await wait(300);
   check("j goes to step 2", $('#rsteps [aria-current="step"]')?.dataset.i === "1");
+  check("answers render markdown", !!$("#rthreads .msg.md pre code") && !!$("#rthreads .msg.md strong") && $$("#rthreads .msg.md li").length === 2);
+  check("HTML in an answer is text, not code", !window.__xss && $("#rthreads").textContent.includes("<script>"));
+  check("guide text renders markdown", !!$("#rguide .what strong") && !!$("#rguide .check code"));
   check("pin shows in the guide", $("#rguide").textContent.includes("Use safe_sub, not -."));
   check("diff renders with focus lines", $$("#rdiff tr.focus").length === 2, $$("#rdiff tr.focus").length);
   check("removed line has the old number", [...$$("#rdiff tr.del td.ln")].map((t) => t.textContent).join() === "11");

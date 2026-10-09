@@ -306,8 +306,10 @@ term.onBinary((data) => send(data, true));
 
 let drawn = false;
 let held = [];
+let firstOutput = null;
 listen("pane_output", (e) => {
   if (e.payload.pane !== S.live) return;
+  if (firstOutput === S.live) { firstOutput = null; log("info", "first output reached the window for", S.live); }
   const b = bytes(e.payload.data);
   drawn ? term.write(b) : held.push(b);
 });
@@ -328,6 +330,7 @@ async function expand(id) {
   S.focus = id;
   drawn = false;
   held = [];
+  firstOutput = id;
   $("#live").hidden = false;
   drawBoardNow();
   // Let the layout settle so the fit sees the real size.

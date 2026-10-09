@@ -12,6 +12,20 @@
   const stepState = (r, sid) => r.steps.find((s) => s.id === sid) || { checked: false, stale: false };
   const short = (h) => (h || "").slice(0, 9);
 
+  // Markdown from the agent. Raw HTML in it is shown as text, never run.
+  const mdr = new marked.Renderer();
+  mdr.html = (h) => esc(typeof h === "string" ? h : h?.text ?? "");
+  const md = (s) => { try { return marked.parse(String(s ?? ""), { renderer: mdr, gfm: true }); } catch (_) { return esc(s); } };
+  const mdi = (s) => { try { return marked.parseInline(String(s ?? ""), { renderer: mdr, gfm: true }); } catch (_) { return esc(s); } };
+  // Links open in the browser, not in the app window.
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest?.(".md a, #view-review a[href]");
+    if (!a) return;
+    e.preventDefault();
+    const href = a.getAttribute("href") || "";
+    if (/^https?:\/\//.test(href)) invoke("open_url", { url: href }).catch((err) => toast(err));
+  });
+
   function draw(id) {
     const r = S.reviews.get(id);
     if (!r) return;
@@ -73,7 +87,7 @@
       const badges = [n ? `<span class="badge th">${n} thread${n > 1 ? "s" : ""}</span>` : "", st.stale ? `<span class="badge stale">stale</span>` : ""].join("");
       return `<li class="step${st.checked ? " checked" : ""}" tabindex="0" data-i="${i}" ${i === l.cur ? 'aria-current="step"' : ""}>
         <span class="n">${st.checked && i !== l.cur ? "✓" : i + 1}</span>
-        <div><div class="st">${esc(s.title)}</div>${loc ? `<div class="loc" title="${esc(loc)}">${esc(loc)}</div>` : ""}${badges ? `<div class="badges">${badges}</div>` : ""}</div></li>`;
+        <div><div class="st">${mdi(s.title)}</div>${loc ? `<div class="loc" title="${esc(loc)}">${esc(loc)}</div>` : ""}${badges ? `<div class="badges">${badges}</div>` : ""}</div></li>`;
     }).join("") || `<li class="empty-review">${r.status === "error" ? "" : "The guide shows here when the agent is done."}</li>`;
     $("#rsteps").onclick = (e) => { const s = e.target.closest(".step"); if (s) go(r.id, +s.dataset.i); };
   }
@@ -87,11 +101,11 @@
     const ctx = [...(s.context || [])];
     $("#rguide").innerHTML = `
       <div class="eyebrow">Step ${l.cur + 1} of ${steps(r).length}</div>
-      <h4>${esc(s.title)}</h4>
-      ${s.what ? `<p style="margin:0">${esc(s.what)}</p>` : ""}
-      ${s.check?.length ? `<div class="check"><ul>${s.check.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>` : ""}
-      ${pins.map((p) => `<div class="pinned" data-pin="${p.id}"><span contenteditable="true">${esc(p.text)}</span><button class="tool x" data-unpin="${p.id}" aria-label="Remove">×</button></div>`).join("")}
-      ${ctx.length ? `<div class="ctx">${ctx.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}</div>` : ""}
+      <h4>${mdi(s.title)}</h4>
+      ${s.what ? `<div class="what md">${md(s.what)}</div>` : ""}
+      ${s.check?.length ? `<div class="check md"><ul>${s.check.map((c) => `<li>${mdi(c)}</li>`).join("")}</ul></div>` : ""}
+      ${pins.map((p) => `<div class="pinned" data-pin="${p.id}"><span class="md" contenteditable="true" data-raw="${esc(p.text)}">${mdi(p.text)}</span><button class="tool x" data-unpin="${p.id}" aria-label="Remove">×</button></div>`).join("")}
+      ${ctx.length ? `<div class="ctx">${ctx.map((c) => `<span class="chip">${esc(typeof c === "string" ? c : c.label || c.ref || "")}</span>`).join("")}</div>` : ""}
       <div class="gactions">
         <button class="btn" data-act="mark">${st.checked ? "Unmark" : "Mark reviewed"}</button>
         ${l.cur < steps(r).length - 1 ? `<button class="btn primary" data-act="next">Next step</button>` : ""}
@@ -104,6 +118,8 @@
       if (b.dataset.unpin) call("review_pin_edit", { id: r.id, pin: +b.dataset.unpin, text: null });
     };
     $("#rguide").querySelectorAll("[data-pin] span").forEach((el) => {
+      // Edit the markdown source, not the rendered text.
+      el.addEventListener("focus", () => { el.textContent = el.dataset.raw; });
       el.addEventListener("blur", () => call("review_pin_edit", { id: r.id, pin: +el.parentElement.dataset.pin, text: el.textContent.trim() || null }));
       el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); el.blur(); } e.stopPropagation(); });
     });
@@ -181,9 +197,10 @@
         if (m.me) return `<div class="msg me">${esc(m.text)}</div>`;
         const lastAnswer = i === t.messages.length - 1 && !busy;
         const acts = lastAnswer ? `<div class="macts"><button data-pin="${esc(t.id)}">Pin</button><button data-draft="${esc(t.id)}">Draft</button></div>` : "";
-        return `<div class="msg">${esc(m.text)}${acts}</div>`;
+        return `<div class="msg md">${md(m.text)}${acts}</div>`;
       }).join("");
-      const pending = busy ? `<div class="msg wait">${esc(l.pending.get(t.id) || "…")}</div>` : "";
+      const text = l.pending.get(t.id);
+      const pending = busy ? (text ? `<div class="msg md wait">${md(text)}</div>` : `<div class="msg wait">…</div>`) : "";
       return `<div class="thread${l.active === t.id ? " active" : ""}" data-t="${esc(t.id)}">
         <div class="anchor" title="${esc(t.path || "")}">${esc(where)}${t.removed ? '<span class="gone">line removed</span>' : ""}</div>${msgs}${pending}</div>`;
     }).join("");
@@ -266,7 +283,7 @@
     l.pending.set(thread, (l.pending.get(thread) || "") + delta);
     if (S.tab !== review) return;
     const el = document.querySelector(`.thread[data-t="${CSS.escape(thread)}"] .msg.wait`);
-    if (el) el.textContent = l.pending.get(thread);
+    if (el) { el.classList.add("md"); el.innerHTML = md(l.pending.get(thread)); }
   }
 
   function go(id, i) {

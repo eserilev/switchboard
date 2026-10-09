@@ -21,10 +21,10 @@ window.__data = {
     status: "ready", error: null, new_head: null,
     guide: { steps: [
       { id: "s1", title: "Read the PR description", file: null, what: "The PR adds ILs.", check: ["slot - 1"] },
-      { id: "s2", title: "Proposal path passes slot - 1", file: "beacon_node/gloas.rs", side: "new", lines: [11, 12], what: "Asks for the ILs.", check: ["safe_sub?"] },
+      { id: "s2", title: "Proposal path passes slot - 1", file: "beacon_node/gloas.rs", side: "new", lines: [11, 12], what: "Block production asks for the ILs of the slot **before** the proposal slot.", check: ["The spec uses `slot - 1`. Does this match?", "What happens at slot 0?"] },
     ] },
     steps: [{ id: "s1", checked: true, stale: false }],
-    threads: [{ id: "t1", step: "s2", path: "beacon_node/gloas.rs", side: "new", line: 11, removed: false, busy: false, messages: [{ id: 1, me: true, text: "safe sub?" }, { id: 2, me: false, text: "Use safe_sub." }] }],
+    threads: [{ id: "t1", step: "s2", path: "beacon_node/gloas.rs", side: "new", line: 11, removed: false, busy: false, messages: [{ id: 1, me: true, text: "safe sub?" }, { id: 2, me: false, text: "Use **safe_sub**. The `-` on `Slot` saturates, so slot 0 gives 0:\n\n```rust\nlet il_slot = builder_params.slot.safe_sub(1)?;\n```\n\n- `slot_epoch_macros.rs:119` marks `-` as deprecated.\n- Small nit, not a bug.\n\n<script>window.__xss = 1</script>" }] }],
     pins: [{ id: 1, step: "s2", text: "Use safe_sub, not -." }],
     drafts: [{ id: 1, path: "beacon_node/gloas.rs", side: "new", line: 11, text: "nit: use safe_sub" }],
   }],

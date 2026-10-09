@@ -156,6 +156,21 @@ async fn pane_input(hub: H<'_>, id: String, data: String, binary: bool) -> Res<(
     run("pane_input", &hub, move |h| h.input(&id, &bytes)).await
 }
 
+/// Opens an http(s) link in the browser.
+#[tauri::command]
+fn open_url(url: String) -> Res<()> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("only http and https links open".into());
+    }
+    tracing::info!(target: "sb::app", %url, "open link");
+    std::process::Command::new("xdg-open")
+        .arg(&url)
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map(drop)
+        .map_err(|e| e.to_string())
+}
+
 /// Log lines from the window.
 #[tauri::command]
 fn log(level: String, message: String) {
@@ -254,6 +269,7 @@ fn main() {
             review_close,
             review_nvim,
             log,
+            open_url,
         ])
         .run(tauri::generate_context!())
         .expect("the window failed to start");
