@@ -64,3 +64,43 @@ fn repo_name(url: &str) -> String {
     let parts: Vec<&str> = url.trim_end_matches('/').split('/').collect();
     format!("{}/{}", parts[parts.len() - 4], parts[parts.len() - 3])
 }
+
+/// The duplicate check reads real reviews: each review of the PR with line comments
+/// must match itself. It reads only.
+///   SB_LIVE_PR=https://github.com/sigp/lighthouse/pull/10182 \
+///   cargo test -p switchboard-core --test live_post -- --ignored --nocapture each_review_matches_itself
+#[test]
+#[ignore]
+fn each_review_matches_itself() {
+    let url = std::env::var("SB_LIVE_PR").expect("set SB_LIVE_PR");
+    let pr = review::gh_view(&url).unwrap();
+    let repo = repo_name(&url);
+    let reviews = review::gh_reviews(&repo, pr.number).unwrap();
+    let mut checked = 0;
+    for r in reviews.as_array().unwrap() {
+        let id = r["id"].as_u64().unwrap();
+        let comments = review::gh_review_comments(&repo, pr.number, id).unwrap();
+        if comments.as_array().unwrap().is_empty() {
+            continue;
+        }
+        let event = match r["state"].as_str().unwrap() {
+            "APPROVED" => "APPROVE",
+            "CHANGES_REQUESTED" => "REQUEST_CHANGES",
+            _ => "COMMENT",
+        };
+        let payload = serde_json::json!({
+            "commit_id": r["commit_id"], "event": event, "body": r["body"],
+            "comments": comments.as_array().unwrap().iter().map(|c| serde_json::json!({
+                "path": c["path"], "side": c["side"], "body": c["body"],
+                "line": if c["line"].is_null() { c["original_line"].clone() } else { c["line"].clone() },
+            })).collect::<Vec<_>>(),
+        });
+        let login = r["user"]["login"].as_str().unwrap();
+        let found = post::sent_candidates(&reviews, login, &payload);
+        assert!(found.iter().any(|(f, _)| *f == id), "review {id} is not a candidate");
+        assert!(post::same_comments(&comments, &payload), "review {id}");
+        checked += 1;
+    }
+    println!("{checked} reviews with line comments match themselves");
+    assert!(checked > 0);
+}

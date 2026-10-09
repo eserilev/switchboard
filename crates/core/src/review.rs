@@ -138,6 +138,37 @@ pub fn gh_login() -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out).trim().to_owned())
 }
 
+/// The reviews of a PR, all pages, as one JSON array.
+pub fn gh_reviews(repo: &str, number: u64) -> Result<Value, String> {
+    let out = gh_api(
+        &["--paginate", "--slurp", &format!("repos/{repo}/pulls/{number}/reviews")],
+        None,
+    )?;
+    let pages: Value = serde_json::from_slice(&out).map_err(|e| format!("gh api: {e}"))?;
+    Ok(Value::Array(
+        pages.as_array().into_iter().flatten().flat_map(|p| p.as_array().cloned().unwrap_or_default()).collect(),
+    ))
+}
+
+/// The line comments of one review, as one JSON array. They come from the PR-wide
+/// list: the list of one review has no `line` and no `side`.
+pub fn gh_review_comments(repo: &str, number: u64, review: u64) -> Result<Value, String> {
+    let out = gh_api(
+        &["--paginate", "--slurp", &format!("repos/{repo}/pulls/{number}/comments")],
+        None,
+    )?;
+    let pages: Value = serde_json::from_slice(&out).map_err(|e| format!("gh api: {e}"))?;
+    Ok(Value::Array(
+        pages
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|p| p.as_array().cloned().unwrap_or_default())
+            .filter(|c| c["pull_request_review_id"].as_u64() == Some(review))
+            .collect(),
+    ))
+}
+
 /// Sends one review with all its comments. Returns the link to the review.
 pub fn gh_submit_review(repo: &str, number: u64, payload: &Value) -> Result<String, String> {
     let out = gh_api(

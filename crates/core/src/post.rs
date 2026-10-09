@@ -298,6 +298,61 @@ pub fn payload(p: &Plan, event: &str, summary: &str) -> Result<Value, String> {
     Ok(json!({ "commit_id": p.head, "event": event, "body": body, "comments": comments }))
 }
 
+/// GitHub's name for the state of a sent review of each type.
+fn state_of(event: &str) -> &'static str {
+    match event {
+        "APPROVE" => "APPROVED",
+        "REQUEST_CHANGES" => "CHANGES_REQUESTED",
+        _ => "COMMENTED",
+    }
+}
+
+/// The reviews on GitHub that can be this send already: by `login`, at the same
+/// commit, of the same type, with the same summary. Returns their ids and links.
+/// The caller then compares the line comments (`same_comments`).
+pub fn sent_candidates(reviews: &Value, login: &str, payload: &Value) -> Vec<(u64, String)> {
+    let event = payload["event"].as_str().unwrap_or("");
+    reviews
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| {
+            r["user"]["login"].as_str() == Some(login)
+                && r["commit_id"] == payload["commit_id"]
+                && r["state"].as_str() == Some(state_of(event))
+                && r["body"].as_str().unwrap_or("") == payload["body"].as_str().unwrap_or("")
+        })
+        .filter_map(|r| Some((r["id"].as_u64()?, r["html_url"].as_str().unwrap_or("").to_owned())))
+        .collect()
+}
+
+/// True when the line comments of a review on GitHub are the comments of `payload`:
+/// the same path, line, side and text, as a set.
+pub fn same_comments(comments: &Value, payload: &Value) -> bool {
+    let key = |path: &Value, line: &Value, side: &Value, body: &Value| {
+        format!("{}|{}|{}|{}", path.as_str().unwrap_or(""), line, side.as_str().unwrap_or("RIGHT"), body.as_str().unwrap_or(""))
+    };
+    let mut got: Vec<String> = comments
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            // GitHub sets `line` to null on an outdated comment; its first line counts.
+            let line = if c["line"].is_null() { &c["original_line"] } else { &c["line"] };
+            key(&c["path"], line, &c["side"], &c["body"])
+        })
+        .collect();
+    let mut want: Vec<String> = payload["comments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| key(&c["path"], &c["line"], &c["side"], &c["body"]))
+        .collect();
+    got.sort();
+    want.sort();
+    got == want
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,6 +591,33 @@ Binary files /dev/null and b/img.png differ
         let empty = plan(&model(), &gh, &[], true);
         assert!(payload(&empty, "COMMENT", " ").is_err());
         assert!(payload(&empty, "APPROVE", "").is_ok());
+    }
+
+    #[test]
+    fn a_review_that_github_already_has_is_found() {
+        let payload = json!({ "commit_id": "head1", "event": "REQUEST_CHANGES", "body": "Please fix.",
+            "comments": [{ "path": "a.rs", "line": 3, "side": "RIGHT", "body": "x" }, { "path": "a.rs", "line": 1, "side": "LEFT", "body": "y" }] });
+        let review = |id: u64, login: &str, commit: &str, state: &str, body: &str| json!({
+            "id": id, "user": { "login": login }, "commit_id": commit, "state": state, "body": body,
+            "html_url": format!("https://github.com/o/r/pull/1#pullrequestreview-{id}") });
+        let reviews = json!([
+            review(1, "me", "head1", "CHANGES_REQUESTED", "Please fix."),
+            review(2, "other", "head1", "CHANGES_REQUESTED", "Please fix."),
+            review(3, "me", "head0", "CHANGES_REQUESTED", "Please fix."),
+            review(4, "me", "head1", "COMMENTED", "Please fix."),
+            review(5, "me", "head1", "CHANGES_REQUESTED", "Other text."),
+        ]);
+        let found = sent_candidates(&reviews, "me", &payload);
+        assert_eq!(found, [(1, "https://github.com/o/r/pull/1#pullrequestreview-1".to_owned())]);
+        // The same comments in another order: the same review.
+        let same = json!([{ "path": "a.rs", "line": 1, "side": "LEFT", "body": "y" }, { "path": "a.rs", "line": 3, "side": "RIGHT", "body": "x" }]);
+        assert!(same_comments(&same, &payload));
+        // An outdated comment has no line; its original line counts.
+        let outdated = json!([{ "path": "a.rs", "line": null, "original_line": 1, "side": "LEFT", "body": "y" }, { "path": "a.rs", "line": 3, "side": "RIGHT", "body": "x" }]);
+        assert!(same_comments(&outdated, &payload));
+        // One comment more or less: another review, so the send goes on.
+        assert!(!same_comments(&json!([{ "path": "a.rs", "line": 3, "side": "RIGHT", "body": "x" }]), &payload));
+        assert!(!same_comments(&json!([]), &payload));
     }
 
     #[test]

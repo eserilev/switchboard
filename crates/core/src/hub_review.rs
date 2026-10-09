@@ -1409,13 +1409,25 @@ impl Hub {
     /// Sends the review. `token` is the plan that you saw; the app builds the plan
     /// again and sends nothing if it differs.
     pub fn review_post(&self, id: &str, event: &str, summary: &str, token: &str) -> Res<String> {
+        // One send of a review at a time: a second send waits for nothing and stops.
+        let _sending = Sending::take(id)?;
         let (row, plan) = self.post_plan(id)?;
         if plan.token() != token {
             return Err("The review changed after the preview. Check it again.".into());
         }
         let payload = crate::post::payload(&plan, event, summary)?;
-        tracing::info!(target: "sb::review", review = id, event, comments = plan.inline.len(), "review: send to GitHub");
-        let url = review::gh_submit_review(&row.repo, row.number, &payload)?;
+        // A send that reached GitHub but was not recorded here (the app stopped) is
+        // on GitHub already. Find it, record it, and do not send it again.
+        let url = match self.already_sent(&row, &payload)? {
+            Some(url) => {
+                tracing::warn!(target: "sb::review", review = id, %url, "review: GitHub has this review already; not sent again");
+                url
+            }
+            None => {
+                tracing::info!(target: "sb::review", review = id, event, comments = plan.inline.len(), "review: send to GitHub");
+                review::gh_submit_review(&row.repo, row.number, &payload)?
+            }
+        };
         let posted = crate::store::PostedRow {
             event: event.to_owned(),
             url: url.clone(),
@@ -1438,6 +1450,20 @@ impl Hub {
             .map_err(e)?;
         self.emit_review(id);
         Ok(url)
+    }
+
+    /// The link of a review on GitHub that is this send: same login, commit, type,
+    /// summary and line comments. Reads only.
+    fn already_sent(&self, row: &ReviewRow, payload: &Value) -> Res<Option<String>> {
+        let login = review::gh_login()?;
+        let reviews = review::gh_reviews(&row.repo, row.number)?;
+        for (rid, url) in crate::post::sent_candidates(&reviews, &login, payload) {
+            let comments = review::gh_review_comments(&row.repo, row.number, rid)?;
+            if crate::post::same_comments(&comments, payload) {
+                return Ok(Some(url));
+            }
+        }
+        Ok(None)
     }
 
     pub fn review_close(&self, id: &str) -> Res<()> {
@@ -1655,6 +1681,29 @@ fn normalize(mut guide: Value) -> Res<Value> {
 /// Threads that wait for an answer.
 static BUSY: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
+/// The reviews with a send to GitHub in progress.
+static SENDING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// A send in progress. It ends when the value drops, also on an error.
+struct Sending(String);
+
+impl Sending {
+    fn take(id: &str) -> Res<Sending> {
+        let mut s = SENDING.lock().unwrap();
+        if s.iter().any(|x| x == id) {
+            return Err("This review is being sent already.".into());
+        }
+        s.push(id.to_owned());
+        Ok(Sending(id.to_owned()))
+    }
+}
+
+impl Drop for Sending {
+    fn drop(&mut self) {
+        SENDING.lock().unwrap().retain(|x| x != &self.0);
+    }
+}
+
 fn thread_prompt(step: &Value, t: &ThreadRow, pins: &[String], question: &str) -> String {
     let mut p = format!(
         "The reviewer has a question about step {} \"{}\"",
@@ -1691,6 +1740,27 @@ fn thread_prompt(step: &Value, t: &ThreadRow, pins: &[String], question: &str) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_one_send_of_a_review_runs_at_a_time() {
+        let first = Sending::take("rs1").unwrap();
+        assert!(Sending::take("rs1").is_err());
+        // Another review can send at the same time.
+        let other = Sending::take("rs2").unwrap();
+        drop(first);
+        let again = Sending::take("rs1").unwrap();
+        drop(again);
+        drop(other);
+        // From many threads at once, exactly one wins.
+        let wins: usize = (0..16)
+            .map(|_| std::thread::spawn(|| Sending::take("rs3").map(std::mem::forget).is_ok()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap() as usize)
+            .sum();
+        assert_eq!(wins, 1);
+        SENDING.lock().unwrap().retain(|x| x != "rs3");
+    }
 
     #[test]
     fn thread_prompt_has_the_anchor_and_pins() {
