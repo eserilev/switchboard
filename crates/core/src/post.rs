@@ -153,7 +153,10 @@ fn gh_row(rows: &[Row], old: bool, n: u32) -> Option<usize> {
 }
 
 /// Checks every draft and sorts it: on a line, into the summary, or an error.
-pub fn plan(m: &DiffModel, gh: &[GhFile], drafts: &[DraftRow]) -> Plan {
+/// `old_on_github` is false in a later review round: there the old side is the code
+/// of the round before, which GitHub's diff does not show, so an old-side comment
+/// goes into the summary.
+pub fn plan(m: &DiffModel, gh: &[GhFile], drafts: &[DraftRow], old_on_github: bool) -> Plan {
     let mut p = Plan {
         head: m.head.clone(),
         inline: vec![],
@@ -204,6 +207,10 @@ pub fn plan(m: &DiffModel, gh: &[GhFile], drafts: &[DraftRow]) -> Plan {
             reason: reason.into(),
             text: text.clone(),
         };
+        if old && !old_on_github {
+            p.outside.push(outside("the old side of this round is not on GitHub"));
+            continue;
+        }
         let Some(g) = gh.iter().find(|g| g.path == f.path()) else {
             p.outside.push(outside("GitHub's diff does not show this file"));
             continue;
@@ -408,6 +415,7 @@ Binary files /dev/null and b/img.png differ
                 draft(5, "gone.rs", "old", None, 1),
                 draft(6, "src/a.rs", "new", None, 4),
             ],
+            true,
         );
         assert!(p.errors.is_empty(), "{:?}", p.errors);
         assert!(p.outside.is_empty(), "{:?}", p.outside);
@@ -444,6 +452,7 @@ Binary files /dev/null and b/img.png differ
                 draft(3, "src/a.rs", "new", Some(4), 6),
                 general,
             ],
+            true,
         );
         assert!(p.errors.is_empty(), "{:?}", p.errors);
         assert!(p.inline.is_empty());
@@ -468,14 +477,23 @@ Binary files /dev/null and b/img.png differ
     fn a_range_over_two_hunks_goes_into_the_summary() {
         // Two hunks that touch: every line is shown, but in two parts.
         let gh = parse_pr_diff(&GH.replace(" three\n four\n", " three\n@@ -4,1 +4,1 @@\n four\n"));
-        let p = plan(&model(), &gh, &[draft(1, "src/a.rs", "new", Some(2), 4)]);
+        let p = plan(&model(), &gh, &[draft(1, "src/a.rs", "new", Some(2), 4)], true);
         assert_eq!(p.outside[0].reason, "the range is in two parts of GitHub's diff");
+    }
+
+    #[test]
+    fn a_later_round_puts_old_side_comments_into_the_summary() {
+        let gh = parse_pr_diff(GH);
+        let p = plan(&model(), &gh, &[draft(1, "src/a.rs", "old", None, 2), draft(2, "src/a.rs", "new", None, 2)], false);
+        assert_eq!(p.outside.len(), 1);
+        assert_eq!(p.outside[0].reason, "the old side of this round is not on GitHub");
+        assert_eq!(p.inline.len(), 1);
     }
 
     #[test]
     fn other_text_on_github_stops_the_send() {
         let gh = parse_pr_diff(&GH.replace("+TWO", "+TW0"));
-        let p = plan(&model(), &gh, &[draft(1, "src/a.rs", "new", None, 2)]);
+        let p = plan(&model(), &gh, &[draft(1, "src/a.rs", "new", None, 2)], true);
         assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
         assert!(payload(&p, "COMMENT", "x").is_err());
     }
@@ -491,6 +509,7 @@ Binary files /dev/null and b/img.png differ
                 draft(2, "src/a.rs", "new", None, 99),
                 draft(3, "src/a.rs", "new", Some(5), 4),
             ],
+            true,
         );
         assert_eq!(p.errors.len(), 3, "{:?}", p.errors);
         assert!(p.inline.is_empty() && p.outside.is_empty());
@@ -499,7 +518,7 @@ Binary files /dev/null and b/img.png differ
     #[test]
     fn the_payload_is_one_review_at_the_head() {
         let gh = parse_pr_diff(GH);
-        let p = plan(&model(), &gh, &[draft(1, "src/a.rs", "new", Some(20), 22)]);
+        let p = plan(&model(), &gh, &[draft(1, "src/a.rs", "new", Some(20), 22)], true);
         let v = payload(&p, "REQUEST_CHANGES", "Please fix.").unwrap();
         assert_eq!(
             v,
@@ -514,7 +533,7 @@ Binary files /dev/null and b/img.png differ
         assert!(payload(&p, "REQUEST_CHANGES", "").is_err());
         assert!(payload(&p, "APPROVE", "").is_ok());
         assert!(payload(&p, "MERGE", "").is_err());
-        let empty = plan(&model(), &gh, &[]);
+        let empty = plan(&model(), &gh, &[], true);
         assert!(payload(&empty, "COMMENT", " ").is_err());
         assert!(payload(&empty, "APPROVE", "").is_ok());
     }
@@ -522,10 +541,10 @@ Binary files /dev/null and b/img.png differ
     #[test]
     fn the_token_changes_with_the_plan() {
         let gh = parse_pr_diff(GH);
-        let a = plan(&model(), &gh, &[draft(1, "src/a.rs", "new", None, 2)]);
+        let a = plan(&model(), &gh, &[draft(1, "src/a.rs", "new", None, 2)], true);
         let mut d = draft(1, "src/a.rs", "new", None, 2);
         d.text = "edited".into();
-        let b = plan(&model(), &gh, &[d]);
+        let b = plan(&model(), &gh, &[d], true);
         assert_eq!(a.token(), a.clone().token());
         assert_ne!(a.token(), b.token());
     }

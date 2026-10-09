@@ -404,6 +404,22 @@ Limits:
 - GitHub refuses an approval of your own PR. The window shows GitHub's reason.
 - If the app stops between GitHub's answer and the store write, the drafts stay. A second send makes a second review.
 
+### 11.9 Review rounds
+
+After you send a review, the author pushes new commits. A new round reviews only what changed since your round.
+
+- When the head changes (11.7), the header offers **Start round N+1** next to **Update guide**.
+- A round is a new review of the same PR, in its own tab (`#10182 R2`) and its own worktree (`pr10182-r2`). The round before stays open until you close it.
+- `since` is the head that the round before covered. The base of the round's diff is:
+  - `since`, when the author only added commits on top of it.
+  - `since` with the new base branch merged in (`git merge-tree --write-tree`), when the author rebased or merged the base branch. The round then leaves out the changes that came from the base branch. The header says so.
+  - `since`, when that merge has conflicts. The header says that the round also shows changes from the base branch.
+- The diff model, the verified checker and the drawn rows work on this base and the new head as on any other pair. So G1 to G10 hold for the round: the round guide covers every line changed since `since`, and no other line.
+- The guide prompt for a round names the scope, the files of the round, and the comments that you sent in the round before. The agent says in each step whether the change addresses a comment, and lists the comments that no change touches.
+- A sent review records its commit, its summary and its line comments, for the next round.
+- The GitHub count check (24) is for a first round only, because GitHub counts the whole PR.
+- **Finish review** in a round works as in 11.8. A comment on the old side goes into the summary, because the old side of a round is the code of the round before, not GitHub's base.
+
 ## 12. Agents
 
 | Where | How |
@@ -770,6 +786,7 @@ G5 to G10 need `removed + added ≤ usize::MAX` lines (G8 and G9: twice that). T
 
 - git returns the right file content for a commit. git checks object hashes itself.
 - The window draws the accepted guide and the kernel's diff rows. The line numbers, the row kinds and the cut are proved (G5 to G10). Not proved: the text lookup by number, the UTF-8 decoding, the "No newline at end of file" note, the header text, and the drawing code.
+- In a review round, the base of the diff can be a tree from `git merge-tree` (11.9). The proofs hold for any base and head; the meaning of the round's base (the reviewed code plus the new base branch) comes from git, not from a proof.
 - A step shows only its part of a file (`step_rows`). Each part is a slice of the proved rows, cut by the proved `cut_rows`, so rows keep their proved numbers and kinds. Not proved: the slice bounds, and the offset that the app adds to the header numbers of a slice, because the cut numbers a header from the start of its slice.
 - Files with no changed line have nothing for the line checker: binary files, submodules, pure renames and mode changes. A step must name each one in `files`. That rule is plain code, not proved.
 - What the agent writes about the code. No checker can prove that an explanation is true.

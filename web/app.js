@@ -55,7 +55,7 @@ function drawTabs() {
   const tabs = [`<button class="tab" role="tab" data-tab="board" aria-selected="${S.tab === "board"}">Board</button>`];
   for (const r of S.reviews.values()) {
     const busy = ["fetching", "writing", "updating"].includes(r.status) ? '<i class="busy"></i>' : "";
-    tabs.push(`<button class="tab" role="tab" data-tab="${esc(r.id)}" aria-selected="${S.tab === r.id}">#${esc(r.number)}${busy}</button>`);
+    tabs.push(`<button class="tab" role="tab" data-tab="${esc(r.id)}" aria-selected="${S.tab === r.id}">#${esc(r.number)}${r.round > 1 ? ` R${r.round}` : ""}${busy}</button>`);
   }
   $("#tabs").innerHTML = tabs.join("");
 }

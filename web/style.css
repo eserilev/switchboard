@@ -320,3 +320,5 @@ tr.anchored td.ln::after { content: "●"; color: var(--accent); margin-left: 4p
 .chip.link { color: var(--accent); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .other { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 7px 14px; font: 12px/1.4 var(--body); color: var(--muted); background: var(--panel); border-bottom: 1px solid var(--line); }
 .other span { margin-right: 4px; }
+.rhead .roundtag { font: 600 11px/1 var(--mono); padding: 5px 8px; border-radius: 4px; background: color-mix(in srgb, var(--limit) 22%, var(--panel-2)); color: var(--limit); }
+.rhead .scopenote { flex-basis: 100%; font: 12px/1.4 var(--body); color: var(--needs); }

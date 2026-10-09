@@ -146,6 +146,7 @@ commands! {
     review_post_preview(id: String) -> Value => |h| h.review_post_preview(&id).map(|v| json!(v));
     review_post(id: String, event: String, summary: String, token: String) -> String => |h| h.review_post(&id, &event, &summary, &token);
     review_update(id: String) -> () => |h| h.review_update(&id);
+    review_round(id: String) -> String => |h| h.review_round(&id);
     review_retry(id: String) -> () => |h| h.review_retry(&id);
     review_close(id: String) -> () => |h| h.review_close(&id);
     review_nvim(id: String, path: String, line: u32) -> String => |h| h.review_nvim(&id, &path, line);
@@ -277,6 +278,7 @@ fn main() {
             review_post_preview,
             review_post,
             review_update,
+            review_round,
             review_retry,
             review_close,
             review_nvim,

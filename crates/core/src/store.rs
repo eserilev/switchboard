@@ -36,6 +36,14 @@ const SCHEMA: &[&str] = &[
      ALTER TABLE review ADD COLUMN summary TEXT;
      CREATE TABLE posted (id INTEGER PRIMARY KEY, review TEXT NOT NULL, event TEXT NOT NULL,
        url TEXT NOT NULL, comments INTEGER NOT NULL, time INTEGER NOT NULL);",
+    // Version 4: review rounds. A later round reviews only the changes since `since`,
+    // and a sent review keeps its comments for the next round.
+    "ALTER TABLE review ADD COLUMN round INTEGER NOT NULL DEFAULT 1;
+     ALTER TABLE review ADD COLUMN since TEXT;
+     ALTER TABLE review ADD COLUMN scope_note TEXT;
+     ALTER TABLE posted ADD COLUMN head TEXT;
+     ALTER TABLE posted ADD COLUMN body TEXT;
+     ALTER TABLE posted ADD COLUMN lines TEXT;",
 ];
 
 pub struct Store {
@@ -71,6 +79,19 @@ pub struct ReviewRow {
     pub connection: Option<String>,
     pub guide_session: Option<String>,
     pub guide: Option<String>,
+    /// 1 for a full review. A later round reviews only the changes since `since`.
+    #[serde(default = "first_round")]
+    pub round: u32,
+    /// The head that the round before reviewed.
+    #[serde(default)]
+    pub since: Option<String>,
+    /// Why the scope of a round is not a plain diff, for example after a rebase.
+    #[serde(default)]
+    pub scope_note: Option<String>,
+}
+
+fn first_round() -> u32 {
+    1
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -122,6 +143,15 @@ pub struct PostedRow {
     pub url: String,
     pub comments: u32,
     pub time: u64,
+    /// The commit that the review was sent on.
+    #[serde(default)]
+    pub head: Option<String>,
+    /// The summary as sent.
+    #[serde(default)]
+    pub body: Option<String>,
+    /// The line comments as sent, one `path:line: text` for each line.
+    #[serde(default)]
+    pub lines: Option<String>,
 }
 
 type R<T> = rusqlite::Result<T>;
@@ -282,17 +312,17 @@ impl Store {
 
     pub fn save_review(&self, r: &ReviewRow, opened: u64) -> R<()> {
         self.db.execute(
-            "INSERT INTO review (id, url, repo, number, title, head, base, tree, connection, guide_session, guide, opened)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-             ON CONFLICT(id) DO UPDATE SET title=?5, head=?6, base=?7, tree=?8, connection=?9, guide_session=?10, guide=?11",
-            params![r.id, r.url, r.repo, r.number as i64, r.title, r.head, r.base, r.tree, r.connection, r.guide_session, r.guide, opened as i64],
+            "INSERT INTO review (id, url, repo, number, title, head, base, tree, connection, guide_session, guide, opened, round, since, scope_note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+             ON CONFLICT(id) DO UPDATE SET title=?5, head=?6, base=?7, tree=?8, connection=?9, guide_session=?10, guide=?11, round=?13, since=?14, scope_note=?15",
+            params![r.id, r.url, r.repo, r.number as i64, r.title, r.head, r.base, r.tree, r.connection, r.guide_session, r.guide, opened as i64, r.round, r.since, r.scope_note],
         )?;
         Ok(())
     }
 
     pub fn open_reviews(&self) -> R<Vec<ReviewRow>> {
         let mut s = self.db.prepare(
-            "SELECT id, url, repo, number, title, head, base, tree, connection, guide_session, guide
+            "SELECT id, url, repo, number, title, head, base, tree, connection, guide_session, guide, round, since, scope_note
              FROM review WHERE closed IS NULL ORDER BY opened",
         )?;
         let rows = s.query_map([], |r| {
@@ -308,6 +338,9 @@ impl Store {
                 connection: r.get(8)?,
                 guide_session: r.get(9)?,
                 guide: r.get(10)?,
+                round: r.get(11)?,
+                since: r.get(12)?,
+                scope_note: r.get(13)?,
             })
         })?;
         rows.collect()
@@ -494,8 +527,9 @@ impl Store {
     pub fn record_posted(&self, review: &str, p: &PostedRow, drafts: &[i64]) -> R<()> {
         let tx = self.db.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO posted (review, event, url, comments, time) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![review, p.event, p.url, p.comments, p.time],
+            "INSERT INTO posted (review, event, url, comments, time, head, body, lines)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![review, p.event, p.url, p.comments, p.time, p.head, p.body, p.lines],
         )?;
         for d in drafts {
             tx.execute("DELETE FROM draft WHERE id = ?1 AND review = ?2", params![d, review])?;
@@ -504,9 +538,30 @@ impl Store {
         tx.commit()
     }
 
+    /// The reviews sent in one round of a PR, also from a closed round.
+    pub fn posted_for(&self, repo: &str, number: u64, round: u32) -> R<Vec<PostedRow>> {
+        let mut s = self.db.prepare(
+            "SELECT p.event, p.url, p.comments, p.time, p.head, p.body, p.lines FROM posted p
+             JOIN review r ON r.id = p.review
+             WHERE r.repo = ?1 AND r.number = ?2 AND r.round = ?3 ORDER BY p.id",
+        )?;
+        let rows = s.query_map(params![repo, number as i64, round], |r| {
+            Ok(PostedRow {
+                event: r.get(0)?,
+                url: r.get(1)?,
+                comments: r.get(2)?,
+                time: r.get(3)?,
+                head: r.get(4)?,
+                body: r.get(5)?,
+                lines: r.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     pub fn posted(&self, review: &str) -> R<Vec<PostedRow>> {
         let mut s = self.db.prepare(
-            "SELECT event, url, comments, time FROM posted WHERE review = ?1 ORDER BY id",
+            "SELECT event, url, comments, time, head, body, lines FROM posted WHERE review = ?1 ORDER BY id",
         )?;
         let rows = s.query_map([review], |r| {
             Ok(PostedRow {
@@ -514,6 +569,9 @@ impl Store {
                 url: r.get(1)?,
                 comments: r.get(2)?,
                 time: r.get(3)?,
+                head: r.get(4)?,
+                body: r.get(5)?,
+                lines: r.get(6)?,
             })
         })?;
         rows.collect()
@@ -598,7 +656,7 @@ mod tests {
             .unwrap();
         db.execute("INSERT INTO pane (id, kind, repo, tree, lamp, unseen, updated) VALUES ('p1', 'shell', 'r', '/', 'none', 0, 1)", []).unwrap();
         let s = Store::init(db).unwrap();
-        assert_eq!(s.version().unwrap(), 3);
+        assert_eq!(s.version().unwrap(), SCHEMA.len());
         assert_eq!(s.open_panes().unwrap().len(), 1);
     }
 
@@ -640,6 +698,9 @@ mod tests {
             connection: None,
             guide_session: None,
             guide: None,
+            round: 2,
+            since: Some("abc0".into()),
+            scope_note: None,
         };
         s.save_review(&r, 1).unwrap();
         let t = ThreadRow {
@@ -706,6 +767,9 @@ mod tests {
             url: "https://github.com/o/r/pull/1#pullrequestreview-9".into(),
             comments: 1,
             time: 5,
+            head: Some("h1".into()),
+            body: Some("Please fix.".into()),
+            lines: Some("a.rs:1: sent".into()),
         };
         s.record_posted("r1", &p, &[sent]).unwrap();
         let left: Vec<String> = s.drafts("r1").unwrap().into_iter().map(|d| d.text).collect();

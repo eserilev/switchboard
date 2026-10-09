@@ -53,7 +53,12 @@ window.__TAURI__ = {
         case "repos": return d.repos;
         case "reviews": return d.reviews;
         case "layouts": return ["day"];
-        case "review_view": return d.reviews[0];
+        case "review_view": return d.reviews.find((x) => x.id === args.id) || d.reviews[0];
+        case "review_round": {
+          d.reviews.push(Object.assign(structuredClone(d.reviews[0]), { id: "r2", round: 2, since: "ac92ae9aaaa", head: "fff0000bbbb", new_head: null,
+            scope_note: "The author rebased or merged the base branch. This round leaves out the changes from the base branch." }));
+          return "r2";
+        }
         case "review_diff": return { sections: d.diff.sections.map((x) => ({ ...x, other: { lines: 4, steps: ["s1"] } })) };
         case "review_ask": return "t2";
         case "pane_expand": return btoa("\x1b[H\x1b[2Jhello from the live pane\r\n$ ");

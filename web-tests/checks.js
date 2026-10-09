@@ -265,6 +265,17 @@
   docKey("f");
   await wait(150);
 
+  // Round 2: after new commits, a new review of only the changes since this head.
+  window.__emit("review", Object.assign({}, window.__data.reviews[0], { new_head: "fff0000bbbb" }));
+  await wait(100);
+  check("new commits offer the next round", $('#rhead [data-act="round"]')?.textContent === "Start round 2" && !!$('#rhead [data-act="update"]'));
+  $('#rhead [data-act="round"]').click();
+  await wait(200);
+  check("the round opens in its own tab", $('#tabs [data-tab="r2"]')?.textContent.includes("#10071 R2") && $('#tabs [data-tab="r2"]').getAttribute("aria-selected") === "true", $("#tabs").textContent);
+  check("the round header names its scope", $("#rhead .roundtag")?.textContent.includes("Round 2 · changes since ac92ae9aa") && $("#rhead .scopenote")?.textContent.includes("leaves out the changes from the base branch"), $("#rhead").textContent);
+  window.SB.setTab("r1");
+  await wait(100);
+
   // Back to the board with the leader.
   key(" ", { ctrl: true, code: "Space" });
   key("b");

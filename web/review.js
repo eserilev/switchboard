@@ -216,18 +216,29 @@
 
   function drawHead(r) {
     const status = { fetching: "Fetching the PR", writing: "Writing the guide", updating: "Updating the guide", error: "Error", ready: "" }[r.status] ?? r.status;
-    const newHead = r.new_head ? `<span class="newhead">New commits: ${esc(short(r.head))} → ${esc(short(r.new_head))}<button class="btn small" data-act="update">Update guide</button></span>` : "";
+    const next = (r.round || 1) + 1;
+    const newHead = r.new_head ? `<span class="newhead">New commits: ${esc(short(r.head))} → ${esc(short(r.new_head))}<button class="btn small primary" data-act="round" title="A new review of only the changes since ${esc(short(r.head))}">Start round ${next}</button><button class="btn small" data-act="update" title="Write this guide again for the new head">Update guide</button></span>` : "";
+    // A later round covers only the changes since the round before.
+    const round = r.round > 1 ? `<span class="roundtag" title="${esc(r.scope_note || "A plain diff from the commit that the round before reviewed.")}">Round ${r.round} · changes since ${esc(short(r.since))}${r.scope_note ? " ⚠" : ""}</span>` : "";
     const retry = r.status === "error" ? `<button class="btn small" data-act="retry">Retry</button>` : "";
     $("#rhead").innerHTML = `<div><div class="t">${esc(r.title)}</div><div class="m">${esc(r.repo)} #${esc(r.number)} · ${esc(short(r.head))}${r.tree ? " · " + esc(r.tree) : ""}</div></div>
-      ${status ? `<span class="status${r.status === "error" ? " error" : ""}">${esc(status)}</span>` : ""}${coverageLine(r)}${newHead}
+      ${round}${status ? `<span class="status${r.status === "error" ? " error" : ""}">${esc(status)}</span>` : ""}${coverageLine(r)}${newHead}
       <div class="right"><div class="seg" id="rmode" title="Switch with f"><button type="button" data-mode="guide" aria-pressed="${local(r.id).mode === "guide"}">Guide</button><button type="button" data-mode="files" aria-pressed="${local(r.id).mode === "files"}">Files</button></div>${retry}<button class="btn small" data-act="close">Close review</button></div>
-      ${r.error ? `<div class="rerror" style="flex-basis:100%;padding:0">${esc(r.error)}</div>` : ""}`;
+      ${r.error ? `<div class="rerror" style="flex-basis:100%;padding:0">${esc(r.error)}</div>` : ""}
+      ${r.round > 1 && r.scope_note ? `<div class="scopenote">${esc(r.scope_note)}</div>` : ""}`;
     $("#rhead").onclick = async (e) => {
       const mode = e.target.closest("[data-mode]")?.dataset.mode;
       if (mode) return setMode(r.id, mode);
       const act = e.target.closest("[data-act]")?.dataset.act;
       if (act === "update") { local(r.id).diff.clear(); local(r.id).files = null; call("review_update", { id: r.id }); }
       if (act === "retry") call("review_retry", { id: r.id });
+      if (act === "round") {
+        try {
+          const nid = await invoke("review_round", { id: r.id });
+          if (!S.reviews.has(nid)) S.reviews.set(nid, await invoke("review_view", { id: nid }));
+          window.SB.setTab(nid);
+        } catch (err) { toast(err); }
+      }
       if (act === "close") call("review_close", { id: r.id });
     };
   }

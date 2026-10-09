@@ -53,6 +53,10 @@ pub struct ReviewView {
     pub head: String,
     pub base: String,
     pub tree: String,
+    /// 1 for a full review; later rounds cover only the changes since `since`.
+    pub round: u32,
+    pub since: Option<String>,
+    pub scope_note: Option<String>,
     pub status: String,
     pub error: Option<String>,
     pub new_head: Option<String>,
@@ -152,6 +156,25 @@ pub struct FileEntry {
     pub note: Option<String>,
     /// The ids of the guide steps that cover the file.
     pub steps: Vec<String>,
+}
+
+/// The worktree of a review round. Each round has its own, so rounds do not share a checkout.
+fn worktree_name(number: u64, round: u32) -> String {
+    if round > 1 {
+        format!("pr{number}-r{round}")
+    } else {
+        format!("pr{number}")
+    }
+}
+
+/// The base of the diff of a round and a note. A first round uses the merge base.
+/// A later round starts at the head that the round before reviewed (`review::round_base`).
+fn scope(f: &review::Fetched, round: u32, since: Option<&str>) -> Res<(String, Option<String>)> {
+    match since.filter(|_| round > 1) {
+        Some(s) if s == f.head => Err("The PR has no new commits since the round before.".into()),
+        Some(s) => review::round_base(&f.tree, s, &f.base, &f.head),
+        None => Ok((f.base.clone(), None)),
+    }
 }
 
 /// Why a file has no lines to show, or `None`.
@@ -279,6 +302,9 @@ impl Hub {
             head: r.row.head.clone(),
             base: r.row.base.clone(),
             tree: r.row.tree.clone(),
+            round: r.row.round,
+            since: r.row.since.clone(),
+            scope_note: r.row.scope_note.clone(),
             status: r.status.clone(),
             error: r.error.clone(),
             new_head: r.new_head.clone(),
@@ -330,7 +356,8 @@ impl Hub {
             .lock()
             .unwrap()
             .values()
-            .find(|r| r.row.repo == pr.repo && r.row.number == pr.number)
+            .filter(|r| r.row.repo == pr.repo && r.row.number == pr.number)
+            .max_by_key(|r| r.row.round)
             .map(|r| r.row.id.clone());
         if let Some(id) = existing {
             return Ok(id);
@@ -348,6 +375,9 @@ impl Hub {
             connection: Some(self.active_connection()),
             guide_session: None,
             guide: None,
+            round: 1,
+            since: None,
+            scope_note: None,
         };
         self.reviews.lock().unwrap().insert(
             id.clone(),
@@ -377,17 +407,17 @@ impl Hub {
     fn review_prepare(&self, id: &str) -> Res<()> {
         let t0 = std::time::Instant::now();
         let ms = || t0.elapsed().as_millis() as u64;
-        let (url, repo) = {
+        let (url, repo, round, since) = {
             let r = self.reviews.lock().unwrap();
             let r = r.get(id).ok_or("gone")?;
-            (r.row.url.clone(), r.row.repo.clone())
+            (r.row.url.clone(), r.row.repo.clone(), r.row.round, r.row.since.clone())
         };
-        tracing::info!(target: "sb::review", review = id, %url, "review: gh pr view");
+        tracing::info!(target: "sb::review", review = id, %url, round, "review: gh pr view");
         let pr = review::gh_view(&url)?;
         tracing::info!(target: "sb::review", review = id, ms = ms(), files = pr.files.len(), head = %pr.head_ref_oid, "review: got the PR");
         let (dir, remote) = self.find_clone(&repo)?;
         tracing::info!(target: "sb::review", review = id, ms = ms(), clone = %dir.display(), %remote, "review: found the clone");
-        let f = review::fetch(&dir, &remote, &pr)?;
+        let f = review::fetch_into(&dir, &remote, &pr, &worktree_name(pr.number, round))?;
         tracing::info!(target: "sb::review", review = id, ms = ms(), tree = %f.tree.display(), "review: worktree ready");
         if f.head != pr.head_ref_oid {
             return Err(format!(
@@ -395,17 +425,23 @@ impl Hub {
                 pr.head_ref_oid, f.head
             ));
         }
+        let (base, note) = scope(&f, round, since.as_deref())?;
         if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
             r.row.title = pr.title.clone();
             r.row.head = f.head.clone();
-            r.row.base = f.base.clone();
+            r.row.base = base;
+            r.row.scope_note = note;
             r.row.tree = f.tree.to_string_lossy().into_owned();
             r.row.guide = None;
             r.attempts = 0;
             r.proposal = None;
         }
         self.save_row(id);
-        self.load_model(id, Some(&pr))?;
+        // GitHub's counts are for the whole PR, so only a first round compares them.
+        let model = self.load_model(id, (round == 1).then_some(&pr))?;
+        if model.files.is_empty() {
+            return Err("No file changed since the round before.".into());
+        }
         tracing::info!(target: "sb::review", review = id, ms = ms(), "review: diff model checked");
         self.run_guide(id, &pr, None)
     }
@@ -577,9 +613,14 @@ impl Hub {
             .iter()
             .map(|s| expand(s).to_string_lossy().into_owned())
             .collect();
-        let prompt = update
-            .clone()
-            .unwrap_or_else(|| review::prompt(&template, pr, &head, &specs));
+        let prompt = match update.clone() {
+            Some(u) => u,
+            None => {
+                let mut p = review::prompt(&template, pr, &head, &specs);
+                p += &self.round_prompt(id)?;
+                p
+            }
+        };
         let env = connections::env(&config, &connection)?;
         let sock = self.paths.sock();
         let resume = update.as_ref().and(session.as_deref());
@@ -613,6 +654,136 @@ impl Hub {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Starts the next round of a review: a new review of the same PR that covers
+    /// only the changes since the head that this review covered. The verified checker
+    /// then proves that the new guide covers every line changed since then.
+    pub fn review_round(&self, id: &str) -> Res<String> {
+        let prev = self
+            .reviews
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|r| r.row.clone())
+            .ok_or(format!("no review {id}"))?;
+        if prev.head.is_empty() || prev.guide.is_none() {
+            return Err("Finish this round first: it has no guide yet.".into());
+        }
+        let later = self
+            .reviews
+            .lock()
+            .unwrap()
+            .values()
+            .find(|r| r.row.repo == prev.repo && r.row.number == prev.number && r.row.round > prev.round)
+            .map(|r| r.row.id.clone());
+        if let Some(later) = later {
+            return Ok(later);
+        }
+        let nid = self.store.lock().unwrap().next_id("r").map_err(e)?;
+        let row = ReviewRow {
+            id: nid.clone(),
+            url: prev.url.clone(),
+            repo: prev.repo.clone(),
+            number: prev.number,
+            title: prev.title.clone(),
+            head: String::new(),
+            base: String::new(),
+            tree: String::new(),
+            connection: Some(self.active_connection()),
+            guide_session: None,
+            guide: None,
+            round: prev.round + 1,
+            since: Some(prev.head.clone()),
+            scope_note: None,
+        };
+        self.reviews.lock().unwrap().insert(
+            nid.clone(),
+            ReviewState {
+                row,
+                status: "fetching".into(),
+                error: None,
+                new_head: None,
+                last_poll: now(),
+                model: None,
+                attempts: 0,
+                proposal: None,
+                coverage: None,
+            },
+        );
+        self.save_row(&nid);
+        self.emit_review(&nid);
+        let hub = self.arc();
+        let rid = nid.clone();
+        std::thread::spawn(move || {
+            if let Err(err) = hub.review_prepare(&rid) {
+                hub.set_status(&rid, "error", Some(err));
+            }
+        });
+        Ok(nid)
+    }
+
+    /// The part of the guide prompt for a later round: the scope, and the comments
+    /// that the round before sent. Empty for a first round.
+    fn round_prompt(&self, id: &str) -> Res<String> {
+        let row = self
+            .reviews
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|r| r.row.clone())
+            .ok_or("gone")?;
+        let Some(since) = row.since.clone().filter(|_| row.round > 1) else {
+            return Ok(String::new());
+        };
+        let model = self.model(id)?;
+        let files: Vec<String> = model
+            .files
+            .iter()
+            .map(|f| {
+                let add = f.added.iter().filter(|m| **m).count();
+                let del = f.removed.iter().filter(|m| **m).count();
+                format!("- {} (+{add} -{del})", f.path())
+            })
+            .collect();
+        let sent = self
+            .store
+            .lock()
+            .unwrap()
+            .posted_for(&row.repo, row.number, row.round - 1)
+            .map_err(e)?;
+        let mut comments: Vec<String> = vec![];
+        for p in &sent {
+            if let Some(b) = p.body.as_deref().filter(|b| !b.trim().is_empty()) {
+                comments.push(format!("- Summary: {}", b.replace('\n', " ")));
+            }
+            for l in p.lines.as_deref().unwrap_or("").lines() {
+                comments.push(format!("- {l}"));
+            }
+        }
+        let prev = row.round - 1;
+        let mut p = format!(
+            "\n\nThis is round {} of the review. Round {prev} reviewed commit {since}. This round covers only the changes since then. \
+             The rules above about the merge base and the changed files do not apply. \
+             The diff of this round is `git diff -U0 {} {}`. Old line numbers are in {}, new line numbers are at the head. \
+             Every changed line of this diff must be in a range, and no other line.\n",
+            row.round, row.base, row.head, row.base
+        );
+        if let Some(n) = &row.scope_note {
+            p += &format!("{n}\n");
+        }
+        p += &format!("Files changed in this round:\n{}\n", files.join("\n"));
+        if comments.is_empty() {
+            p += &format!("The reviewer sent no comments in round {prev}.\n");
+        } else {
+            p += &format!(
+                "Comments the reviewer sent in round {prev}, at commit {since}:\n{}\n\
+                 For each comment, say in the step that changes its code whether the change addresses it. \
+                 Put the comments that no change touches in one step with no code, titled \"Round {prev} comments not touched\".\n",
+                comments.join("\n")
+            );
+        }
+        Ok(p)
     }
 
     pub fn review_retry(&self, id: &str) -> Res<()> {
@@ -1211,7 +1382,8 @@ impl Hub {
         }
         let gh = crate::post::parse_pr_diff(&review::gh_pr_diff(&row.repo, row.number)?);
         let drafts = self.store.lock().unwrap().drafts(id).map_err(e)?;
-        Ok((row, crate::post::plan(&model, &gh, &drafts)))
+        // In a later round the old side is the code of the round before, not GitHub's base.
+        Ok((row.clone(), crate::post::plan(&model, &gh, &drafts, row.round == 1)))
     }
 
     pub fn review_post_preview(&self, id: &str) -> Res<PostPreview> {
@@ -1238,6 +1410,15 @@ impl Hub {
             url: url.clone(),
             comments: plan.inline.len() as u32,
             time: now(),
+            head: Some(plan.head.clone()),
+            body: payload["body"].as_str().map(str::to_owned),
+            lines: Some(
+                plan.inline
+                    .iter()
+                    .map(|c| format!("{}:{}{}: {}", c.path, c.line, if c.side == "LEFT" { " (old)" } else { "" }, c.text))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
         };
         self.store
             .lock()
@@ -1315,15 +1496,15 @@ impl Hub {
     }
 
     fn review_update_now(&self, id: &str) -> Res<()> {
-        let (url, repo, old) = {
+        let (url, repo, old, round, since) = {
             let r = self.reviews.lock().unwrap();
             let r = r.get(id).ok_or("gone")?;
-            (r.row.url.clone(), r.row.repo.clone(), r.row.head.clone())
+            (r.row.url.clone(), r.row.repo.clone(), r.row.head.clone(), r.row.round, r.row.since.clone())
         };
         self.set_status(id, "updating", None);
         let pr = review::gh_view(&url)?;
         let (dir, remote) = self.find_clone(&repo)?;
-        let f = review::fetch(&dir, &remote, &pr)?;
+        let f = review::fetch_into(&dir, &remote, &pr, &worktree_name(pr.number, round))?;
         if f.head != pr.head_ref_oid {
             return Err(format!(
                 "the PR head moved during the fetch (GitHub {}, fetched {}). Use Update again.",
@@ -1331,15 +1512,17 @@ impl Hub {
             ));
         }
         let changed = review::changed_files(&f.tree, &old, &f.head).unwrap_or_default();
+        let (base, note) = scope(&f, round, since.as_deref())?;
         if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
             r.row.head = f.head.clone();
-            r.row.base = f.base.clone();
+            r.row.base = base;
+            r.row.scope_note = note;
             r.new_head = None;
             r.attempts = 0;
             r.proposal = None;
         }
         self.save_row(id);
-        self.load_model(id, Some(&pr))?;
+        self.load_model(id, (round == 1).then_some(&pr))?;
         let guide: Option<Value> = self.reviews.lock().unwrap().get(id).and_then(|r| {
             r.row
                 .guide

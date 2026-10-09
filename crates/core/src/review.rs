@@ -183,6 +183,11 @@ pub struct Fetched {
 
 /// Fetches the PR head and base, and puts the head in its own worktree.
 pub fn fetch(repo_dir: &Path, remote: &str, pr: &PrInfo) -> Result<Fetched, String> {
+    fetch_into(repo_dir, remote, pr, &format!("pr{}", pr.number))
+}
+
+/// As `fetch`, with the worktree named `name`. Each review round has its own worktree.
+pub fn fetch_into(repo_dir: &Path, remote: &str, pr: &PrInfo, name: &str) -> Result<Fetched, String> {
     let branch = format!("sb-pr-{}", pr.number);
     let have = |oid: &str| {
         !oid.is_empty() && git(repo_dir, &["cat-file", "-e", &format!("{oid}^{{commit}}")]).is_ok()
@@ -228,7 +233,7 @@ pub fn fetch(repo_dir: &Path, remote: &str, pr: &PrInfo) -> Result<Fetched, Stri
     };
     let head = git(repo_dir, &["rev-parse", &branch])?;
     let base = git(repo_dir, &["merge-base", &base_tip, &head])?;
-    let tree = worktree_path(repo_dir, &format!("pr{}", pr.number));
+    let tree = worktree_path(repo_dir, name);
     tracing::info!(target: "sb::review", tree = %tree.display(), exists = tree.exists(), "PR worktree");
     if tree.exists() {
         git(&tree, &["checkout", "-q", "--detach", &head])?;
@@ -520,6 +525,59 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
 }
 
 /// Files changed between two heads, for stale steps.
+/// The base of a later round: the code that the round before reviewed, so the round
+/// shows only what changed since then.
+///
+/// - The author only added commits on top of `since`: the base is `since`.
+/// - The author rebased, or merged the base branch: the base is `since` with the
+///   new base branch merged in (`git merge-tree`). The round then leaves out the
+///   changes that came from the base branch.
+/// - That merge has conflicts: the base is `since`, and the note says that the
+///   round also shows changes from the base branch.
+///
+/// Returns the base (a commit or a tree id) and a note when the base is not `since`.
+pub fn round_base(
+    dir: &Path,
+    since: &str,
+    new_base: &str,
+    head: &str,
+) -> Result<(String, Option<String>), String> {
+    let ancestor = |a: &str, b: &str| {
+        Command::new("git")
+            .args(["merge-base", "--is-ancestor", a, b])
+            .current_dir(dir)
+            .stdin(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .map_err(|e| format!("git: {e}"))
+    };
+    if ancestor(since, head)? && ancestor(new_base, since)? {
+        return Ok((since.to_owned(), None));
+    }
+    let out = Command::new("git")
+        .args(["merge-tree", "--write-tree", "--no-messages", since, new_base])
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("git merge-tree: {e}"))?;
+    let tree = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    if out.status.success() && !tree.is_empty() {
+        return Ok((
+            tree,
+            Some("The author rebased or merged the base branch. This round leaves out the changes from the base branch.".into()),
+        ));
+    }
+    Ok((
+        since.to_owned(),
+        Some("The author rebased or merged the base branch, and git cannot replay it without conflicts. This round also shows changes from the base branch.".into()),
+    ))
+}
+
 pub fn changed_files(tree: &Path, old: &str, new: &str) -> Result<Vec<String>, String> {
     Ok(git(tree, &["diff", "--name-only", old, new])?
         .lines()
@@ -530,6 +588,116 @@ pub fn changed_files(tree: &Path, old: &str, new: &str) -> Result<Vec<String>, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A repo with `main` (a.rs, base.rs) and a PR branch that changed a.rs line 2.
+    /// Returns the dir, the base commit and the round-1 head.
+    fn round_repo(name: &str) -> (PathBuf, String, String) {
+        let dir = std::env::temp_dir().join(format!("sb-round-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let g = |args: &[&str]| git(&dir, args).unwrap();
+        g(&["init", "-q", "-b", "main"]);
+        g(&["config", "user.email", "t@t"]);
+        g(&["config", "user.name", "t"]);
+        std::fs::write(dir.join("a.rs"), "1\n2\n3\n4\n5\n").unwrap();
+        std::fs::write(dir.join("base.rs"), "x\n").unwrap();
+        g(&["add", "."]);
+        g(&["commit", "-qm", "base"]);
+        let base = g(&["rev-parse", "HEAD"]);
+        g(&["checkout", "-qb", "pr"]);
+        std::fs::write(dir.join("a.rs"), "1\nTWO\n3\n4\n5\n").unwrap();
+        g(&["commit", "-qam", "round 1"]);
+        let since = g(&["rev-parse", "HEAD"]);
+        (dir, base, since)
+    }
+
+    /// The changed lines of a round, as `path:side:line`.
+    fn round_changes(dir: &Path, base: &str, head: &str) -> Vec<String> {
+        let m = crate::coverage::build(dir, base, head).unwrap();
+        crate::coverage::rebuild_ok(&m).unwrap();
+        let mut out = vec![];
+        for f in &m.files {
+            for (k, c) in f.removed.iter().enumerate() {
+                if *c {
+                    out.push(format!("{}:old:{}", f.path(), k + 1));
+                }
+            }
+            for (k, c) in f.added.iter().enumerate() {
+                if *c {
+                    out.push(format!("{}:new:{}", f.path(), k + 1));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_round_after_new_commits_shows_only_them() {
+        let (dir, base, since) = round_repo("plain");
+        std::fs::write(dir.join("a.rs"), "1\nTWO\n3\n4\nFIVE\n").unwrap();
+        git(&dir, &["commit", "-qam", "fix"]).unwrap();
+        let head = git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let (b, note) = round_base(&dir, &since, &base, &head).unwrap();
+        assert_eq!((b.as_str(), note), (since.as_str(), None));
+        assert_eq!(round_changes(&dir, &b, &head), ["a.rs:old:5", "a.rs:new:5"]);
+    }
+
+    #[test]
+    fn a_round_after_a_base_merge_leaves_out_the_base_changes() {
+        let (dir, _, since) = round_repo("merge");
+        let g = |args: &[&str]| git(&dir, args).unwrap();
+        g(&["checkout", "-q", "main"]);
+        std::fs::write(dir.join("base.rs"), "x\ny\n").unwrap();
+        g(&["commit", "-qam", "main moves"]);
+        g(&["checkout", "-q", "pr"]);
+        g(&["merge", "-q", "--no-edit", "main"]);
+        std::fs::write(dir.join("a.rs"), "1\nTWO\n3\nFOUR\n5\n").unwrap();
+        g(&["commit", "-qam", "fix"]);
+        let head = g(&["rev-parse", "HEAD"]);
+        let new_base = g(&["merge-base", "main", "pr"]);
+        let (b, note) = round_base(&dir, &since, &new_base, &head).unwrap();
+        assert!(note.unwrap().contains("leaves out"));
+        assert_eq!(round_changes(&dir, &b, &head), ["a.rs:old:4", "a.rs:new:4"]);
+        // A plain diff from the reviewed head would also show base.rs.
+        assert!(round_changes(&dir, &since, &head).iter().any(|c| c.starts_with("base.rs")));
+    }
+
+    #[test]
+    fn a_round_after_a_rebase_leaves_out_the_base_changes() {
+        let (dir, _, since) = round_repo("rebase");
+        let g = |args: &[&str]| git(&dir, args).unwrap();
+        g(&["checkout", "-q", "main"]);
+        std::fs::write(dir.join("base.rs"), "x\ny\n").unwrap();
+        g(&["commit", "-qam", "main moves"]);
+        g(&["checkout", "-q", "pr"]);
+        g(&["rebase", "-q", "main"]);
+        std::fs::write(dir.join("a.rs"), "1\nTWO\nTHREE\n4\n5\n").unwrap();
+        g(&["commit", "-qam", "fix"]);
+        let head = g(&["rev-parse", "HEAD"]);
+        let new_base = g(&["merge-base", "main", "pr"]);
+        let (b, note) = round_base(&dir, &since, &new_base, &head).unwrap();
+        assert!(note.is_some());
+        assert_eq!(round_changes(&dir, &b, &head), ["a.rs:old:3", "a.rs:new:3"]);
+    }
+
+    #[test]
+    fn a_conflict_falls_back_to_the_reviewed_head_with_a_note() {
+        let (dir, _, since) = round_repo("conflict");
+        let g = |args: &[&str]| git(&dir, args).unwrap();
+        g(&["checkout", "-q", "main"]);
+        std::fs::write(dir.join("a.rs"), "1\nzwei\n3\n4\n5\n").unwrap();
+        g(&["commit", "-qam", "main changes line 2"]);
+        g(&["checkout", "-q", "pr"]);
+        let _ = git(&dir, &["merge", "-q", "--no-edit", "main"]);
+        std::fs::write(dir.join("a.rs"), "1\nTWO\n3\n4\n5\n").unwrap();
+        g(&["add", "a.rs"]);
+        g(&["commit", "-qm", "resolve"]);
+        let head = g(&["rev-parse", "HEAD"]);
+        let new_base = g(&["merge-base", "main", "pr"]);
+        let (b, note) = round_base(&dir, &since, &new_base, &head).unwrap();
+        assert_eq!(b, since);
+        assert!(note.unwrap().contains("also shows"));
+    }
 
     #[test]
     fn urls() {

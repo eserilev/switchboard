@@ -44,7 +44,7 @@ fn every_changed_line_goes_on_its_line() {
             }
         }
     }
-    let p = post::plan(&m, &gh, &drafts);
+    let p = post::plan(&m, &gh, &drafts, true);
     println!(
         "{} files, {} drafts: {} on lines, {} into the summary, {} errors",
         m.files.len(),
