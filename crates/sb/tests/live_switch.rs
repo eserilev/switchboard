@@ -67,13 +67,7 @@ fn live_switch_keeps_the_session() {
     struct Kill;
     impl Drop for Kill {
         fn drop(&mut self) {
-            let _ = Command::new("tmux")
-                .args([
-                    "-L",
-                    &std::env::var("SB_TMUX_SOCKET").unwrap(),
-                    "kill-server",
-                ])
-                .status();
+            switchboard_core::tmux::kill_server(&std::env::var("SB_TMUX_SOCKET").unwrap());
         }
     }
     let _kill = Kill;

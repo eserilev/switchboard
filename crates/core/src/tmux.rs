@@ -280,10 +280,24 @@ impl Tmux {
 
     /// Stops the whole server and every pane in it. Tests use it; the app never does.
     pub fn kill_server(&self) {
-        let _ = Command::new("tmux")
-            .args(["-L", &self.socket, "kill-server"])
-            .status();
+        kill_server(&self.socket);
         let _ = self.child.lock().unwrap().wait();
+    }
+}
+
+/// Stops a tmux server by socket name, and removes its socket file: tmux leaves it behind.
+pub fn kill_server(socket: &str) {
+    let path = Command::new("tmux")
+        .args(["-L", socket, "display", "-p", "#{socket_path}"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .filter(|p| !p.is_empty());
+    let _ = Command::new("tmux")
+        .args(["-L", socket, "kill-server"])
+        .status();
+    if let Some(p) = path {
+        let _ = std::fs::remove_file(p);
     }
 }
 

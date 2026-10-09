@@ -126,12 +126,6 @@ fn live_review_of_a_tiny_pr() {
     assert_eq!(v.pins.len(), 1);
     assert_eq!(v.drafts.len(), 1);
 
-    let _ = Command::new("tmux")
-        .args([
-            "-L",
-            &std::env::var("SB_TMUX_SOCKET").unwrap(),
-            "kill-server",
-        ])
-        .status();
+    switchboard_core::tmux::kill_server(&std::env::var("SB_TMUX_SOCKET").unwrap());
     let _ = std::fs::remove_dir_all(&root);
 }

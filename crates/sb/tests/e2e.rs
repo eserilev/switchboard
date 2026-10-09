@@ -95,9 +95,7 @@ fn hooks_permits_and_panes_end_to_end() {
     struct Kill(String);
     impl Drop for Kill {
         fn drop(&mut self) {
-            let _ = Command::new("tmux")
-                .args(["-L", &self.0, "kill-server"])
-                .status();
+            switchboard_core::tmux::kill_server(&self.0);
         }
     }
     let _kill = Kill(std::env::var("SB_TMUX_SOCKET").unwrap());
