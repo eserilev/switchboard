@@ -65,6 +65,16 @@ main() {
 
   pick_package_manager "$os"
 
+  # The app runs the `sb` next to it for every hook and for its MCP server. So both
+  # binaries must be ours: a file of another tool there stops the install, before
+  # any download or build.
+  local b
+  if [ "$os" = Linux ]; then
+    for b in switchboard sb; do
+      ours "$bin_dir/$b" || die "$bin_dir/$b is not from Switchboard. The app runs the sb next to it for every hook, so the install stops. Move that file away, or use --prefix, then run this again."
+    done
+  fi
+
   # The checkout this script is in, only when it runs from a real file.
   local src="" here
   if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
@@ -276,12 +286,17 @@ desktop_exec() {
   v=${v//\"/\\\"}
   v=${v//\`/\\\`}
   v=${v//\$/\\\$}
+  # The file format reads a string once more: each \ is \\ there. And % starts
+  # a field code: %% is a %.
+  v=${v//\\/\\\\}
+  v=${v//%/%%}
   printf '"%s"' "$v"
 }
 
 do_install() {
   local os=$1 out=$2
   installed=()
+
   if [ "$os" = Darwin ]; then
     if ! ours "$mac_app"; then
       die "$mac_app is not from this script. Move it away, then run this again."
@@ -305,9 +320,9 @@ do_install() {
     rm -f "$tmp"
     put "$out/switchboard.png" "$data_home/icons/hicolor/256x256/apps/switchboard.png" 644
   fi
-  [ "$os" = Darwin ] || say "Installed: ${installed[*]}"
+  [ "$os" = Darwin ] || say "Installed: ${installed[*]+"${installed[*]}"}"
   mkdir -p "$(dirname "$manifest")"
-  { [ -f "$manifest" ] && cat "$manifest"; printf '%s\n' "${installed[@]}"; } | sort -u > "$manifest.new"
+  { [ -f "$manifest" ] && cat "$manifest"; printf '%s\n' "${installed[@]+"${installed[@]}"}"; } | sort -u > "$manifest.new"
   mv "$manifest.new" "$manifest"
   case ":$PATH:" in
     *":$bin_dir:"*) ;;
