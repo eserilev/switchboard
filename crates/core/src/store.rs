@@ -29,6 +29,13 @@ const SCHEMA: &[&str] = &[
        line INTEGER, text TEXT NOT NULL);",
     // Version 2: the board order. A new pane has no position and goes last.
     "ALTER TABLE pane ADD COLUMN pos INTEGER;",
+    // Version 3: comments you write yourself, line ranges, the review summary, and
+    // the reviews sent to GitHub. Older drafts came from the agent.
+    "ALTER TABLE draft ADD COLUMN start_line INTEGER;
+     ALTER TABLE draft ADD COLUMN agent INTEGER NOT NULL DEFAULT 1;
+     ALTER TABLE review ADD COLUMN summary TEXT;
+     CREATE TABLE posted (id INTEGER PRIMARY KEY, review TEXT NOT NULL, event TEXT NOT NULL,
+       url TEXT NOT NULL, comments INTEGER NOT NULL, time INTEGER NOT NULL);",
 ];
 
 pub struct Store {
@@ -99,8 +106,22 @@ pub struct DraftRow {
     pub id: i64,
     pub path: Option<String>,
     pub side: Option<String>,
+    /// The last line of the comment. With `start_line`, the comment covers a range.
     pub line: Option<u32>,
+    #[serde(default)]
+    pub start_line: Option<u32>,
     pub text: String,
+    /// True when the agent wrote the text. You see and edit it before it goes out.
+    #[serde(default)]
+    pub agent: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PostedRow {
+    pub event: String,
+    pub url: String,
+    pub comments: u32,
+    pub time: u64,
 }
 
 type R<T> = rusqlite::Result<T>;
@@ -413,8 +434,9 @@ impl Store {
 
     pub fn add_draft(&self, review: &str, d: &DraftRow) -> R<i64> {
         self.db.execute(
-            "INSERT INTO draft (review, path, side, line, text) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![review, d.path, d.side, d.line, d.text],
+            "INSERT INTO draft (review, path, side, line, start_line, text, agent)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![review, d.path, d.side, d.line, d.start_line, d.text, d.agent],
         )?;
         Ok(self.db.last_insert_rowid())
     }
@@ -434,7 +456,8 @@ impl Store {
 
     pub fn drafts(&self, review: &str) -> R<Vec<DraftRow>> {
         let mut s = self.db.prepare(
-            "SELECT id, path, side, line, text FROM draft WHERE review = ?1 ORDER BY id",
+            "SELECT id, path, side, line, start_line, text, agent FROM draft
+             WHERE review = ?1 ORDER BY id",
         )?;
         let rows = s.query_map([review], |r| {
             Ok(DraftRow {
@@ -442,7 +465,55 @@ impl Store {
                 path: r.get(1)?,
                 side: r.get(2)?,
                 line: r.get(3)?,
-                text: r.get(4)?,
+                start_line: r.get(4)?,
+                text: r.get(5)?,
+                agent: r.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn summary(&self, review: &str) -> R<String> {
+        let s: Option<Option<String>> = self
+            .db
+            .query_row("SELECT summary FROM review WHERE id = ?1", [review], |r| r.get(0))
+            .optional()?;
+        Ok(s.flatten().unwrap_or_default())
+    }
+
+    pub fn set_summary(&self, review: &str, text: &str) -> R<()> {
+        self.db.execute(
+            "UPDATE review SET summary = ?2 WHERE id = ?1",
+            params![review, text],
+        )?;
+        Ok(())
+    }
+
+    /// Records a review that GitHub accepted, and removes the drafts that it sent.
+    /// One transaction, so a draft is never both sent and still pending.
+    pub fn record_posted(&self, review: &str, p: &PostedRow, drafts: &[i64]) -> R<()> {
+        let tx = self.db.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO posted (review, event, url, comments, time) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![review, p.event, p.url, p.comments, p.time],
+        )?;
+        for d in drafts {
+            tx.execute("DELETE FROM draft WHERE id = ?1 AND review = ?2", params![d, review])?;
+        }
+        tx.execute("UPDATE review SET summary = NULL WHERE id = ?1", [review])?;
+        tx.commit()
+    }
+
+    pub fn posted(&self, review: &str) -> R<Vec<PostedRow>> {
+        let mut s = self.db.prepare(
+            "SELECT event, url, comments, time FROM posted WHERE review = ?1 ORDER BY id",
+        )?;
+        let rows = s.query_map([review], |r| {
+            Ok(PostedRow {
+                event: r.get(0)?,
+                url: r.get(1)?,
+                comments: r.get(2)?,
+                time: r.get(3)?,
             })
         })?;
         rows.collect()
@@ -527,8 +598,20 @@ mod tests {
             .unwrap();
         db.execute("INSERT INTO pane (id, kind, repo, tree, lamp, unseen, updated) VALUES ('p1', 'shell', 'r', '/', 'none', 0, 1)", []).unwrap();
         let s = Store::init(db).unwrap();
-        assert_eq!(s.version().unwrap(), 2);
+        assert_eq!(s.version().unwrap(), 3);
         assert_eq!(s.open_panes().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn version_2_drafts_migrate_as_agent_drafts() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(&format!("{}; {}; PRAGMA user_version = 2;", SCHEMA[0], SCHEMA[1]))
+            .unwrap();
+        db.execute("INSERT INTO draft (review, path, side, line, text) VALUES ('r1', 'a.rs', 'new', 3, 'old draft')", []).unwrap();
+        let s = Store::init(db).unwrap();
+        let d = &s.drafts("r1").unwrap()[0];
+        assert!(d.agent);
+        assert_eq!((d.line, d.start_line), (Some(3), None));
     }
 
     #[test]
@@ -583,7 +666,9 @@ mod tests {
                     path: Some("a.rs".into()),
                     side: None,
                     line: Some(10),
+                    start_line: Some(8),
                     text: "nit".into(),
+                    agent: false,
                 },
             )
             .unwrap();
@@ -597,7 +682,34 @@ mod tests {
         assert_eq!(s.pins("r1").unwrap()[0].text, "edited");
         assert_eq!(s.drafts("r1").unwrap()[0].text, "nit: use safe_sub");
         assert_eq!(s.steps("r1").unwrap(), vec![("s3".into(), true, true)]);
+        assert_eq!(s.drafts("r1").unwrap()[0].start_line, Some(8));
         s.delete_draft(d).unwrap();
         assert!(s.drafts("r1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_posted_review_removes_only_its_drafts() {
+        let s = Store::memory().unwrap();
+        let draft = |text: &str| DraftRow {
+            id: 0,
+            path: Some("a.rs".into()),
+            side: Some("new".into()),
+            line: Some(1),
+            start_line: None,
+            text: text.into(),
+            agent: false,
+        };
+        let sent = s.add_draft("r1", &draft("sent")).unwrap();
+        s.add_draft("r1", &draft("kept")).unwrap();
+        let p = PostedRow {
+            event: "COMMENT".into(),
+            url: "https://github.com/o/r/pull/1#pullrequestreview-9".into(),
+            comments: 1,
+            time: 5,
+        };
+        s.record_posted("r1", &p, &[sent]).unwrap();
+        let left: Vec<String> = s.drafts("r1").unwrap().into_iter().map(|d| d.text).collect();
+        assert_eq!(left, ["kept"]);
+        assert_eq!(s.posted("r1").unwrap(), vec![p]);
     }
 }

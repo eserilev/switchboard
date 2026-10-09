@@ -53,7 +53,8 @@
           <form class="ask" id="rask"><label for="rq" hidden>Question</label><textarea id="rq"></textarea><button class="btn primary" type="submit">Ask</button></form>
           <div class="drafts" id="rdrafts"></div>
         </div>
-      </div>`;
+      </div>
+      <div class="finish" id="rfinish" hidden></div>`;
     $("#rask").addEventListener("submit", (e) => { e.preventDefault(); ask(id); });
     $("#rq").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(id); } });
     update(r, true);
@@ -172,16 +173,29 @@
     const html = d.sections.map((sec, si) => {
       const inRange = (side, num) => sec.ranges.some((g) => g.side === side && num >= g.from && num <= g.to);
       const anchored = new Set(r.threads.filter((t) => t.step === s.id && t.line && t.path === sec.path).map((t) => `${t.side || "new"}:${t.line}`));
+      const pathOf = (side) => (side === "old" ? sec.old_path || sec.path : sec.path);
+      const c = l.compose && l.compose.sec === sec.path ? l.compose : null;
       const rows = sec.rows.map((row) => {
-        if (row.kind === "@") return `<tr class="hunk"><td class="ln"></td><td class="src">${esc(row.text)}</td></tr>`;
+        if (row.kind === "@") return `<tr class="hunk"><td class="cm"></td><td class="ln"></td><td class="src">${esc(row.text)}</td></tr>`;
         const rowSide = row.kind === "-" ? "old" : "new";
         const num = rowSide === "old" ? row.old : row.new;
         // A context line is in a range on either side.
         const focus = inRange(rowSide, num) || (row.kind === " " && inRange("old", row.old));
         const isAnchor = l.anchor && l.anchor.path === sec.path && l.anchor.side === rowSide && l.anchor.line === num;
-        const cls = [row.kind === "+" ? "add" : row.kind === "-" ? "del" : "", focus ? "focus" : "", isAnchor ? "anchor" : "", anchored.has(`${rowSide}:${num}`) ? "anchored" : ""].join(" ");
+        const sel = c && c.side === rowSide && num >= c.start && num <= c.line;
+        // The color comes only from the row kind: "-" removed, "+" added, " " context.
+        const cls = [KIND_CLASS[row.kind], focus ? "focus" : "", isAnchor ? "anchor" : "", anchored.has(`${rowSide}:${num}`) ? "anchored" : "", sel ? "sel" : ""].join(" ");
         const sign = row.kind === " " ? " " : row.kind;
-        return `<tr class="${cls}"><td class="ln" data-sec="${si}" data-side="${rowSide}" data-ln="${num}">${num}</td><td class="src">${esc(sign + row.text)}</td></tr>`;
+        const mine = r.drafts.filter((x) => x.path === pathOf(rowSide) && (x.side || "new") === rowSide && x.line === num);
+        const cards = mine.map((x) => `<tr class="drow"><td colspan="3"><div class="dcard${x.agent ? " agent" : ""}" data-d="${x.id}">
+          <div class="dmeta"><span class="who">${x.agent ? "Agent draft" : "Your comment"}</span>${x.start_line ? `<span>lines ${x.start_line}-${x.line}</span>` : ""}<button class="tool x" data-ddel="${x.id}" aria-label="Delete comment">×</button></div>
+          <div class="dtext" contenteditable="true">${esc(x.text)}</div></div></td></tr>`).join("");
+        const form = c && c.side === rowSide && c.line === num ? `<tr class="crow"><td colspan="3"><form class="cform" id="rcform">
+          <div class="cat">Comment on ${esc(c.path)}:${c.start < c.line ? `${c.start}-${c.line}` : c.line}${c.side === "old" ? " (old)" : ""} <span class="hint">Shift-click a + to choose a range</span></div>
+          <textarea id="rctext" placeholder="Leave a comment">${esc(c.text || "")}</textarea>
+          <div class="cbtns"><button type="button" class="btn small" data-ccancel>Cancel</button><button type="submit" class="btn small primary">Add to review</button></div>
+        </form></td></tr>` : "";
+        return `<tr class="${cls}"><td class="cm"><button type="button" class="cmb" data-cm data-sec="${si}" data-side="${rowSide}" data-n="${num}" aria-label="Comment on line ${num}">+</button></td><td class="ln" data-sec="${si}" data-side="${rowSide}" data-ln="${num}">${num}</td><td class="src"><span class="sg">${sign}</span>${esc(row.text)}</td></tr>${cards}${form}`;
       }).join("");
       const moved = sec.old_path && sec.old_path !== sec.path ? ` <span class="ctxnote">from ${esc(sec.old_path)}</span>` : "";
       const note = sec.note ? ` <span class="ctxnote">${esc(sec.note)}</span>` : "";
@@ -189,7 +203,11 @@
         <div class="codewrap"><table class="code">${rows}</table></div>`;
     }).join("");
     $("#rdiff").innerHTML = html;
+    wireComments(r, d);
     $("#rdiff").onclick = async (e) => {
+      if (e.target.closest(".drow, .crow")) return;
+      const cm = e.target.closest("[data-cm]");
+      if (cm) { compose(r, d, cm, e.shiftKey); return; }
       const nv = e.target.closest("[data-nvim]");
       if (nv) {
         const sec = d.sections[+nv.dataset.nvim];
@@ -217,6 +235,61 @@
       (l.scrolled ||= new Set()).add(s.id);
       first.scrollIntoView({ block: "center" });
     }
+  }
+
+  // Kind to class: the only input to the row color.
+  const KIND_CLASS = { "+": "add", "-": "del", " ": "" };
+
+  // Open the comment form on a line, or with Shift, stretch it to a range.
+  function compose(r, d, b, shift) {
+    const l = local(r.id);
+    const sec = d.sections[+b.dataset.sec];
+    const side = b.dataset.side;
+    const n = +b.dataset.n;
+    const path = side === "old" ? sec.old_path || sec.path : sec.path;
+    const c = l.compose;
+    if (shift && c && c.sec === sec.path && c.side === side) {
+      const lo = Math.min(c.start, c.line, n);
+      const hi = Math.max(c.start, c.line, n);
+      l.compose = { ...c, start: lo, line: hi };
+    } else {
+      l.compose = { sec: sec.path, path, side, start: n, line: n, text: c?.text || "" };
+    }
+    drawDiff(r);
+    $("#rctext")?.focus();
+  }
+
+  function wireComments(r, d) {
+    const l = local(r.id);
+    const form = $("#rcform");
+    if (form) {
+      const ta = $("#rctext");
+      ta.addEventListener("input", () => { l.compose.text = ta.value; });
+      ta.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); form.requestSubmit(); }
+        if (e.key === "Escape") { l.compose = null; drawDiff(r); }
+      });
+      form.querySelector("[data-ccancel]").onclick = () => { l.compose = null; drawDiff(r); };
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const c = l.compose;
+        const text = ta.value.trim();
+        if (!c || !text) return;
+        try {
+          await call("review_comment", { id: r.id, path: c.path, side: c.side, line: c.line, startLine: c.start < c.line ? c.start : null, text });
+          l.compose = null;
+          drawDiff(S.reviews.get(r.id) || r);
+        } catch (_) {}
+      });
+    }
+    $("#rdiff").querySelectorAll(".dcard").forEach((card) => {
+      const id = +card.dataset.d;
+      const t = card.querySelector(".dtext");
+      t.addEventListener("keydown", (e) => e.stopPropagation());
+      t.addEventListener("blur", () => call("review_draft_edit", { id: r.id, draft: id, text: t.textContent.trim() || null }));
+      card.querySelector("[data-ddel]").onclick = () => call("review_draft_edit", { id: r.id, draft: id, text: null });
+    });
   }
 
   function drawThreads(r) {
@@ -289,24 +362,125 @@
     };
   }
 
+  const EVENT_NAME = { COMMENT: "Comment", APPROVE: "Approve", REQUEST_CHANGES: "Request changes" };
+
   function drawDrafts(r) {
-    if (!r.drafts.length) { $("#rdrafts").innerHTML = ""; return; }
-    $("#rdrafts").innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><span class="badge">${r.drafts.length} draft${r.drafts.length > 1 ? "s" : ""}</span><button class="btn small" data-copy>Copy all</button></div>` +
+    const n = r.drafts.length;
+    const sent = (r.posted || []).map((p) => `<div class="sent">Sent: ${esc(EVENT_NAME[p.event] || p.event)}, ${p.comments} line comment${p.comments === 1 ? "" : "s"} <a href="${esc(p.url)}">open on GitHub</a></div>`).join("");
+    $("#rdrafts").innerHTML = `<div class="rvhead"><span class="badge">${n ? `${n} pending comment${n > 1 ? "s" : ""}` : "No pending comments"}</span><span class="rvbtns">${n ? `<button class="btn small" data-copy>Copy all</button>` : ""}<button class="btn small primary" data-finish>Finish review</button></span></div>` + sent +
       r.drafts.map((d) => {
-        const loc = d.path ? `${d.path}${d.line ? ":" + d.line : ""}` : "";
+        const lines = d.start_line ? `${d.start_line}-${d.line}` : d.line;
+        const loc = d.path ? `${d.path}${d.line ? ":" + lines : ""}${d.side === "old" ? " (old)" : ""}` : "";
         const long = d.text.split("\n").length > 2 || d.text.length > 240;
-        return `<div class="draft${long ? " long" : ""}" data-d="${d.id}"><b>${esc(loc)}</b><span contenteditable="true">${esc(d.text)}</span></div>`;
+        return `<div class="draft${long ? " long" : ""}${d.agent ? " agent" : ""}" data-d="${d.id}"><b>${esc(loc)}${d.agent ? ' <i>agent</i>' : ""}</b><span contenteditable="true">${esc(d.text)}</span></div>`;
       }).join("");
+    $("#rdrafts [data-finish]").onclick = () => openFinish(r.id);
     $("#rdrafts").querySelectorAll("[data-d] span").forEach((el) => {
       el.addEventListener("blur", () => call("review_draft_edit", { id: r.id, draft: +el.parentElement.dataset.d, text: el.textContent.trim() || null }));
       el.addEventListener("keydown", (e) => e.stopPropagation());
     });
-    $("#rdrafts [data-copy]").onclick = async (e) => {
+    if ($("#rdrafts [data-copy]")) $("#rdrafts [data-copy]").onclick = async (e) => {
       const text = await call("review_drafts_text", { id: r.id });
       copy(text);
       e.target.textContent = "Copied";
       setTimeout(() => (e.target.textContent = "Copy all"), 1500);
     };
+  }
+
+  // Finish review: you pick the type and write the summary. The app checks every
+  // comment against GitHub's diff, shows you the result, and sends only on your click.
+  async function openFinish(id) {
+    const r = S.reviews.get(id);
+    const l = local(id);
+    l.finish = { event: l.finish?.event || "COMMENT", preview: null, error: null, sending: false };
+    const box = $("#rfinish");
+    box.hidden = false;
+    box.innerHTML = `<div class="fbox" role="dialog" aria-label="Finish your review">
+      <h4>Finish your review</h4>
+      <label class="flabel" for="rsummary">Summary</label>
+      <textarea id="rsummary" placeholder="Leave a comment on the whole PR">${esc(r.summary || "")}</textarea>
+      <div class="fevents" role="radiogroup">
+        ${Object.entries(EVENT_NAME).map(([k, v]) => `<label><input type="radio" name="revent" value="${k}"${k === l.finish.event ? " checked" : ""}> <b>${v}</b> <span>${{ COMMENT: "General feedback, no approval.", APPROVE: "Give your approval to merge.", REQUEST_CHANGES: "Feedback that must be fixed before a merge." }[k]}</span></label>`).join("")}
+      </div>
+      <div class="fpreview" id="rpreview">Checking every comment against GitHub's diff…</div>
+      <div class="fbtns"><button class="btn" data-fclose>Cancel</button><button class="btn primary" data-fsend disabled>Submit review</button></div>
+    </div>`;
+    let timer;
+    $("#rsummary").addEventListener("input", (e) => {
+      clearTimeout(timer);
+      const text = e.target.value;
+      timer = setTimeout(() => call("review_summary", { id, text }).catch(() => {}), 400);
+    });
+    $("#rsummary").addEventListener("keydown", (e) => e.stopPropagation());
+    box.querySelectorAll("[name=revent]").forEach((x) => x.addEventListener("change", () => { l.finish.event = x.value; }));
+    box.querySelector("[data-fclose]").onclick = () => closeFinish(id);
+    box.querySelector("[data-fsend]").onclick = () => send(id);
+    box.onkeydown = (e) => { if (e.key === "Escape") closeFinish(id); };
+    try {
+      l.finish.preview = await invoke("review_post_preview", { id });
+    } catch (e) {
+      l.finish.error = String(e);
+    }
+    drawPreview(id);
+  }
+
+  function closeFinish(id) {
+    const l = local(id);
+    if (l.finish?.sending) return;
+    const text = $("#rsummary")?.value;
+    if (text !== undefined) call("review_summary", { id, text }).catch(() => {});
+    l.finish = null;
+    $("#rfinish").hidden = true;
+  }
+
+  function drawPreview(id) {
+    const l = local(id);
+    const f = l.finish;
+    const box = $("#rpreview");
+    if (!f || !box) return;
+    const btn = $("#rfinish [data-fsend]");
+    if (f.error) {
+      box.innerHTML = `<div class="ferr">${esc(f.error)}</div><div><button class="btn small" data-recheck>Check again</button></div>`;
+      btn.disabled = true;
+      box.querySelector("[data-recheck]").onclick = async () => {
+        f.error = null;
+        f.preview = null;
+        box.textContent = "Checking every comment against GitHub's diff…";
+        try { f.preview = await invoke("review_post_preview", { id }); } catch (e) { f.error = String(e); }
+        drawPreview(id);
+      };
+      return;
+    }
+    const p = f.preview.plan;
+    const at = (c) => `${c.path}:${c.start_line ? `${c.start_line}-${c.line}` : c.line}${c.side === "LEFT" ? " (old)" : ""}`;
+    const agent = new Set((S.reviews.get(id)?.drafts || []).filter((d) => d.agent).map((d) => d.id));
+    const tag = (c) => (agent.has(c.draft) ? ' <i class="agent">agent draft</i>' : "");
+    box.innerHTML = `<div class="fwho">Posts as <b>@${esc(f.preview.login)}</b> on commit <code>${esc(short(p.head))}</code>.</div>
+      ${p.errors.length ? `<div class="ferr"><b>Nothing can be sent:</b><ul>${p.errors.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+      ${p.inline.length ? `<div class="fsec"><b>${p.inline.length} comment${p.inline.length > 1 ? "s" : ""} on lines</b> <span class="ok">✓ same text as GitHub's diff</span><ul>${p.inline.map((c) => `<li><code>${esc(at(c))}</code>${tag(c)} ${esc(c.text)}</li>`).join("")}</ul></div>` : ""}
+      ${p.outside.length ? `<div class="fsec warn"><b>${p.outside.length} comment${p.outside.length > 1 ? "s go" : " goes"} into the summary</b><ul>${p.outside.map((c) => `<li><code>${esc(c.at || "general")}</code>${tag(c)} ${esc(c.text)} <span class="why">${esc(c.reason)}</span></li>`).join("")}</ul></div>` : ""}`;
+    btn.disabled = p.errors.length > 0 || f.sending;
+  }
+
+  async function send(id) {
+    const l = local(id);
+    const f = l.finish;
+    if (!f?.preview || f.sending) return;
+    f.sending = true;
+    const btn = $("#rfinish [data-fsend]");
+    btn.disabled = true;
+    btn.textContent = "Sending…";
+    try {
+      const url = await invoke("review_post", { id, event: f.event, summary: $("#rsummary").value, token: f.preview.token });
+      f.sending = false;
+      closeFinish(id);
+      toast(`Review sent: ${url}`);
+    } catch (e) {
+      f.sending = false;
+      f.error = String(e);
+      btn.textContent = "Submit review";
+      drawPreview(id);
+    }
   }
 
   function copy(text) {

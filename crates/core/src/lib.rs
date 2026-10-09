@@ -12,6 +12,7 @@ pub mod lamp;
 pub mod memory;
 pub mod nvim;
 pub mod paths;
+pub mod post;
 pub mod proto;
 pub mod repos;
 pub mod review;

@@ -181,6 +181,40 @@
   $("#rthreads .thread.active")?.click();
   await wait(50);
   check("drafts list with copy", $("#rdrafts").textContent.includes("nit: use safe_sub") && !!$("#rdrafts [data-copy]"));
+  // Diff colors come from the row kind, and the step bar does not hide them.
+  {
+    const bg = (sel) => { const el = $(sel); return el ? getComputedStyle(el).backgroundColor : "none"; };
+    check("removed rows are red", bg("#rdiff tr.del td.src").includes("201, 122, 116"), bg("#rdiff tr.del td.src"));
+    check("added rows are green, also in the step range", bg("#rdiff tr.add.focus td.src").includes("90, 168, 128"), bg("#rdiff tr.add.focus td.src"));
+    check("signs are in their own span", $("#rdiff tr.add .sg")?.textContent === "+" && $("#rdiff tr.del .sg")?.textContent === "-");
+  }
+  // Your own comments: a + on a line, Shift for a range, then Add to review.
+  check("agent draft shows on its line in the diff", $('#rdiff .dcard[data-d="1"]')?.textContent.includes("Agent draft"));
+  $('#rdiff [data-cm][data-side="new"][data-n="12"]').click();
+  await wait(50);
+  check("+ opens the comment form", !!$("#rcform") && $("#rcform .cat").textContent.includes("gloas.rs:12"));
+  $('#rdiff [data-cm][data-side="new"][data-n="11"]').dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+  await wait(50);
+  check("shift-click makes a range", $("#rcform .cat").textContent.includes("gloas.rs:11-12") && $$("#rdiff tr.sel").length === 2, $("#rcform")?.textContent);
+  $("#rctext").value = "Both lines need a test.";
+  $("#rcform").requestSubmit();
+  await wait(100);
+  const cm = called("review_comment")[0]?.[1];
+  check("Add to review sends path, side and range", cm && cm.path === "beacon_node/gloas.rs" && cm.side === "new" && cm.line === 12 && cm.startLine === 11 && cm.text === "Both lines need a test.", JSON.stringify(cm));
+  check("the form closes after the add", !$("#rcform"));
+  // Finish review: preview from GitHub, pick a type, send only on the click.
+  $("#rdrafts [data-finish]").click();
+  await wait(150);
+  check("finish shows the GitHub check", !$("#rfinish").hidden && $("#rpreview").textContent.includes("@eserilev") && $("#rpreview").textContent.includes("1 comment on lines") && $("#rpreview").textContent.includes("goes into the summary"), $("#rpreview")?.textContent);
+  check("agent drafts are marked in the preview", $("#rpreview").textContent.includes("agent draft"));
+  check("nothing is sent before the click", !called("review_post").length);
+  $('#rfinish input[value="APPROVE"]').click();
+  $("#rsummary").value = "LGTM";
+  $("#rfinish [data-fsend]").click();
+  await wait(150);
+  const post = called("review_post")[0]?.[1];
+  check("submit sends the type, summary and preview token", post && post.event === "APPROVE" && post.summary === "LGTM" && post.token === "tok1", JSON.stringify(post));
+  check("the dialog closes after the send", $("#rfinish").hidden);
   $(".thread[data-t='t1']").click();
   await wait(50);
   check("click a thread makes it active", $(".thread[data-t='t1']").classList.contains("active") && $("#ranchor").textContent === "");

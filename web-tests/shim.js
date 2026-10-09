@@ -26,7 +26,8 @@ window.__data = {
     steps: [{ id: "s1", checked: true, stale: false }],
     threads: [{ id: "t1", step: "s2", path: "beacon_node/gloas.rs", side: "new", line: 11, removed: false, busy: false, messages: [{ id: 1, me: true, text: "safe sub?" }, { id: 2, me: false, text: "Use **safe_sub**. The `-` on `Slot` saturates, so slot 0 gives 0:\n\n```rust\nlet il_slot = builder_params.slot.safe_sub(1)?;\n```\n\n- `slot_epoch_macros.rs:119` marks `-` as deprecated.\n- Small nit, not a bug.\n\n<script>window.__xss = 1</script>" }] }],
     pins: [{ id: 1, step: "s2", text: "Use safe_sub, not -." }],
-    drafts: [{ id: 1, path: "beacon_node/gloas.rs", side: "new", line: 11, text: "nit: use safe_sub" }],
+    drafts: [{ id: 1, path: "beacon_node/gloas.rs", side: "new", line: 11, start_line: null, text: "nit: use safe_sub", agent: true }],
+    summary: "", posted: [],
     coverage: { files: 1, changed_lines: 3, accepted: true, missed_lines: 0, binary: [], github: [] },
   }],
   diff: { sections: [{ path: "beacon_node/gloas.rs", old_path: "beacon_node/gloas.rs", context: false, ranges: [{ file: "beacon_node/gloas.rs", side: "new", from: 11, to: 12 }, { file: "beacon_node/gloas.rs", side: "old", from: 11, to: 11 }], rows: [
@@ -60,6 +61,10 @@ window.__TAURI__ = {
         case "nvim_open": case "review_nvim": return "p3";
         case "review_drafts_text": return "beacon_node/gloas.rs:11: nit: use safe_sub";
         case "review_open": return "r1";
+        case "review_post_preview": return { login: "eserilev", token: "tok1", plan: { head: "ac92ae9aaaa", errors: [],
+          inline: [{ draft: 1, path: "beacon_node/gloas.rs", side: "RIGHT", line: 11, start_line: null, text: "nit: use safe_sub" }],
+          outside: [{ draft: 2, at: "beacon_node/gloas.rs:40", reason: "the line is outside GitHub's diff", text: "far away" }] } };
+        case "review_post": return "https://github.com/sigp/lighthouse/pull/10071#pullrequestreview-1";
         case "log": return null;
         default: return null;
       }

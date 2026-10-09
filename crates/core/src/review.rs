@@ -86,6 +86,74 @@ pub fn gh_view(url: &str) -> Result<PrInfo, String> {
     serde_json::from_slice(&out.stdout).map_err(|e| format!("gh pr view: {e}"))
 }
 
+/// Runs `gh api` with an optional JSON body on stdin. Returns stdout.
+fn gh_api(args: &[&str], input: Option<&str>) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let mut child = Command::new("gh")
+        .arg("api")
+        .args(args)
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("gh: {e}"))?;
+    if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|e| format!("gh: {e}"))?;
+    }
+    let out = child.wait_with_output().map_err(|e| format!("gh: {e}"))?;
+    if out.status.success() {
+        return Ok(out.stdout);
+    }
+    let err = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+    if err.contains("auth login") || err.contains("not logged") {
+        return Err("gh is not logged in. Run: gh auth login".into());
+    }
+    // GitHub's reason is in the JSON body on stdout.
+    let body: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+    let mut why = body["message"].as_str().unwrap_or("").to_owned();
+    for e in body["errors"].as_array().into_iter().flatten() {
+        why.push_str(&format!(" {}", e.as_str().map(str::to_owned).unwrap_or(e.to_string())));
+    }
+    Err(format!("gh api: {err} {why}").trim().to_owned())
+}
+
+/// GitHub's own diff of the PR.
+pub fn gh_pr_diff(repo: &str, number: u64) -> Result<String, String> {
+    let out = gh_api(
+        &[
+            "-H",
+            "Accept: application/vnd.github.diff",
+            &format!("repos/{repo}/pulls/{number}"),
+        ],
+        None,
+    )?;
+    String::from_utf8(out).map_err(|e| format!("GitHub's diff is not UTF-8: {e}"))
+}
+
+/// The GitHub login that `gh` posts as.
+pub fn gh_login() -> Result<String, String> {
+    let out = gh_api(&["user", "--jq", ".login"], None)?;
+    Ok(String::from_utf8_lossy(&out).trim().to_owned())
+}
+
+/// Sends one review with all its comments. Returns the link to the review.
+pub fn gh_submit_review(repo: &str, number: u64, payload: &Value) -> Result<String, String> {
+    let out = gh_api(
+        &[
+            "--method",
+            "POST",
+            &format!("repos/{repo}/pulls/{number}/reviews"),
+            "--input",
+            "-",
+        ],
+        Some(&payload.to_string()),
+    )?;
+    let v: Value = serde_json::from_slice(&out).map_err(|e| format!("gh api: {e}"))?;
+    Ok(v["html_url"].as_str().unwrap_or_default().to_owned())
+}
+
 /// The remote of `repo_dir` that points at `owner/name` on GitHub.
 pub fn find_remote(repo_dir: &Path, repo: &str) -> Option<String> {
     let text = git(repo_dir, &["remote", "-v"]).ok()?;

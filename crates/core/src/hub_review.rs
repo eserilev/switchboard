@@ -61,7 +61,20 @@ pub struct ReviewView {
     pub threads: Vec<ThreadView>,
     pub pins: Vec<crate::store::PinRow>,
     pub drafts: Vec<DraftRow>,
+    /// The review summary you write before you send the review.
+    pub summary: String,
+    /// The reviews sent to GitHub, oldest first.
+    pub posted: Vec<crate::store::PostedRow>,
     pub coverage: Option<CoverageView>,
+}
+
+/// What the window shows before a send: the GitHub account, the head, and where
+/// each draft goes. `token` names this exact plan.
+#[derive(Serialize, Clone, Debug)]
+pub struct PostPreview {
+    pub login: String,
+    pub plan: crate::post::Plan,
+    pub token: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -225,6 +238,8 @@ impl Hub {
             threads,
             pins: store.pins(id).map_err(e)?,
             drafts: store.drafts(id).map_err(e)?,
+            summary: store.summary(id).map_err(e)?,
+            posted: store.posted(id).map_err(e)?,
             coverage: r.coverage.clone(),
         })
     }
@@ -945,7 +960,9 @@ impl Hub {
             path: t.path.clone(),
             side: t.side.clone(),
             line: t.line,
+            start_line: None,
             text: line,
+            agent: true,
         };
         self.store.lock().unwrap().add_draft(id, &d).map_err(e)?;
         self.emit_review(id);
@@ -990,6 +1007,114 @@ impl Hub {
             })
             .collect::<Vec<_>>()
             .join("\n"))
+    }
+
+    /// A comment that you write on a line or a range of lines. The line must exist
+    /// in the diff model at the reviewed head.
+    pub fn review_comment(
+        &self,
+        id: &str,
+        path: &str,
+        side: &str,
+        line: u32,
+        start_line: Option<u32>,
+        text: &str,
+    ) -> Res<()> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("The comment is empty.".into());
+        }
+        if side != "old" && side != "new" {
+            return Err(format!("Unknown side: {side}"));
+        }
+        let start = start_line.unwrap_or(line);
+        let model = self.model(id)?;
+        let f = crate::post::model_file(&model, path, side == "old")
+            .ok_or(format!("The PR does not change {path}."))?;
+        if start == 0 || start > line || crate::post::line_text(f, side == "old", line).is_none() {
+            return Err(format!("{path} has no lines {start} to {line}."));
+        }
+        let d = DraftRow {
+            id: 0,
+            path: Some(path.to_owned()),
+            side: Some(side.to_owned()),
+            line: Some(line),
+            start_line: (start < line).then_some(start),
+            text: text.to_owned(),
+            agent: false,
+        };
+        self.store.lock().unwrap().add_draft(id, &d).map_err(e)?;
+        self.emit_review(id);
+        Ok(())
+    }
+
+    pub fn review_summary(&self, id: &str, text: &str) -> Res<()> {
+        self.store
+            .lock()
+            .unwrap()
+            .set_summary(id, text)
+            .map_err(e)?;
+        Ok(())
+    }
+
+    /// Builds the plan for a send. The PR head on GitHub must still be the head
+    /// that you reviewed, and every line must match GitHub's diff.
+    fn post_plan(&self, id: &str) -> Res<(ReviewRow, crate::post::Plan)> {
+        let row = self
+            .reviews
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|r| r.row.clone())
+            .ok_or(format!("no review {id}"))?;
+        let model = self.model(id)?;
+        if model.head != row.head {
+            return Err("The diff is not at the reviewed head. Reopen the review.".into());
+        }
+        let pr = review::gh_view(&row.url)?;
+        if pr.head_ref_oid != row.head {
+            return Err(format!(
+                "The PR has new commits ({} on GitHub). Update the guide, then send the review.",
+                &pr.head_ref_oid[..pr.head_ref_oid.len().min(9)]
+            ));
+        }
+        let gh = crate::post::parse_pr_diff(&review::gh_pr_diff(&row.repo, row.number)?);
+        let drafts = self.store.lock().unwrap().drafts(id).map_err(e)?;
+        Ok((row, crate::post::plan(&model, &gh, &drafts)))
+    }
+
+    pub fn review_post_preview(&self, id: &str) -> Res<PostPreview> {
+        let (_, plan) = self.post_plan(id)?;
+        Ok(PostPreview {
+            login: review::gh_login()?,
+            token: plan.token(),
+            plan,
+        })
+    }
+
+    /// Sends the review. `token` is the plan that you saw; the app builds the plan
+    /// again and sends nothing if it differs.
+    pub fn review_post(&self, id: &str, event: &str, summary: &str, token: &str) -> Res<String> {
+        let (row, plan) = self.post_plan(id)?;
+        if plan.token() != token {
+            return Err("The review changed after the preview. Check it again.".into());
+        }
+        let payload = crate::post::payload(&plan, event, summary)?;
+        tracing::info!(target: "sb::review", review = id, event, comments = plan.inline.len(), "review: send to GitHub");
+        let url = review::gh_submit_review(&row.repo, row.number, &payload)?;
+        let posted = crate::store::PostedRow {
+            event: event.to_owned(),
+            url: url.clone(),
+            comments: plan.inline.len() as u32,
+            time: now(),
+        };
+        self.store
+            .lock()
+            .unwrap()
+            .record_posted(id, &posted, &plan.drafts())
+            .map_err(e)?;
+        self.emit_review(id);
+        Ok(url)
     }
 
     pub fn review_close(&self, id: &str) -> Res<()> {

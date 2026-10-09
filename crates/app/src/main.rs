@@ -139,6 +139,10 @@ commands! {
     review_pin_edit(id: String, pin: i64, text: Option<String>) -> () => |h| h.review_pin_edit(&id, pin, text);
     review_draft_edit(id: String, draft: i64, text: Option<String>) -> () => |h| h.review_draft_edit(&id, draft, text);
     review_drafts_text(id: String) -> String => |h| h.review_drafts_text(&id);
+    review_comment(id: String, path: String, side: String, line: u32, start_line: Option<u32>, text: String) -> () => |h| h.review_comment(&id, &path, &side, line, start_line, &text);
+    review_summary(id: String, text: String) -> () => |h| h.review_summary(&id, &text);
+    review_post_preview(id: String) -> Value => |h| h.review_post_preview(&id).map(|v| json!(v));
+    review_post(id: String, event: String, summary: String, token: String) -> String => |h| h.review_post(&id, &event, &summary, &token);
     review_update(id: String) -> () => |h| h.review_update(&id);
     review_retry(id: String) -> () => |h| h.review_retry(&id);
     review_close(id: String) -> () => |h| h.review_close(&id);
@@ -264,6 +268,10 @@ fn main() {
             review_pin_edit,
             review_draft_edit,
             review_drafts_text,
+            review_comment,
+            review_summary,
+            review_post_preview,
+            review_post,
             review_update,
             review_retry,
             review_close,

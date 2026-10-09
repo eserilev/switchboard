@@ -367,7 +367,10 @@ Cost: each fork sends the guide context again. The prompt cache lasts a few minu
 
 - **Pin** asks the fork for a one-line summary of its last answer. You can edit the pin. It goes under the step in the guide.
 - Pins live in the store, not in the guide. Each new fork of a step gets that step's pins in its prompt.
-- **Draft** makes a review comment from an answer: full path, line, side, and text. You can edit it.
+- **Draft** makes a review comment from an answer: full path, line, side, and text. You can edit it. The window marks it as an agent draft.
+- You can also write a comment yourself. Hover a diff line and click **+**. Shift-click a second **+** on the same side to comment on a range. **Add to review** keeps the comment as a pending draft.
+- The core accepts a comment only on a line that exists in the diff model at the reviewed head.
+- Drafts show under their lines in the diff and in the list under the threads. You can edit or delete each one.
 - A draft longer than two lines gets a warning.
 - **Copy all** copies the drafts as `path:line: text`, one for each line.
 
@@ -379,6 +382,27 @@ Cost: each fork sends the guide context again. The prompt cache lasts a few minu
 - "Diff since last review" shows `git diff <old>..<new>` for each stale step.
 - Threads re-anchor by the line text. If the text is gone, the thread shows "line removed" and keeps the old anchor.
 - "Update guide" resumes the guide session with the new head and asks for `guide_update_step` calls.
+
+### 11.8 Send the review
+
+**Finish review** sends all pending drafts to GitHub as one review, like "Start a review" on GitHub. Plain code does every step. No agent takes part: the guide session and the forks have no `gh` tool (11.2), and no MCP tool sends anything.
+
+1. You write a summary and pick the type: Comment, Approve, or Request changes. The summary is saved as you type.
+2. The app checks the plan (`post.rs`):
+   - The PR head on GitHub must equal the reviewed head. Otherwise the app asks you to update the guide first.
+   - The app gets GitHub's own diff of the PR (`gh api`, diff media type).
+   - For each draft, every line of its range must be in the same hunk of GitHub's diff, on the same side.
+   - The text of each line must be the same in GitHub's diff and in the verified diff model. A difference stops the whole send.
+   - A draft with no line, or with a line that GitHub's diff does not show, goes into the summary as `` `path:line`: text``. GitHub refuses a line comment there.
+   - A draft on a file or line that the model does not have stops the send.
+3. The window shows the plan: the GitHub login, the head commit, the comments on lines, the comments that go into the summary and why, and the agent drafts. Nothing is sent before your click on **Submit review**.
+4. The send uses the plan that you saw. The app builds the plan again and compares a fingerprint of it. If the plan changed, the app sends nothing and asks you to check again.
+5. One `POST /repos/{repo}/pulls/{n}/reviews` call sends the review: `commit_id` is the reviewed head, each comment has `path`, `side` (`RIGHT` or `LEFT`), `line`, and for a range `start_line` and `start_side`. GitHub accepts all comments or none.
+6. After GitHub accepts, one store transaction records the review link and removes the sent drafts. The list shows "Sent" with the link.
+
+Limits:
+- GitHub refuses an approval of your own PR. The window shows GitHub's reason.
+- If the app stops between GitHub's answer and the store write, the drafts stay. A second send makes a second review.
 
 ## 12. Agents
 

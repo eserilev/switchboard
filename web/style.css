@@ -21,8 +21,10 @@
   --done: #5aa880;
   --error: #c97a74;
   --limit: #9d8cc4;
-  --add-bg: rgba(90, 168, 128, .12);
-  --del-bg: rgba(201, 122, 116, .12);
+  --add-bg: rgba(90, 168, 128, .20);
+  --del-bg: rgba(201, 122, 116, .22);
+  --add-fg: #7fcc9f;
+  --del-fg: #e5928a;
   --hl-bg: rgba(217, 181, 108, .14);
   --display: "Archivo", "Archivo Narrow", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
   --body: "Public Sans", "Inter", system-ui, sans-serif;
@@ -180,11 +182,34 @@ table.code { border-collapse: collapse; width: 100%; font: 12.5px/1.6 var(--mono
 table.code td { padding: 0 10px; white-space: pre; vertical-align: top; }
 table.code td.ln { width: 1%; text-align: right; color: var(--muted); user-select: none; cursor: pointer; font-variant-numeric: tabular-nums; }
 table.code td.ln:hover { color: var(--accent); }
-tr.add td.src { background: var(--add-bg); }
-tr.del td.src { background: var(--del-bg); }
+/* Row colors come from the row kind alone: red for removed, green for added. */
+tr.add td { background: var(--add-bg); }
+tr.del td { background: var(--del-bg); }
+tr.add td.ln, tr.add .sg { color: var(--add-fg); }
+tr.del td.ln, tr.del .sg { color: var(--del-fg); }
+.sg { display: inline-block; width: 1.2ch; font-weight: 700; user-select: none; }
 tr.hunk td { color: var(--muted); background: var(--panel); }
-tr.focus td { background: var(--hl-bg) !important; }
-tr.focus td.ln { color: var(--accent); font-weight: 700; }
+/* The step marks its lines with a bar, so the red and green stay visible. */
+tr.focus:not(.add):not(.del) td { background: var(--hl-bg); }
+tr.focus td.ln { font-weight: 700; box-shadow: inset 3px 0 0 var(--accent); }
+tr.sel td.cm, tr.sel td.ln { background: color-mix(in srgb, var(--accent) 30%, transparent); color: var(--fg); }
+table.code td.cm { width: 1%; padding: 0 0 0 4px; }
+.cmb { visibility: hidden; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: var(--accent); color: var(--accent-fg); font: 700 13px/18px var(--mono); cursor: pointer; }
+tr:hover .cmb, .cmb:focus-visible, tr.sel .cmb { visibility: visible; }
+tr.drow td, tr.crow td { white-space: normal; padding: 6px 10px 6px 40px; background: var(--bg); font-family: var(--body); }
+.dcard { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--panel); padding: 6px 10px; display: grid; gap: 4px; max-width: 720px; }
+.dcard.agent { border-left-color: var(--limit); }
+.dmeta { display: flex; gap: 10px; align-items: center; font: 600 11px/1 var(--mono); color: var(--muted); }
+.dmeta .who { color: var(--accent); }
+.dcard.agent .who { color: var(--limit); }
+.dmeta .x { margin-left: auto; }
+.dtext { font: 13px/1.5 var(--body); white-space: pre-wrap; outline: none; }
+.cform { display: grid; gap: 6px; max-width: 720px; }
+.cform .cat { font: 600 11px/1.2 var(--mono); color: var(--accent); }
+.cform .hint { color: var(--muted); font-weight: 500; margin-left: 8px; }
+.cform textarea { min-height: 70px; resize: vertical; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); font: 13px/1.45 var(--body); padding: 8px; }
+.cform textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.cbtns { display: flex; gap: 6px; justify-content: flex-end; }
 tr.anchor td.ln { box-shadow: inset 3px 0 0 var(--accent); color: var(--accent); }
 tr.anchored td.ln::after { content: "●"; color: var(--accent); margin-left: 4px; font-size: 9px; }
 /* min-height: 0 lets the list shrink inside the column, so it scrolls instead of overflowing. */
@@ -216,6 +241,30 @@ tr.anchored td.ln::after { content: "●"; color: var(--accent); margin-left: 4p
 .draft b { color: var(--accent); font-weight: 600; }
 .draft span { outline: none; }
 .draft.long { box-shadow: inset 3px 0 0 var(--needs); }
+.draft i { font-style: normal; color: var(--limit); font-weight: 500; }
+.rvhead { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.rvbtns { display: flex; gap: 6px; }
+.sent { font: 12px/1.4 var(--mono); color: var(--done); }
+.sent a { color: var(--accent); }
+/* Finish review */
+.finish { position: fixed; inset: 0; z-index: 30; display: grid; place-items: start center; padding: 60px 16px 16px; background: color-mix(in srgb, var(--bg) 70%, transparent); overflow-y: auto; }
+.fbox { width: min(680px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: grid; gap: 12px; box-shadow: 0 20px 50px -20px rgba(0,0,0,.7); }
+.fbox h4 { margin: 0; font: 700 20px/1.2 var(--display); font-stretch: 85%; }
+.flabel { font: 600 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.fbox textarea { min-height: 90px; resize: vertical; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: 13px/1.45 var(--body); padding: 8px; }
+.fevents { display: grid; gap: 6px; }
+.fevents label { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
+.fevents span { color: var(--muted); font-size: 12.5px; }
+.fpreview { border-top: 1px solid var(--line); padding-top: 10px; font-size: 13px; display: grid; gap: 8px; max-height: 40vh; overflow-y: auto; }
+.fpreview ul { margin: 4px 0 0; padding-left: 18px; }
+.fpreview li { margin: 3px 0; overflow-wrap: anywhere; }
+.fpreview code { font: 12px/1.4 var(--mono); }
+.fpreview .ok { color: var(--done); font-size: 12px; }
+.fpreview .why { color: var(--needs); font-size: 12px; }
+.fpreview i.agent { font-style: normal; color: var(--limit); font-size: 12px; }
+.fsec.warn > b { color: var(--needs); }
+.ferr { color: var(--error); }
+.fbtns { display: flex; justify-content: flex-end; gap: 8px; }
 .empty-review { padding: 40px; color: var(--muted); }
 
 /* Markdown from the agent */
