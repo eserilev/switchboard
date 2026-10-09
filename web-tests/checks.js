@@ -145,6 +145,26 @@
   const ask = called("review_ask")[0]?.[1];
   check("ask sends the anchor", ask && ask.step === "s2" && ask.anchor?.line === 12 && ask.anchor.side === "new" && ask.thread === null && ask.anchor.text.includes("let b = 2"), JSON.stringify(ask));
   window.__emit("review_stream", { review: "r1", thread: "t2", delta: "partial" });
+  // A long answer: the thread list scrolls inside the column.
+  {
+    const long = Object.assign({}, window.__data.reviews[0]);
+    long.threads = [Object.assign({}, long.threads[0], { messages: [{ id: 1, me: true, text: "long?" }, { id: 2, me: false, text: Array.from({ length: 120 }, (_, i) => `Line ${i} of a long answer.`).join("\n\n") }] })];
+    window.__emit("review", long);
+    await wait(100);
+    const box = $("#rthreads");
+    const col = box.parentElement.getBoundingClientRect();
+    check("long thread list scrolls inside its column", box.scrollHeight > box.clientHeight && box.getBoundingClientRect().bottom <= col.bottom + 1, `${box.scrollHeight} ${box.clientHeight} ${box.getBoundingClientRect().bottom} ${col.bottom} text=${box.textContent.length} tab=${window.SB.S.tab} step=${document.querySelector("#rsteps [aria-current=step]")?.dataset.i}`);
+    check("the ask box stays on screen", $("#rq").getBoundingClientRect().bottom <= window.innerHeight + 1, `${$("#rq").getBoundingClientRect().bottom} ${window.innerHeight}`);
+    // A long guide: the steps list scrolls too.
+    const many = Object.assign({}, window.__data.reviews[0]);
+    many.guide = { steps: Array.from({ length: 60 }, (_, i) => ({ id: `s${i + 1}`, title: `Step number ${i + 1} with a title`, ranges: [] })) };
+    window.__emit("review", many);
+    await wait(100);
+    const list = $("#rsteps");
+    check("a long steps list scrolls inside its column", list.scrollHeight > list.clientHeight && list.getBoundingClientRect().bottom <= window.innerHeight + 1, `${list.scrollHeight} ${list.clientHeight} ${list.getBoundingClientRect().bottom}`);
+    window.__emit("review", window.__data.reviews[0]);
+    await wait(100);
+  }
   check("drafts list with copy", $("#rdrafts").textContent.includes("nit: use safe_sub") && !!$("#rdrafts [data-copy]"));
   $(".thread[data-t='t1']").click();
   await wait(50);

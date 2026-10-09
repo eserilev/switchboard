@@ -151,7 +151,8 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .rcols > * { min-width: 0; min-height: 0; }
 .col { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .col + .col { border-left: 1px solid var(--line); }
-.steps { list-style: none; margin: 0; padding: 6px; display: grid; gap: 2px; overflow-y: auto; align-content: start; }
+.steps { list-style: none; margin: 0; padding: 6px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; flex: 1 1 0; min-height: 0; }
+.steps > * { flex: none; }
 .step { display: grid; grid-template-columns: 22px 1fr; gap: 8px; padding: 8px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
 .step:hover { background: var(--panel-2); }
 .step[aria-current="step"] { background: var(--panel-2); border-color: var(--line); }
@@ -186,7 +187,10 @@ tr.focus td { background: var(--hl-bg) !important; }
 tr.focus td.ln { color: var(--accent); font-weight: 700; }
 tr.anchor td.ln { box-shadow: inset 3px 0 0 var(--accent); color: var(--accent); }
 tr.anchored td.ln::after { content: "●"; color: var(--accent); margin-left: 4px; font-size: 9px; }
-.threads { overflow-y: auto; flex: 1; padding: 10px; display: grid; gap: 10px; align-content: start; }
+/* min-height: 0 lets the list shrink inside the column, so it scrolls instead of overflowing. */
+.threads { overflow-y: auto; flex: 1 1 0; min-height: 0; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+/* A card keeps its full height; the list scrolls, not the card. */
+.threads > * { flex: none; }
 .thread { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); overflow: hidden; cursor: pointer; }
 .thread.active { border-color: var(--accent); }
 .thread .anchor { font: 600 11px/1 var(--mono); padding: 8px 10px; border-bottom: 1px solid var(--line); color: var(--accent); display: flex; justify-content: space-between; gap: 8px; }

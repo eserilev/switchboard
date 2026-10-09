@@ -212,7 +212,11 @@
     const s = steps(r)[l.cur];
     if (!s) { $("#rthreads").innerHTML = ""; return; }
     const mine = r.threads.filter((t) => t.step === s.id);
-    $("#rthreads").innerHTML = mine.map((t) => {
+    // Keep the scroll place; stay at the bottom when you were at the bottom.
+    const box = $("#rthreads");
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    const top = box.scrollTop;
+    box.innerHTML = mine.map((t) => {
       const where = t.line ? `${(t.path || "").split("/").pop()}:${t.line}${t.side === "old" ? " (old)" : ""}` : `Step ${l.cur + 1}`;
       const busy = t.busy || l.busy.has(t.id);
       const msgs = t.messages.map((m, i) => {
@@ -226,6 +230,7 @@
       return `<div class="thread${l.active === t.id ? " active" : ""}" data-t="${esc(t.id)}">
         <div class="anchor" title="${esc(t.path || "")}">${esc(where)}${t.removed ? '<span class="gone">line removed</span>' : ""}</div>${msgs}${pending}</div>`;
     }).join("");
+    box.scrollTop = atBottom ? box.scrollHeight : top;
     const anchorText = l.active ? "" : l.anchor ? `→ ${l.anchor.path.split("/").pop()}:${l.anchor.line}` : "";
     $("#ranchor").textContent = anchorText;
     $("#rthreads").onclick = async (e) => {
@@ -305,7 +310,12 @@
     l.pending.set(thread, (l.pending.get(thread) || "") + delta);
     if (S.tab !== review) return;
     const el = document.querySelector(`.thread[data-t="${CSS.escape(thread)}"] .msg.wait`);
-    if (el) { el.classList.add("md"); el.innerHTML = md(l.pending.get(thread)); }
+    if (!el) return;
+    const box = $("#rthreads");
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    el.classList.add("md");
+    el.innerHTML = md(l.pending.get(thread));
+    if (atBottom) box.scrollTop = box.scrollHeight;
   }
 
   function go(id, i) {
