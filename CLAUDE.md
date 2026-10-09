@@ -21,6 +21,8 @@ A desktop app for many AI agents on one screen, plus a guided PR review. `SPEC.m
 - No add that can overflow: loop with an index `k < bound`, not `l <= to`.
 After a change to `guide-check`, run `scripts/check-proofs.sh`. It regenerates `proofs/GuideCheck/Code`; commit that too. Never weaken a statement in `proofs/Statements.lean` to make a proof pass.
 
+After a change to the permission flow (`sb permit`, `on_permit`, `permit_answer`, `answer_permits`), run `scripts/check-models.sh` and keep `models/permit.qnt` true (SPEC 25).
+
 ## Build and test
 
 ```sh
