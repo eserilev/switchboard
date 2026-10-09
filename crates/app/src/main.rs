@@ -171,7 +171,11 @@ fn open_url(url: String) -> Res<()> {
         return Err("only http and https links open".into());
     }
     tracing::info!(target: "sb::app", %url, "open link");
-    std::process::Command::new("xdg-open")
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(not(target_os = "macos"))]
+    let opener = "xdg-open";
+    std::process::Command::new(opener)
         .arg(&url)
         .stdin(std::process::Stdio::null())
         .spawn()
@@ -222,6 +226,14 @@ fn sb_path() -> PathBuf {
 }
 
 fn main() {
+    // A macOS app from Finder has a short PATH: take the login shell's PATH.
+    #[cfg(target_os = "macos")]
+    {
+        let path = switchboard_core::paths::login_path()
+            .or_else(|| std::env::var("PATH").ok())
+            .unwrap_or_default();
+        std::env::set_var("PATH", switchboard_core::paths::with_tool_dirs(&path));
+    }
     let paths = Paths::from_env();
     let _logs = init_logs(&paths);
     std::panic::set_hook(Box::new(

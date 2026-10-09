@@ -343,6 +343,20 @@
     check("expand: rows stay in order, once each, and every click shows the right count", !bad && big > 100, `${bad} (${cases} files, ${clicks} clicks, ${big} clicks on gaps over ${STEP})`);
   }
 
+  // The leader comes from the config: cmd+; on a Mac, for example.
+  {
+    const was = window.SB.S.settings.leader;
+    window.SB.S.settings.leader = "cmd+;";
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", ctrlKey: true, bubbles: true }));
+    const oldKey = !$("#leader").hidden;
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: ";", code: "Semicolon", metaKey: true, bubbles: true }));
+    const newKey = !$("#leader").hidden;
+    key("Escape");
+    window.SB.S.settings.leader = was;
+    check("the leader key comes from the config", !oldKey && newKey, `old=${oldKey} new=${newKey}`);
+    $("#leader").hidden = true;
+  }
+
   // Back to the board with the leader.
   key(" ", { ctrl: true, code: "Space" });
   key("b");

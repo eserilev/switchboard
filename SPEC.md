@@ -40,7 +40,7 @@ Switchboard has three parts:
 - A general terminal emulator. Switchboard shows agents, nvim and shells. It does not replace your terminal.
 - Posting to GitHub. Switchboard never posts a review, a comment or an issue.
 - Edits by the review agent. The review agent only reads.
-- Windows and macOS. Switchboard targets Arch Linux on Wayland first.
+- Windows. Switchboard targets Arch Linux on Wayland first, and runs on macOS too (23).
 - A hosted service. Everything runs on the local machine.
 
 ## 4. The problem
@@ -711,6 +711,16 @@ switchboard/
 ## 23. Build notes
 
 Where the build differs from the text above:
+
+- macOS runs Switchboard too:
+  - With no `XDG_RUNTIME_DIR` (macOS), the socket folder is `/tmp/sb-<uid>`. The macOS temp folder is too long: a socket path has at most 104 bytes there. The app makes the socket folder private (mode 700), and stops when the folder belongs to another user.
+  - An app that starts from Finder or the Dock has a short `PATH`. At start, the macOS app takes the `PATH` of your login shell (`$SHELL -l`, at most 5 seconds) and adds `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` and `~/.cargo/bin` when they are missing.
+  - Links open with `open`, not `xdg-open`.
+  - The rust-analyzer memory on a tile comes from one `ps` table, because macOS has no `/proc`.
+  - The leader key comes from `leader` in the config, for example `ctrl+space`, `ctrl+a` or `cmd+;`. On macOS, `ctrl+space` can switch the input language; then set another key.
+  - `scripts/macos-app.sh` builds `Switchboard.app` with cargo, `sips`, `iconutil` and an ad-hoc `codesign`. No npm and no Tauri CLI. To share the app, sign it with a Developer ID and notarize it.
+  - `.github/workflows/macos.yml` runs clippy, the tests with tmux from Homebrew, the window checks in Chrome, and the app build on a macOS runner. It runs when the repo is on GitHub.
+  - From Linux, `cargo clippy --target aarch64-apple-darwin` checks the macOS code. A C compiler that does nothing lets the SQLite build step pass, because a check does not link.
 
 - `time` in a state message is seconds since the Unix epoch.
 - `idle_end_minutes` is 0 (off) by default. Ending a session is safe, because the tile resumes it, but it is a surprise the first time.

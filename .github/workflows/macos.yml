@@ -1,0 +1,27 @@
+# Builds and tests Switchboard on macOS. The core tests start real tmux servers.
+name: macos
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tmux
+        run: brew install tmux
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component clippy && rustup default stable
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: Window checks
+        run: web-tests/run.sh
+      - name: Build Switchboard.app
+        run: scripts/macos-app.sh "$RUNNER_TEMP/out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Switchboard-macos-arm64
+          path: ${{ runner.temp }}/out/Switchboard.app

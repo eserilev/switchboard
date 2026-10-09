@@ -3,6 +3,8 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 browser=$(command -v chromium || command -v google-chrome || command -v chromium-browser || true)
+mac_chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+if [ -z "$browser" ] && [ -x "$mac_chrome" ]; then browser=$mac_chrome; fi
 if [ -z "$browser" ]; then echo "skip: no chromium"; exit 0; fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT

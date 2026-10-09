@@ -266,7 +266,7 @@ const term = new Terminal({
 const fit = new FitAddon.FitAddon();
 term.loadAddon(fit);
 term.open($("#term"));
-term.attachCustomKeyEventHandler((e) => !(e.ctrlKey && e.code === "Space"));
+term.attachCustomKeyEventHandler((e) => !isLeader(e));
 // Keys go in order. While one send is on its way, new keys wait in a buffer,
 // and the next send takes them all at once. So fast typing costs one round trip.
 let pendingKeys = "";
@@ -408,8 +408,21 @@ function moveFocus(d) {
 // ---------- keys (SPEC 7) ----------
 
 let leader = 0;
+// The leader from the config, for example "ctrl+space", "ctrl+a" or "cmd+;".
+// On macOS ctrl+space can switch the input language, so set another key there.
+function leaderKey() {
+  const parts = String(S.settings?.leader || "ctrl+space").toLowerCase().split("+");
+  const key = parts.pop();
+  const has = (m) => parts.includes(m);
+  const code = key === "space" ? "Space" : key === ";" ? "Semicolon" : key === "," ? "Comma" : key === "." ? "Period" : /^[a-z]$/.test(key) ? `Key${key.toUpperCase()}` : /^[0-9]$/.test(key) ? `Digit${key}` : key;
+  return { code, ctrl: has("ctrl"), meta: has("cmd") || has("meta") || has("super"), alt: has("alt") || has("option"), shift: has("shift") };
+}
+function isLeader(e) {
+  const k = leaderKey();
+  return e.code === k.code && e.ctrlKey === k.ctrl && e.metaKey === k.meta && e.altKey === k.alt && e.shiftKey === k.shift;
+}
 window.addEventListener("keydown", (e) => {
-  if (e.ctrlKey && e.code === "Space") {
+  if (isLeader(e)) {
     e.preventDefault();
     e.stopPropagation();
     leader = Date.now();
