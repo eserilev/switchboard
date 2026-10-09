@@ -1,6 +1,6 @@
 # Install Switchboard
 
-Switchboard runs on Linux and macOS (Apple Silicon). One script does the install on both.
+Switchboard runs on Linux and macOS. One script does the install on both. Linux x86_64 and Apple Silicon Macs get a prebuilt app when a release exists; other systems, Intel Macs included, build from source.
 
 ## Quick install
 
@@ -18,7 +18,7 @@ The script:
 4. Writes a starter config with the code folders that it finds, if you have no config yet.
 5. Tells you the steps that are left, for example `gh auth login`.
 
-It does not change your shell files or your Claude Code settings.
+It does not change your shell files or your Claude Code settings. It keeps a list of the files it installs (`~/.local/share/switchboard/installed-files`), and it never replaces a file that is not on the list. The whole script runs only after the download is complete.
 
 To install the missing tools too:
 
@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/eserilev/switchboard/master/scripts
 | Claude Code (`claude`) | The agents | `curl -fsSL https://claude.ai/install.sh \| bash` | the same |
 | tmux 3.2 or newer | The agents keep running when the window closes | your package manager | `brew install tmux` |
 | git | Repos, worktrees, PR diffs | your package manager | Xcode tools or `brew install git` |
-| GitHub CLI (`gh`) | PR reviews | `github-cli` (Arch), `gh` (others) | `brew install gh` |
+| GitHub CLI (`gh`), optional | PR reviews only; the script warns when it is missing | `github-cli` (Arch), `gh` (others) | `brew install gh` |
 | WebKitGTK 4.1 | The window | `webkit2gtk-4.1` | built in |
 | Rust | Only to build from source | [rustup.rs](https://rustup.rs) | the same |
 
@@ -80,7 +80,7 @@ cargo run -p switchboard
 ## Update and uninstall
 
 - Update: run the install command again. Your config, reviews and agents stay.
-- Uninstall: `scripts/install.sh --uninstall`, or the curl command with `bash -s -- --uninstall`. This removes the app. It keeps your config (`~/.config/switchboard`), your store (`~/.local/share/switchboard`) and your state (`~/.switchboard`). Your agents keep running in tmux. To stop them: `tmux -L switchboard kill-server`.
+- Uninstall: `scripts/install.sh --uninstall`, or the curl command with `bash -s -- --uninstall`. This removes only the files that the script installed; it keeps a file of the same name from another tool. It keeps your config (`~/.config/switchboard`), your store (`~/.local/share/switchboard`) and your state (`~/.switchboard`). Your agents keep running in tmux. To stop them: `tmux -L switchboard kill-server`.
 
 ## Script flags
 
@@ -88,7 +88,7 @@ cargo run -p switchboard
 |---|---|
 | `--deps` | Install missing tools with your package manager |
 | `--source` | Build from source, also when a release exists |
-| `--prefix DIR` | Linux: put the binaries in `DIR/bin` (default `~/.local`) |
+| `--prefix DIR` | Put the binaries (Linux) or the links to them (macOS) in `DIR/bin` (default `~/.local`) |
 | `--uninstall` | Remove the app |
 
 ## Problems
