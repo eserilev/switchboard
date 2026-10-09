@@ -1,0 +1,9 @@
+[package]
+name = "guide-check"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The verified kernel that checks a PR review guide against the PR diff"
+
+[dev-dependencies]
