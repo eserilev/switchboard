@@ -289,6 +289,60 @@
   window.SB.setTab("r1");
   await wait(100);
 
+  // Property test of the expand logic: random files, random first rows, random clicks.
+  {
+    const { items, reveal, STEP } = window.SBReview._test;
+    let seed = 12345;
+    const rnd = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+    const key = (r) => `${r.kind}|${r.old ?? ""}|${r.new ?? ""}`;
+    let bad = null, cases = 0, clicks = 0, big = 0;
+    for (let c = 0; c < 400 && !bad; c++) {
+      // A file as the numbering makes it: removed, added and same rows in order.
+      const full = [];
+      let o = 0, n = 0;
+      const len = 1 + rnd(400);
+      for (let i = 0; i < len; i++) {
+        const k = rnd(10);
+        if (k === 0) full.push({ kind: "-", old: ++o, new: null, text: "r" });
+        else if (k === 1) full.push({ kind: "+", old: null, new: ++n, text: "a" });
+        else full.push({ kind: " ", old: ++o, new: ++n, text: "s" });
+        if (rnd(40) === 0) full.push({ kind: "@", old: null, new: null, text: "\\ No newline at end of file" });
+      }
+      const lines = full.filter((r) => !(r.kind === "@"));
+      // The first rows: a random set, with a header before each run, as the server cuts.
+      const sparse = 2 + rnd(40);
+      const first = new Set(lines.map((_, k) => k).filter(() => rnd(sparse) === 0));
+      if (!first.size) first.add(rnd(lines.length));
+      const rows = [];
+      lines.forEach((r, k) => { if (first.has(k)) { if (!first.has(k - 1)) rows.push({ kind: "@", old: null, new: null, text: "@@ old 1 · new 1 @@" }); rows.push(r); } });
+      const sec = { path: "f.rs", rows, note: null };
+      const l = { full: new Map([["f.rs", full]]), shown: new Map() };
+      cases++;
+      for (let step = 0; step < 12 && !bad; step++) {
+        const it = items(l, "k", sec);
+        const shownRows = it.filter((x) => !x.gap && x.row.kind !== "@").map((x) => x.row);
+        const idx = shownRows.map((r) => lines.findIndex((y) => key(y) === key(r)));
+        const gaps = it.filter((x) => x.gap);
+        const hidden = gaps.reduce((a, g) => a + g.count, 0);
+        if (idx.some((v, i) => i > 0 && v <= idx[i - 1])) bad = `rows out of order or twice in case ${c}`;
+        else if (idx.length + hidden !== lines.length) bad = `shown ${idx.length} + hidden ${hidden} != ${lines.length} in case ${c}`;
+        else if ([...first].some((k) => !idx.includes(k))) bad = `a first row went away in case ${c}`;
+        else if (it.some((x, i) => x.gap && (x.count < 1 || it[i + 1]?.gap))) bad = `an empty or double gap in case ${c}`;
+        if (bad || !gaps.length) break;
+        const g = gaps[rnd(gaps.length)];
+        if (g.count > STEP) big++;
+        const dir = ["up", "down", "all"][rnd(3)];
+        const before = idx.length;
+        reveal(l, "k", sec, g.prev, g.next, dir);
+        clicks++;
+        const after = items(l, "k", sec).filter((x) => !x.gap && x.row.kind !== "@").length;
+        const want = dir === "all" ? g.count : Math.min(STEP, g.count);
+        if (after - before !== want) bad = `${dir} showed ${after - before}, not ${want}, in case ${c}`;
+      }
+    }
+    check("expand: rows stay in order, once each, and every click shows the right count", !bad && big > 100, `${bad} (${cases} files, ${clicks} clicks, ${big} clicks on gaps over ${STEP})`);
+  }
+
   // Back to the board with the leader.
   key(" ", { ctrl: true, code: "Space" });
   key("b");

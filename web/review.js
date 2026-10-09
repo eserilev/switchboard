@@ -473,16 +473,21 @@
     if (!l.full.has(sec.path)) {
       try { l.full.set(sec.path, await invoke("review_file_rows", { id: r.id, path: sec.path })); } catch (e) { toast(e); return; }
     }
-    const g = items(l, key, sec).find((it) => it.gap && it.prev === b.dataset.prev && it.next === b.dataset.next);
-    if (g) {
-      const set = new Set(l.shown.get(`${key}|${sec.path}`) || []);
-      let a = g.from, z = g.to;
-      if (b.dataset.exp === "up") a = Math.max(g.from, g.to - STEP + 1);
-      if (b.dataset.exp === "down") z = Math.min(g.to, g.from + STEP - 1);
-      for (let k = a; k <= z; k++) set.add(k);
-      l.shown.set(`${key}|${sec.path}`, set);
-    }
+    reveal(l, key, sec, b.dataset.prev, b.dataset.next, b.dataset.exp);
     drawDiff(S.reviews.get(r.id) || r);
+  }
+
+  // Shows hidden rows of the gap between the rows `prev` and `next` (row keys):
+  // the last STEP rows for "up", the first STEP rows for "down", or all of them.
+  function reveal(l, key, sec, prev, next, dir) {
+    const g = items(l, key, sec).find((it) => it.gap && it.prev === prev && it.next === next);
+    if (!g) return;
+    const set = new Set(l.shown.get(`${key}|${sec.path}`) || []);
+    let a = g.from, z = g.to;
+    if (dir === "up") a = Math.max(g.from, g.to - STEP + 1);
+    if (dir === "down") z = Math.min(g.to, g.from + STEP - 1);
+    for (let k = a; k <= z; k++) set.add(k);
+    l.shown.set(`${key}|${sec.path}`, set);
   }
 
   // Kind to class: the only input to the row color.
@@ -832,5 +837,7 @@
       update(r);
     },
     stream,
+    // For the window checks only.
+    _test: { items, reveal, STEP },
   };
 })();
