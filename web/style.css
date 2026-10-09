@@ -1,4 +1,11 @@
 /* Switchboard. Tokens from the mockup, dark first. */
+@font-face {
+  font-family: "Archivo";
+  src: url("vendor/fonts/archivo-latin.woff2") format("woff2");
+  font-weight: 400 900;
+  font-stretch: 62% 125%;
+  font-display: block;
+}
 :root {
   color-scheme: dark;
   --bg: #12161d;
@@ -19,10 +26,11 @@
   --hl-bg: rgba(217, 181, 108, .14);
   --display: "Archivo", "Archivo Narrow", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
   --body: "Public Sans", "Inter", system-ui, sans-serif;
-  --mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+  --mono: "JetBrains Mono", "JetBrainsMono Nerd Font", "Fira Code", ui-monospace, monospace;
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--fg); font: 14px/1.5 var(--body); display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
 button { font: inherit; }

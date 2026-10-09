@@ -1,0 +1,37 @@
+# Builds Switchboard from this checkout: cd packaging/arch && makepkg -si
+pkgname=switchboard-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Many AI coding agents on one screen, and a guided PR review"
+arch=(x86_64)
+license=(MIT)
+depends=(tmux webkit2gtk-4.1 gtk3 libsoup3)
+makedepends=(cargo)
+optdepends=(
+  'neovim: nvim panes'
+  'github-cli: PR reviews'
+  'libnotify: desktop notifications'
+  'libsecret: tokens for endpoint connections'
+)
+options=(!lto)
+
+build() {
+  cd "$startdir/../.."
+  export CARGO_TARGET_DIR="$srcdir/target"
+  cargo build --release --locked -p switchboard -p sb
+}
+
+check() {
+  cd "$startdir/../.."
+  export CARGO_TARGET_DIR="$srcdir/target"
+  cargo test --release --locked -p switchboard-core
+}
+
+package() {
+  cd "$startdir/../.."
+  install -Dm755 "$srcdir/target/release/switchboard" "$pkgdir/usr/bin/switchboard"
+  install -Dm755 "$srcdir/target/release/sb" "$pkgdir/usr/bin/sb"
+  install -Dm644 packaging/switchboard.desktop "$pkgdir/usr/share/applications/switchboard.desktop"
+  install -Dm644 crates/app/icons/icon.png "$pkgdir/usr/share/icons/hicolor/32x32/apps/switchboard.png"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

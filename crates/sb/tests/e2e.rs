@@ -80,6 +80,11 @@ fn hooks_permits_and_panes_end_to_end() {
     std::env::set_var("SB_HOME", &root);
     std::env::set_var("SB_TMUX_SOCKET", format!("sb-e2e-{}", std::process::id()));
     std::env::remove_var("SB_SOCK");
+    // nvim with an empty config: a user config can stop at a "Press ENTER" prompt.
+    std::env::set_var(
+        "NVIM_APPNAME",
+        format!("sb-test-nvim-{}", std::process::id()),
+    );
     let events = Arc::new(Events::default());
     let hub = Hub::start(
         switchboard_core::paths::Paths::from_env(),
@@ -289,6 +294,42 @@ fn hooks_permits_and_panes_end_to_end() {
             .iter()
             .any(|p| p.id == claude_id && p.lamp == Lamp::Ended)
     });
+
+    // nvim: one per worktree, opened at a line, then reused.
+    if switchboard_core::nvim::installed() {
+        // The tree of the Claude-kind pane, so its edit event reaches this nvim.
+        let tree = PathBuf::from(&wt.tree);
+        let file = tree.join("notes.txt");
+        std::fs::write(&file, "1\n2\n3\n4\n5\n").unwrap();
+        let f = file.to_string_lossy().into_owned();
+        let n1 = hub.nvim_open(&tree, Some((&f, 2))).unwrap();
+        let sock = switchboard_core::nvim::socket(&root.join("run/nvim"), &tree);
+        wait_for("nvim socket", || switchboard_core::nvim::alive(&sock));
+        let n2 = hub.nvim_open(&tree, Some((&f, 4))).unwrap();
+        assert_eq!(n1, n2, "the second open reuses the nvim");
+        assert_eq!(
+            switchboard_core::nvim::expr(&sock, "line('.')").unwrap(),
+            "4"
+        );
+        // An agent edit in the same tree reloads the buffer.
+        std::fs::write(&file, "changed\n").unwrap();
+        sb(
+            &root,
+            &claude_id,
+            &["state", "edited"],
+            json!({"tool_input":{"file_path": f}}),
+        );
+        wait_for("checktime reload", || {
+            switchboard_core::nvim::expr(&sock, "getline(1)")
+                .map(|l| l == "changed")
+                .unwrap_or(false)
+        });
+        assert_eq!(
+            hub.views().iter().find(|p| p.id == n1).unwrap().kind,
+            "nvim"
+        );
+        hub.close(&n1).unwrap();
+    }
 
     // Layouts.
     hub.layout_save("day").unwrap();

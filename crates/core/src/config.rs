@@ -21,7 +21,9 @@ pub struct Config {
 pub struct ConnectionCfg {
     /// `claude` or `endpoint`.
     pub kind: String,
-    pub dir: String,
+    /// The `CLAUDE_CONFIG_DIR`. With none, the connection uses your own `~/.claude` and its login.
+    #[serde(default)]
+    pub dir: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
     #[serde(default)]

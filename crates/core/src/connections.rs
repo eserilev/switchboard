@@ -35,10 +35,13 @@ pub fn env(config: &Config, name: &str) -> Result<Vec<(String, String)>, String>
             Err(format!("no connection named {name}"))
         };
     };
-    let mut env = vec![(
-        "CLAUDE_CONFIG_DIR".to_owned(),
-        expand(&c.dir).to_string_lossy().into_owned(),
-    )];
+    let mut env = vec![];
+    if let Some(dir) = &c.dir {
+        env.push((
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            expand(dir).to_string_lossy().into_owned(),
+        ));
+    }
     if c.kind == "endpoint" {
         env.push((
             "ANTHROPIC_BASE_URL".into(),
@@ -123,6 +126,16 @@ mod tests {
         let l = env(&c, "l").unwrap();
         assert!(l.contains(&("ANTHROPIC_BASE_URL".into(), "http://h".into())));
         assert!(l.contains(&("ANTHROPIC_MODEL".into(), "m".into())));
+    }
+
+    #[test]
+    fn no_dir_means_the_default_login() {
+        let c = Config::parse(
+            "[connections.a]\nkind='claude'\n[connections.b]\nkind='claude'\ndir='/x/b'",
+        )
+        .unwrap();
+        assert!(env(&c, "a").unwrap().is_empty());
+        assert_eq!(env(&c, "b").unwrap().len(), 1);
     }
 
     #[test]

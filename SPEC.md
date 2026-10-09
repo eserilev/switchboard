@@ -1,10 +1,11 @@
 # Switchboard: Specification
 
-Status: draft 4, 2026-10-08. Nothing is built. Section 18 lists the spikes that must pass before PR 1.
+Status: draft 5, 2026-10-08. Built: PRs 1 to 13. Section 23 lists where the build differs from this text, and what is not tested.
 Draft 1 was the design page and mockup.
 Draft 2 applies two reviews: one of the design, and one of the rust-analyzer ideas. It also adds account switching.
 Draft 3 makes the LLM connection app wide (D4) and fixes the name (D5).
 Draft 4 applies the results of spikes S2, S3, S5 and S6 (`spikes/README.md`).
+Draft 5 records the build.
 
 Mockup: https://claude.ai/artifact/DeFPkn6Zk5q4VRUK1gzbpr
 
@@ -199,7 +200,7 @@ The token comes from the system keyring through `secret-tool`. It is never in th
 
 ### 8.2 Connection folders
 
-- Each connection has one folder, for example `~/.claude-a` and `~/.claude-b`.
+- Each connection has one folder, for example `~/.claude-b`. A connection with no `dir` uses your own `~/.claude` and its login. So your current account needs no new folder.
 - A Claude account folder has its own `.credentials.json` and `.claude.json`. You run `/login` once in each.
 - Each folder has symlinks to `~/.claude` for `settings.json`, `CLAUDE.md`, `projects/`, `skills/` and `plugins/`.
 - All connections share your memory, settings and session history.
@@ -215,7 +216,7 @@ The token comes from the system keyring through `secret-tool`. It is never in th
 
 ### 8.4 Limit: switch and resume
 
-- When a connection hits its limit, the app marks it "at limit" until the reset time in the limit message.
+- When a connection hits its limit, the app marks it "at limit" for one hour. The hook input has no reset time (S1). The next Working event on that connection clears the mark.
 - If the active connection is at limit, the top bar shows it in the Limit color.
 - A Limit tile has one action: Switch to the next connection that is not at limit.
 - That action makes the next connection active, then resumes the pane on it:
@@ -291,7 +292,7 @@ Opening a layout starts all its panes. Panes that already run are not started ag
 | Threads | The threads of the current step. Below them, the drafts. |
 
 A review has its own tab. More than one review can be open, one tab for each PR.
-The guide session has a tile on the board with a lamp, like any agent.
+The review header shows the state of the guide session: fetching, writing, updating, ready or error.
 
 ### 11.2 Guide session
 
@@ -444,7 +445,7 @@ Every hook gets its JSON input on stdin. `sb state` reads it for `session_id`, `
 
 ```json
 { "v": 1, "pane": "p7", "event": "turn", "session": "4f2a9c1e-…", "cwd": "/home/eitan/…/timeways",
-  "time": "2026-10-08T14:02:11Z", "summary": "Moved links to SQLite. 31 tests pass.", "detail": {} }
+  "time": 1791503457, "summary": "Moved links to SQLite. 31 tests pass.", "detail": {} }
 ```
 
 - `event` is one of `session`, `working`, `needs`, `turn`, `failure`, `edited`.
@@ -496,12 +497,11 @@ Events from the core to the window:
 ```toml
 leader = "ctrl+space"
 scan = ["~/Documents/Code"]
-idle_end_minutes = 30          # 15: end idle sessions
+idle_end_minutes = 0           # 15: end idle sessions; 0 is off
 poll_head_minutes = 2
 
-[connections.a]
+[connections.a]                 # no dir: your own ~/.claude and its login
 kind = "claude"
-dir = "~/.claude-a"
 
 [connections.b]
 kind = "claude"
@@ -665,3 +665,32 @@ switchboard/
 | D3 | On a usage limit: a switch button, or an automatic switch? | A button first. |
 | D4 | The LLM for review threads. | Decided: the active connection (8). |
 | D5 | The name. | Decided: Switchboard. |
+
+## 23. Build notes
+
+Where the build differs from the text above:
+
+- `time` in a state message is seconds since the Unix epoch.
+- `idle_end_minutes` is 0 (off) by default. Ending a session is safe, because the tile resumes it, but it is a surprise the first time.
+- The guide session has no board tile. Its state shows in the review header.
+- A connection with no `dir` uses your own `~/.claude` and its login.
+- A thread fork and the pin and draft summaries use the active connection.
+- `--allowedTools`, `--disallowedTools` and `--mcp-config` take lists. The prompt of a `claude -p` run goes first, or one of them takes it.
+- Every `nvim --server` call times out after 3 s. An nvim that waits at "Press ENTER" never answers.
+- tmux `%pane:off` stops tmux from reading the pane. Tiles use `pause`.
+
+Tests:
+
+- 61 core unit tests, 11 tmux tests on real servers, 5 MCP tests.
+- An end-to-end test: hub, tmux, the `sb` binary, hooks, permits, worktrees, nvim, layouts.
+- 44 window checks in headless Chromium (`web-tests/run.sh`), with a stand-in for the Tauri API.
+- Two live tests, ignored by default because they cost tokens: a review of a real PR (`live_review`), and a connection switch with resume (`live_switch`). Both passed on 2026-10-08.
+- A smoke test of the real app: `sb open`, the trust dialog, a real prompt to Your turn, a restart.
+
+Not tested yet:
+
+- The real window by eye: drawing, fonts, and keys in a live xterm.js pane.
+- A real usage limit (S1) and a second account (S4).
+- An endpoint connection (S7).
+- New commits during a review (11.7) against a real PR.
+- Desktop notifications when the window is in the background.

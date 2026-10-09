@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Switchboard
+Comment=Many AI coding agents on one screen
+Exec=switchboard
+Icon=switchboard
+Terminal=false
+Categories=Development;

@@ -2,7 +2,8 @@
 
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// The socket for a worktree: a hash of its path, so the name is short.
 pub fn socket(dir: &Path, tree: &Path) -> PathBuf {
@@ -12,14 +13,35 @@ pub fn socket(dir: &Path, tree: &Path) -> PathBuf {
 }
 
 /// Runs a Vim expression in the nvim on `sock`. Works in every mode.
+///
+/// An nvim that waits at a "Press ENTER" prompt never answers, so each call
+/// gives up after 3 s.
 pub fn expr(sock: &Path, expr: &str) -> Result<String, String> {
-    let out = Command::new("nvim")
+    let mut child = Command::new("nvim")
         .arg("--server")
         .arg(sock)
         .arg("--remote-expr")
         .arg(expr)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("nvim: {e}"))?;
+    let end = Instant::now() + Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < end => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(
+                    "nvim did not answer in 3 s. It waits at a prompt; look at its pane.".into(),
+                );
+            }
+        }
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
     }
