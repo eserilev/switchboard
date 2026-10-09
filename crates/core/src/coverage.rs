@@ -9,7 +9,6 @@
 //!   decide anything, so it needs no proof.
 //! - `complete` adds the step "Not in the guide" with every missed change.
 
-use crate::repos::git;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -29,6 +28,8 @@ pub struct ChangedFile {
     /// The path at the head, or `None` for a deleted file.
     pub new_path: Option<String>,
     pub binary: bool,
+    /// A submodule pointer. It has no lines, like a binary file.
+    pub submodule: bool,
     #[serde(skip)]
     pub old: Vec<Vec<u8>>,
     #[serde(skip)]
@@ -53,6 +54,71 @@ impl ChangedFile {
     pub fn changed_lines(&self) -> usize {
         self.removed.iter().filter(|m| **m).count() + self.added.iter().filter(|m| **m).count()
     }
+    /// A file with no changed line to cover: binary, a submodule, a pure rename or
+    /// a mode change. A step must name it in `files`.
+    pub fn needs_name(&self) -> bool {
+        self.binary || self.submodule || self.changed_lines() == 0
+    }
+}
+
+/// One entry of `git ls-tree -r`: the mode and the object id.
+pub type TreeEntry = (String, String);
+
+/// Every file of a commit, from the git objects. No diff code is involved.
+pub fn ls_tree(dir: &Path, rev: &str) -> Result<BTreeMap<String, TreeEntry>, String> {
+    let raw = git_bytes(dir, &["ls-tree", "-r", "-z", "--full-tree", rev])?;
+    let mut out = BTreeMap::new();
+    for rec in raw.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+        let rec = String::from_utf8_lossy(rec);
+        let Some((meta, path)) = rec.split_once('\t') else {
+            continue;
+        };
+        let mut f = meta.split(' ');
+        let (mode, _kind, oid) = (
+            f.next().unwrap_or(""),
+            f.next().unwrap_or(""),
+            f.next().unwrap_or(""),
+        );
+        out.insert(path.to_owned(), (mode.to_owned(), oid.to_owned()));
+    }
+    Ok(out)
+}
+
+/// The paths whose object or mode differs between two trees, or that exist in one only.
+pub fn tree_changes(
+    old: &BTreeMap<String, TreeEntry>,
+    new: &BTreeMap<String, TreeEntry>,
+) -> Vec<String> {
+    let mut paths: Vec<String> = old.keys().chain(new.keys()).cloned().collect();
+    paths.sort();
+    paths.dedup();
+    paths
+        .into_iter()
+        .filter(|p| old.get(p) != new.get(p))
+        .collect()
+}
+
+/// The file list of the model must be exactly the changed paths of the git trees.
+/// A file that the diff leaves out would escape every check, so this stops the review.
+pub fn check_files(m: &DiffModel, changed: &[String]) -> Result<(), String> {
+    for p in changed {
+        let found = m.files.iter().any(|f| {
+            f.old_path.as_deref() == Some(p.as_str()) || f.new_path.as_deref() == Some(p.as_str())
+        });
+        if !found {
+            return Err(format!(
+                "{p} changed between the commits, but the diff does not list it"
+            ));
+        }
+    }
+    for f in &m.files {
+        for p in [&f.old_path, &f.new_path].into_iter().flatten() {
+            if !changed.contains(p) {
+                return Err(format!("the diff lists {p}, but its object did not change"));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default)]
@@ -179,6 +245,11 @@ fn mask(len: usize, lines: &[usize]) -> Vec<bool> {
 /// Reads the PR diff from git: every changed file, its lines, and its masks.
 pub fn build(tree: &Path, base: &str, head: &str) -> Result<DiffModel, String> {
     let t0 = std::time::Instant::now();
+    let old_tree = ls_tree(tree, base)?;
+    let new_tree = ls_tree(tree, head)?;
+    let is_submodule = |t: &BTreeMap<String, TreeEntry>, p: &str| {
+        t.get(p).is_some_and(|(mode, _)| mode == "160000")
+    };
     let raw = git_bytes(
         tree,
         &["diff", "--numstat", "-z", "-M", "--no-ext-diff", base, head],
@@ -186,15 +257,19 @@ pub fn build(tree: &Path, base: &str, head: &str) -> Result<DiffModel, String> {
     let mut files = vec![];
     for n in parse_numstat(&raw) {
         let binary = n.additions.is_none();
-        let exists = |rev: &str, path: &str| {
-            git(tree, &["cat-file", "-e", &format!("{rev}:{path}")]).is_ok()
-        };
-        let old_path = exists(base, &n.old_path).then(|| n.old_path.clone());
-        let new_path = exists(head, &n.new_path).then(|| n.new_path.clone());
+        let submodule =
+            is_submodule(&old_tree, &n.old_path) || is_submodule(&new_tree, &n.new_path);
+        let old_path = old_tree
+            .contains_key(&n.old_path)
+            .then(|| n.old_path.clone());
+        let new_path = new_tree
+            .contains_key(&n.new_path)
+            .then(|| n.new_path.clone());
         let mut f = ChangedFile {
             old_path,
             new_path,
             binary,
+            submodule,
             old: vec![],
             new: vec![],
             removed: vec![],
@@ -202,7 +277,7 @@ pub fn build(tree: &Path, base: &str, head: &str) -> Result<DiffModel, String> {
             additions: n.additions.unwrap_or(0),
             deletions: n.deletions.unwrap_or(0),
         };
-        if !binary {
+        if !binary && !submodule {
             if let Some(p) = &f.old_path {
                 f.old = split_lines(&git_bytes(
                     tree,
@@ -236,13 +311,15 @@ pub fn build(tree: &Path, base: &str, head: &str) -> Result<DiffModel, String> {
         }
         files.push(f);
     }
-    let lines: usize = files.iter().map(ChangedFile::changed_lines).sum();
-    tracing::info!(target: "sb::coverage", files = files.len(), lines, ms = t0.elapsed().as_millis() as u64, "diff model built");
-    Ok(DiffModel {
+    let model = DiffModel {
         base: base.into(),
         head: head.into(),
         files,
-    })
+    };
+    check_files(&model, &tree_changes(&old_tree, &new_tree))?;
+    let lines: usize = model.files.iter().map(ChangedFile::changed_lines).sum();
+    tracing::info!(target: "sb::coverage", files = model.files.len(), lines, ms = t0.elapsed().as_millis() as u64, "diff model built");
+    Ok(model)
 }
 
 fn kernel_files(m: &DiffModel) -> Vec<guide_check::FileDiff> {
@@ -377,7 +454,7 @@ impl Report {
             }
         }
         if !self.binary.is_empty() {
-            out += "Binary files that no step names (add the path to a step's `files` list):\n";
+            out += "Files with no changed line that no step names: binary files, submodules, pure renames, mode changes. Add each path to a step's `files` list:\n";
             for b in &self.binary {
                 out += &format!("- {b}\n");
             }
@@ -441,7 +518,7 @@ fn binary_missing(m: &DiffModel, guide: &Value) -> Vec<String> {
     }
     m.files
         .iter()
-        .filter(|f| f.binary && !named.contains(f.path()))
+        .filter(|f| f.needs_name() && !named.contains(f.path()))
         .map(|f| f.path().to_owned())
         .collect()
 }
@@ -611,17 +688,31 @@ pub fn complete(m: &DiffModel, guide: &Value) -> Result<(Value, usize), String> 
     Ok((guide, missed_lines))
 }
 
-/// Compares the per-file counts with GitHub's counts. Returns one line per difference.
-pub fn compare_counts(m: &DiffModel, github: &BTreeMap<String, (u64, u64)>) -> Vec<String> {
-    let mut out = vec![];
+/// Compares the file list and counts with GitHub's. Returns (errors, warnings).
+/// A file that GitHub lists and git does not touch is an error: the review would
+/// miss it. Other differences are warnings: rename detection can split counts.
+pub fn compare_github(
+    m: &DiffModel,
+    github: &BTreeMap<String, (u64, u64)>,
+) -> (Vec<String>, Vec<String>) {
+    let (mut errors, mut warnings) = (vec![], vec![]);
+    for path in github.keys() {
+        if !m
+            .files
+            .iter()
+            .any(|f| f.path() == path || f.old_path.as_deref() == Some(path.as_str()))
+        {
+            errors.push(format!("GitHub lists {path}, but git does not change it"));
+        }
+    }
     for f in &m.files {
         let path = f.path().to_owned();
         match github.get(&path) {
-            None => out.push(format!("{path}: git has it, GitHub does not list it")),
+            None => warnings.push(format!("{path}: git changes it, GitHub does not list it")),
             Some((a, d))
                 if !f.binary && (*a as usize != f.additions || *d as usize != f.deletions) =>
             {
-                out.push(format!(
+                warnings.push(format!(
                     "{path}: git +{} -{}, GitHub +{a} -{d}",
                     f.additions, f.deletions
                 ))
@@ -629,14 +720,78 @@ pub fn compare_counts(m: &DiffModel, github: &BTreeMap<String, (u64, u64)>) -> V
             _ => {}
         }
     }
-    for path in github.keys() {
-        if !m
-            .files
-            .iter()
-            .any(|f| f.path() == path || f.old_path.as_deref() == Some(path.as_str()))
-        {
-            out.push(format!("{path}: GitHub lists it, git does not"));
+    (errors, warnings)
+}
+
+/// The diff rows of a file, from the verified model itself: the old and new lines
+/// and the masks, walked in the order of the rebuild check. Rows more than `ctx`
+/// lines from a change are left out, and a `@` row marks each gap.
+pub fn rows(f: &ChangedFile, ctx: usize) -> Vec<crate::diff::Row> {
+    use crate::diff::Row;
+    let text = |l: &[u8]| String::from_utf8_lossy(l.strip_suffix(b"\n").unwrap_or(l)).into_owned();
+    let mut all: Vec<Row> = vec![];
+    let (mut i, mut j) = (0, 0);
+    while i < f.old.len() || j < f.new.len() {
+        let (kind, line) = if i < f.old.len() && f.removed.get(i) == Some(&true) {
+            i += 1;
+            ('-', &f.old[i - 1])
+        } else if j < f.new.len() && f.added.get(j) == Some(&true) {
+            j += 1;
+            ('+', &f.new[j - 1])
+        } else if i < f.old.len() && j < f.new.len() {
+            i += 1;
+            j += 1;
+            (' ', &f.new[j - 1])
+        } else {
+            // Only after a failed rebuild check, which stops the review first.
+            break;
+        };
+        let (old, new) = match kind {
+            '-' => (Some(i as u32), None),
+            '+' => (None, Some(j as u32)),
+            _ => (Some(i as u32), Some(j as u32)),
+        };
+        let missing_newline = !line.ends_with(b"\n");
+        all.push(Row {
+            kind,
+            old,
+            new,
+            text: text(line),
+        });
+        if missing_newline {
+            all.push(Row {
+                kind: '@',
+                old: None,
+                new: None,
+                text: "\\ No newline at end of file".into(),
+            });
         }
+    }
+    // Keep rows near a change.
+    let changed: Vec<usize> = all
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.kind == '+' || r.kind == '-')
+        .map(|(k, _)| k)
+        .collect();
+    let near = |k: usize| changed.iter().any(|c| c.abs_diff(k) <= ctx);
+    let mut out: Vec<Row> = vec![];
+    let mut last: Option<usize> = None;
+    for (k, row) in all.into_iter().enumerate() {
+        if !near(k) {
+            continue;
+        }
+        if last.is_none_or(|l| l + 1 != k) && row.kind != '@' {
+            let (o, n) = (row.old.unwrap_or(0), row.new.unwrap_or(0));
+            out.push(Row {
+                kind: '@',
+                old: None,
+                new: None,
+                text: format!("@@ old {o} · new {n} @@"),
+            });
+        }
+        last = Some(k);
+        out.push(row);
     }
     out
 }
@@ -644,6 +799,7 @@ pub fn compare_counts(m: &DiffModel, github: &BTreeMap<String, (u64, u64)>) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repos::git;
 
     #[test]
     fn lines_keep_their_newline() {
@@ -759,7 +915,11 @@ mod tests {
                 .any(|u| u.starts_with("gone.txt:1-1 (old)")),
             "{err:?}"
         );
-        assert_eq!(err.binary, vec!["bin.dat"]);
+        assert!(
+            err.binary.contains(&"bin.dat".to_string())
+                && err.binary.contains(&"moved.txt".to_string()),
+            "{err:?}"
+        );
 
         // `complete` makes it pass, and the kernel agrees.
         let (g, missed) = complete(&m, &json!({"steps": [{"id": "s1", "title": "PR"}]})).unwrap();
@@ -777,7 +937,7 @@ mod tests {
                 {"file": "a.txt", "side": "old", "from": 60, "to": 60},
                 {"file": "a.txt", "side": "new", "from": 3, "to": 7},
                 {"file": "a.txt", "side": "new", "from": 41, "to": 41}]},
-            {"id": "s2", "title": "files", "files": ["bin.dat"], "ranges": [
+            {"id": "s2", "title": "files", "files": ["bin.dat", "moved.txt"], "ranges": [
                 {"file": "gone.txt", "side": "old", "from": 1, "to": 1},
                 {"file": "fresh.txt", "side": "new", "from": 1, "to": 2}]}]});
         assert_eq!(check_guide(&m, &good).map_err(|r| r.text()), Ok(()));
@@ -804,7 +964,7 @@ mod tests {
     }
 
     #[test]
-    fn counts_compare_with_github() {
+    fn github_extra_file_is_an_error_and_count_differences_are_warnings() {
         let (dir, base, head) = repo();
         let m = build(&dir, &base, &head).unwrap();
         let mut gh: BTreeMap<String, (u64, u64)> = m
@@ -817,11 +977,62 @@ mod tests {
                 )
             })
             .collect();
-        assert!(compare_counts(&m, &gh).is_empty());
+        assert_eq!(compare_github(&m, &gh), (vec![], vec![]));
         gh.insert("a.txt".into(), (9, 9));
         gh.insert("extra.rs".into(), (1, 0));
-        let diff = compare_counts(&m, &gh);
-        assert_eq!(diff.len(), 2, "{diff:?}");
+        let (errors, warnings) = compare_github(&m, &gh);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_file_list_must_match_the_git_trees() {
+        let (dir, base, head) = repo();
+        let mut m = build(&dir, &base, &head).unwrap();
+        let changed = tree_changes(
+            &ls_tree(&dir, &base).unwrap(),
+            &ls_tree(&dir, &head).unwrap(),
+        );
+        assert!(check_files(&m, &changed).is_ok());
+        // A file that the diff leaves out stops the review.
+        m.files.retain(|f| f.path() != "fresh.txt");
+        let err = check_files(&m, &changed).unwrap_err();
+        assert!(err.contains("fresh.txt"), "{err}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rows_from_the_model_rebuild_both_files() {
+        let (dir, base, head) = repo();
+        let m = build(&dir, &base, &head).unwrap();
+        let strip = |ls: &Vec<Vec<u8>>| {
+            ls.iter()
+                .map(|l| String::from_utf8_lossy(l.strip_suffix(b"\n").unwrap_or(l)).into_owned())
+                .collect::<Vec<_>>()
+        };
+        for f in m.files.iter().filter(|f| !f.needs_name()) {
+            let all = rows(f, usize::MAX);
+            let new: Vec<String> = all
+                .iter()
+                .filter(|r| r.kind == '+' || r.kind == ' ')
+                .map(|r| r.text.clone())
+                .collect();
+            let old: Vec<String> = all
+                .iter()
+                .filter(|r| r.kind == '-' || r.kind == ' ')
+                .map(|r| r.text.clone())
+                .collect();
+            assert_eq!(new, strip(&f.new), "{}", f.path());
+            assert_eq!(old, strip(&f.old), "{}", f.path());
+        }
+        // With context 2, rows far from a change are left out and a gap row marks them.
+        let a = m.files.iter().find(|f| f.path() == "a.txt").unwrap();
+        let short = rows(a, 2);
+        assert!(short.len() < a.new.len());
+        assert!(short.iter().filter(|r| r.kind == '@').count() >= 2);
+        let fresh = m.files.iter().find(|f| f.path() == "fresh.txt").unwrap();
+        assert!(rows(fresh, 3).iter().any(|r| r.text.contains("No newline")));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

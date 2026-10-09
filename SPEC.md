@@ -723,20 +723,22 @@ The LLM proposes the review guide. A small checker decides if you see it. The ch
 
 1. The app fetches the PR. The head must equal GitHub's `headRefOid`. The base is the merge base of GitHub's `baseRefOid` and the head, as on GitHub.
 2. The app reads every changed file at both commits from git, and the changed line numbers from `git diff -U0`. Lines keep their newline byte.
-3. The verified rebuild check runs on every file. If one fails, the review stops. A wrong diff parse can never reach you.
-4. git's counts are compared with GitHub's counts for each file. A difference shows as a warning in the header.
-5. `guide_set_steps` runs the verified `check`. A refused guide goes back to the agent with every missed line and every bad range. After 3 refusals, the app keeps the good ranges and adds a step "Not in the guide" with every missed change.
-6. When the agent ends, the app checks the stored guide again. You only ever see a guide that `check` accepted.
+3. **The file list is checked against the git objects.** `git ls-tree -r` of both commits gives every path with its mode and object id, with no diff code. Every path whose object or mode differs, or that exists on one side only, must be in the model, and the model may have no other path. Else the review stops.
+4. The verified rebuild check runs on every file. If one fails, the review stops. A wrong diff parse can never reach you.
+5. A file that GitHub lists and git does not change stops the review. A count difference for the same file is a warning, because rename detection can split counts.
+6. `guide_set_steps` runs the verified `check`. A refused guide goes back to the agent with every missed line and every bad range. After 3 refusals, the app keeps the good ranges and adds a step "Not in the guide" with every missed change.
+7. When the agent ends, the app checks the stored guide again. You only ever see a guide that `check` accepted.
+8. **The diff column draws from the model.** The rows are the model's lines and masks, walked in the order of the rebuild check. There is no second `git diff`. A test checks that the rows rebuild both versions of each file.
 
 ### What stays trusted
 
 - git returns the right file content for a commit. git checks object hashes itself.
-- The window draws the accepted guide and diff. It draws from the same data, with no second copy.
-- Binary files have no lines. A step must name each one in `files`. That rule is plain code, not proved.
+- The window draws the accepted guide, and the diff rows from the model. The drawing code itself is not proved.
+- Files with no changed line have nothing for the line checker: binary files, submodules, pure renames and mode changes. A step must name each one in `files`. That rule is plain code, not proved.
 - What the agent writes about the code. No checker can prove that an explanation is true.
 
 ### Tests
 
 - 40,000 random inputs compare `check` with a plain model of the spec.
-- The diff model and the rebuild check on the last 50 Lighthouse commits: 334 files, 15,819 changed lines, 6 renames, 1 binary file, all pass (`crates/core/tests/real_diffs.rs`).
+- The last 300 Lighthouse commits (`crates/core/tests/real_diffs.rs`): 2,449 files, 119,439 changed lines, 10 renames, 2 binary files. For each commit, the file list matches the git trees, every file rebuilds, the completed guide passes the checker, and the drawn rows rebuild both versions of every file.
 - A live review of a real PR: the agent's guide passed the checker with no added step.

@@ -42,6 +42,17 @@ fn every_recent_commit_rebuilds_and_completes() {
         )
         .unwrap_or_else(|e| panic!("{c}: {e}"));
         assert!(coverage::check_guide(&m, &g).is_ok(), "{c}");
+        // The rows the window draws rebuild both versions of every file.
+        for f in m.files.iter().filter(|f| !f.needs_name()) {
+            let all = coverage::rows(f, usize::MAX);
+            let strip = |ls: &Vec<Vec<u8>>| {
+                ls.iter().map(|l| String::from_utf8_lossy(l.strip_suffix(b"\n").unwrap_or(l)).into_owned()).collect::<Vec<_>>()
+            };
+            let new: Vec<String> = all.iter().filter(|r| r.kind == '+' || r.kind == ' ').map(|r| r.text.clone()).collect();
+            let old: Vec<String> = all.iter().filter(|r| r.kind == '-' || r.kind == ' ').map(|r| r.text.clone()).collect();
+            assert_eq!(new, strip(&f.new), "{c} {}", f.path());
+            assert_eq!(old, strip(&f.old), "{c} {}", f.path());
+        }
         let changed: usize = m.files.iter().map(|f| f.changed_lines()).sum();
         assert_eq!(
             missed, changed,

@@ -113,6 +113,8 @@ pub struct DiffSection {
     /// True when the PR does not change the file and the rows are plain context.
     pub context: bool,
     pub ranges: Vec<coverage::Range>,
+    /// Why a file has no lines to show: binary, submodule, rename, mode change.
+    pub note: Option<String>,
 }
 
 type Res<T> = Result<T, String>;
@@ -376,7 +378,13 @@ impl Hub {
                     .iter()
                     .map(|f| (f.path.clone(), (f.additions, f.deletions)))
                     .collect();
-                coverage::compare_counts(&model, &counts)
+                let (errors, warnings) = coverage::compare_github(&model, &counts);
+                if let Some(err) = errors.first() {
+                    return Err(format!(
+                        "The file list check failed, so the review stops: {err}."
+                    ));
+                }
+                warnings
             }
             None => vec![],
         };
@@ -395,7 +403,7 @@ impl Hub {
             binary: model
                 .files
                 .iter()
-                .filter(|f| f.binary)
+                .filter(|f| f.needs_name())
                 .map(|f| f.path().to_owned())
                 .collect(),
             github,
@@ -657,15 +665,52 @@ impl Hub {
 
     // ---------- the diff column ----------
 
+    /// The diff of a step, drawn from the verified model: the same lines and masks
+    /// that the checker accepted. There is no second copy from another `git diff`.
     pub fn review_diff(&self, id: &str, step: &str) -> Res<DiffView> {
         let s = self.step(id, step)?;
-        let ranges = coverage::step_ranges(&s);
+        let mut ranges = coverage::step_ranges(&s);
+        // Files with no lines (binary, renames, mode changes) show as sections too.
+        let named: Vec<String> = s
+            .get("files")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect();
         let model = self.model(id)?;
-        let (tree, head, base) = self.review_refs(id)?;
-        // One section for each file, in the order the ranges name them.
         let mut sections: Vec<DiffSection> = vec![];
-        for r in &ranges {
-            let file = model.files.iter().find(|f| {
+        let add = |fi: usize, range: Option<coverage::Range>, sections: &mut Vec<DiffSection>| {
+            let f = &model.files[fi];
+            let path = f.path().to_owned();
+            if let Some(sec) = sections.iter_mut().find(|sec| sec.path == path) {
+                sec.ranges.extend(range);
+                return;
+            }
+            let note = if f.binary {
+                Some("binary file".to_owned())
+            } else if f.submodule {
+                Some("submodule".to_owned())
+            } else if f.needs_name() {
+                Some(match (&f.old_path, &f.new_path) {
+                    (Some(o), Some(n)) if o != n => format!("renamed from {o}, no line changed"),
+                    _ => "mode change, no line changed".to_owned(),
+                })
+            } else {
+                None
+            };
+            sections.push(DiffSection {
+                path,
+                old_path: f.old_path.clone(),
+                rows: coverage::rows(f, 12),
+                context: false,
+                ranges: range.into_iter().collect(),
+                note,
+            });
+        };
+        for r in ranges.drain(..) {
+            let fi = model.files.iter().position(|f| {
                 let p = if r.side == "old" {
                     f.old_path.as_deref()
                 } else {
@@ -673,48 +718,14 @@ impl Hub {
                 };
                 p == Some(r.file.as_str())
             });
-            let path = file
-                .map(|f| f.path().to_owned())
-                .unwrap_or_else(|| r.file.clone());
-            if let Some(sec) = sections.iter_mut().find(|sec| sec.path == path) {
-                sec.ranges.push(r.clone());
-                continue;
+            if let Some(fi) = fi {
+                add(fi, Some(r), &mut sections);
             }
-            let old_path = file.and_then(|f| f.old_path.clone());
-            let mut args = vec![
-                "diff",
-                "-U12",
-                "--no-color",
-                "--no-ext-diff",
-                "-M",
-                &base,
-                &head,
-                "--",
-            ];
-            if let Some(o) = &old_path {
-                if *o != path {
-                    args.push(o);
-                }
+        }
+        for n in &named {
+            if let Some(fi) = model.files.iter().position(|f| f.path() == n) {
+                add(fi, None, &mut sections);
             }
-            args.push(&path);
-            let text = git(&tree, &args)?;
-            let rows = diff::parse(&text);
-            let (rows, context) = if rows.is_empty() {
-                let content = git(&tree, &["show", &format!("{head}:{path}")]).unwrap_or_default();
-                (
-                    diff::context(&content, r.from as u32, r.to as u32, 12),
-                    true,
-                )
-            } else {
-                (rows, false)
-            };
-            sections.push(DiffSection {
-                path,
-                old_path,
-                rows,
-                context,
-                ranges: vec![r.clone()],
-            });
         }
         Ok(DiffView { sections })
     }

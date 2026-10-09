@@ -172,7 +172,8 @@
         return `<tr class="${cls}"><td class="ln" data-sec="${si}" data-side="${rowSide}" data-ln="${num}">${num}</td><td class="src">${esc(sign + row.text)}</td></tr>`;
       }).join("");
       const moved = sec.old_path && sec.old_path !== sec.path ? ` <span class="ctxnote">from ${esc(sec.old_path)}</span>` : "";
-      return `<div class="file"><span>${esc(sec.path)}${moved}${sec.context ? ' <span class="ctxnote">not changed by the PR</span>' : ""}</span><button class="tool" data-nvim="${si}">nvim</button></div>
+      const note = sec.note ? ` <span class="ctxnote">${esc(sec.note)}</span>` : "";
+      return `<div class="file"><span>${esc(sec.path)}${moved}${note}${sec.context ? ' <span class="ctxnote">not changed by the PR</span>' : ""}</span><button class="tool" data-nvim="${si}">nvim</button></div>
         <div class="codewrap"><table class="code">${rows}</table></div>`;
     }).join("");
     $("#rdiff").innerHTML = html;
