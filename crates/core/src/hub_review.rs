@@ -1276,6 +1276,18 @@ impl Hub {
             start_line: None,
             text: line,
             agent: true,
+            head: None,
+            line_text: None,
+            stale: false,
+        };
+        // The text of the thread's line, so the draft can move with the code.
+        let d = match (&d.path, d.line, self.model(id)) {
+            (Some(path), Some(n), Ok(m)) => {
+                let old = d.side.as_deref() == Some("old");
+                let text = crate::post::model_file(&m, path, old).and_then(|f| crate::post::block_text(f, old, n, n));
+                DraftRow { head: Some(m.head.clone()), line_text: text, ..d }
+            }
+            _ => d,
         };
         self.store.lock().unwrap().add_draft(id, &d).map_err(e)?;
         self.emit_review(id);
@@ -1355,6 +1367,9 @@ impl Hub {
             start_line: (start < line).then_some(start),
             text: text.to_owned(),
             agent: false,
+            head: Some(model.head.clone()),
+            line_text: crate::post::block_text(f, side == "old", start, line),
+            stale: false,
         };
         self.store.lock().unwrap().add_draft(id, &d).map_err(e)?;
         self.emit_review(id);
@@ -1586,6 +1601,7 @@ impl Hub {
             }
         }
         self.reanchor(id, &f.tree, &f.head)?;
+        self.move_drafts(id)?;
         let prompt = format!(
             "The PR has new commits. The head is now {}. The worktree is checked out at it. Changed files since {old}: {}. \
              Read the new code. Call guide_set_steps with the full guide for the new head. Keep the id of each step \
@@ -1596,6 +1612,38 @@ impl Hub {
         );
         self.run_guide(id, &pr, Some(prompt))?;
         let _ = stale;
+        Ok(())
+    }
+
+    /// Moves each draft to its text at the new head. A draft whose text is gone gets
+    /// `stale`, and the send refuses it until you place it again.
+    fn move_drafts(&self, id: &str) -> Res<()> {
+        let model = self.model(id)?;
+        let drafts = self.store.lock().unwrap().drafts(id).map_err(e)?;
+        for d in drafts {
+            let (Some(path), Some(line), Some(text)) = (&d.path, d.line, &d.line_text) else {
+                continue;
+            };
+            if d.head.as_deref() == Some(model.head.as_str()) {
+                continue;
+            }
+            let old = d.side.as_deref() == Some("old");
+            let start = d.start_line.unwrap_or(line);
+            let found = crate::post::model_file(&model, path, old)
+                .and_then(|f| crate::post::move_block(f, old, text, start));
+            let store = self.store.lock().unwrap();
+            match found {
+                Some(s) => store.move_draft(
+                    d.id,
+                    Some(s + (line - start)),
+                    d.start_line.map(|_| s),
+                    &model.head,
+                    false,
+                ),
+                None => store.move_draft(d.id, d.line, d.start_line, &model.head, true),
+            }
+            .map_err(e)?;
+        }
         Ok(())
     }
 

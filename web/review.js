@@ -333,7 +333,8 @@
         // The color comes only from the row kind: "-" removed, "+" added, " " context.
         const cls = [KIND_CLASS[row.kind], focus ? "focus" : "", isAnchor ? "anchor" : "", anchored.has(`${rowSide}:${num}`) ? "anchored" : "", sel ? "sel" : ""].join(" ");
         const sign = row.kind === " " ? " " : row.kind;
-        const mine = r.drafts.filter((x) => x.path === pathOf(rowSide) && (x.side || "new") === rowSide && x.line === num);
+        // A stale draft has no line at this head: it shows only in the list.
+        const mine = r.drafts.filter((x) => !x.stale && x.path === pathOf(rowSide) && (x.side || "new") === rowSide && x.line === num);
         const cards = mine.map((x) => `<tr class="drow"><td colspan="3"><div class="dcard${x.agent ? " agent" : ""}" data-d="${x.id}">
           <div class="dmeta"><span class="who">${x.agent ? "Agent draft" : "Your comment"}</span>${x.start_line ? `<span>lines ${x.start_line}-${x.line}</span>` : ""}<button class="tool x" data-ddel="${x.id}" aria-label="Delete comment">×</button></div>
           <div class="dtext" contenteditable="true">${esc(x.text)}</div></div></td></tr>`).join("");
@@ -627,7 +628,8 @@
         const lines = d.start_line ? `${d.start_line}-${d.line}` : d.line;
         const loc = d.path ? `${d.path}${d.line ? ":" + lines : ""}${d.side === "old" ? " (old)" : ""}` : "";
         const long = d.text.split("\n").length > 2 || d.text.length > 240;
-        return `<div class="draft${long ? " long" : ""}${d.agent ? " agent" : ""}" data-d="${d.id}"><b>${esc(loc)}${d.agent ? ' <i>agent</i>' : ""}</b><span contenteditable="true">${esc(d.text)}</span></div>`;
+        const stale = d.stale ? `<em class="stalenote">The code changed after you wrote this. Delete it, or write it again on the new line.</em>` : "";
+        return `<div class="draft${long ? " long" : ""}${d.agent ? " agent" : ""}${d.stale ? " stale" : ""}" data-d="${d.id}"><b>${esc(loc)}${d.agent ? ' <i>agent</i>' : ""}</b>${stale}<span contenteditable="true">${esc(d.text)}</span></div>`;
       }).join("");
     $("#rdrafts [data-finish]").onclick = () => openFinish(r.id);
     $("#rdrafts").querySelectorAll("[data-d] span").forEach((el) => {

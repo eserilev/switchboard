@@ -733,6 +733,55 @@ mod tests {
         out
     }
 
+    /// The review finding H1: after an update, a draft moves with its code. Without
+    /// the move, its comment goes to GitHub on the old number, which is another line.
+    #[test]
+    fn a_draft_moves_with_its_code_after_an_update() {
+        use crate::post::{block_text, model_file, move_block};
+        let dir = std::env::temp_dir().join(format!("sb-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let g = |args: &[&str]| git(&dir, args).unwrap();
+        g(&["init", "-q", "-b", "main"]);
+        g(&["config", "user.email", "t@t"]);
+        g(&["config", "user.name", "t"]);
+        let file = |lines: &[String]| std::fs::write(dir.join("a.rs"), lines.join("\n") + "\n").unwrap();
+        let mut lines: Vec<String> = (1..=60).map(|i| format!("line {i}")).collect();
+        file(&lines);
+        g(&["add", "."]);
+        g(&["commit", "-qm", "base"]);
+        let base = g(&["rev-parse", "HEAD"]);
+        lines[39] = "let x = risky();".into();
+        file(&lines);
+        g(&["commit", "-qam", "A"]);
+        let a = g(&["rev-parse", "HEAD"]);
+        // B adds 3 lines above line 40 and removes line 50.
+        lines.splice(10..10, ["// one".to_owned(), "// two".to_owned(), "// three".to_owned()]);
+        lines.remove(52);
+        file(&lines);
+        g(&["commit", "-qam", "B"]);
+        let b = g(&["rev-parse", "HEAD"]);
+
+        let ma = crate::coverage::build(&dir, &base, &a).unwrap();
+        let mb = crate::coverage::build(&dir, &base, &b).unwrap();
+        let fa = model_file(&ma, "a.rs", false).unwrap();
+        let fb = model_file(&mb, "a.rs", false).unwrap();
+        let text = block_text(fa, false, 40, 40).unwrap();
+        assert_eq!(text, "let x = risky();");
+        // Without a move, line 40 at B is another line.
+        assert_ne!(block_text(fb, false, 40, 40).unwrap(), text);
+        // The move finds it at 43.
+        assert_eq!(move_block(fb, false, &text, 40), Some(43));
+        // A range moves as one block.
+        let range = block_text(fa, false, 39, 41).unwrap();
+        assert_eq!(move_block(fb, false, &range, 39), Some(42));
+        // Line 50 at A is gone at B: the draft is stale.
+        let gone = block_text(fa, false, 50, 50).unwrap();
+        assert_eq!(gone, "line 50");
+        assert_eq!(move_block(fb, false, &gone, 50), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_round_after_new_commits_shows_only_them() {
         let (dir, base, since) = round_repo("plain");

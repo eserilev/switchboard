@@ -357,6 +357,18 @@
     $("#leader").hidden = true;
   }
 
+  // A stale draft: the code changed after an update. It shows in the list with a note,
+  // and not in the diff.
+  {
+    const r = structuredClone(window.__data.reviews[0]);
+    r.drafts = [Object.assign({}, r.drafts[0], { stale: true })];
+    window.__emit("review", r);
+    await wait(100);
+    check("a stale draft shows a note in the list and not in the diff", $("#rdrafts .draft.stale .stalenote")?.textContent.includes("code changed") && !$('#rdiff .dcard[data-d="1"]'), $("#rdrafts").textContent);
+    window.__emit("review", window.__data.reviews[0]);
+    await wait(100);
+  }
+
   // Back to the board with the leader.
   key(" ", { ctrl: true, code: "Space" });
   key("b");

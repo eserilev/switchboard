@@ -44,6 +44,11 @@ const SCHEMA: &[&str] = &[
      ALTER TABLE posted ADD COLUMN head TEXT;
      ALTER TABLE posted ADD COLUMN body TEXT;
      ALTER TABLE posted ADD COLUMN lines TEXT;",
+    // Version 5: a draft keeps the head and the text of its lines, so it can move
+    // with the code after an update. `stale`: the text is gone from the new head.
+    "ALTER TABLE draft ADD COLUMN head TEXT;
+     ALTER TABLE draft ADD COLUMN line_text TEXT;
+     ALTER TABLE draft ADD COLUMN stale INTEGER NOT NULL DEFAULT 0;",
 ];
 
 pub struct Store {
@@ -135,6 +140,16 @@ pub struct DraftRow {
     /// True when the agent wrote the text. You see and edit it before it goes out.
     #[serde(default)]
     pub agent: bool,
+    /// The head that `line` and `start_line` belong to.
+    #[serde(default)]
+    pub head: Option<String>,
+    /// The text of the lines from `start_line` (or `line`) to `line`, joined with "\n".
+    #[serde(default)]
+    pub line_text: Option<String>,
+    /// True when an update did not find `line_text` in the new head. The draft cannot
+    /// go out until you place it again.
+    #[serde(default)]
+    pub stale: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -467,9 +482,9 @@ impl Store {
 
     pub fn add_draft(&self, review: &str, d: &DraftRow) -> R<i64> {
         self.db.execute(
-            "INSERT INTO draft (review, path, side, line, start_line, text, agent)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![review, d.path, d.side, d.line, d.start_line, d.text, d.agent],
+            "INSERT INTO draft (review, path, side, line, start_line, text, agent, head, line_text, stale)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![review, d.path, d.side, d.line, d.start_line, d.text, d.agent, d.head, d.line_text, d.stale],
         )?;
         Ok(self.db.last_insert_rowid())
     }
@@ -482,6 +497,15 @@ impl Store {
         Ok(())
     }
 
+    /// Moves a draft to its lines at a new head, or marks it stale.
+    pub fn move_draft(&self, id: i64, line: Option<u32>, start_line: Option<u32>, head: &str, stale: bool) -> R<()> {
+        self.db.execute(
+            "UPDATE draft SET line = ?2, start_line = ?3, head = ?4, stale = ?5 WHERE id = ?1",
+            params![id, line, start_line, head, stale],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_draft(&self, id: i64) -> R<()> {
         self.db.execute("DELETE FROM draft WHERE id = ?1", [id])?;
         Ok(())
@@ -489,7 +513,7 @@ impl Store {
 
     pub fn drafts(&self, review: &str) -> R<Vec<DraftRow>> {
         let mut s = self.db.prepare(
-            "SELECT id, path, side, line, start_line, text, agent FROM draft
+            "SELECT id, path, side, line, start_line, text, agent, head, line_text, stale FROM draft
              WHERE review = ?1 ORDER BY id",
         )?;
         let rows = s.query_map([review], |r| {
@@ -501,6 +525,9 @@ impl Store {
                 start_line: r.get(4)?,
                 text: r.get(5)?,
                 agent: r.get(6)?,
+                head: r.get(7)?,
+                line_text: r.get(8)?,
+                stale: r.get(9)?,
             })
         })?;
         rows.collect()
@@ -691,7 +718,7 @@ mod tests {
                 assert!(rs.iter().all(|r| r.round == 1 && r.since.is_none()));
                 let ds = s.drafts("r0").unwrap();
                 assert_eq!(ds.len() as u64, drafts);
-                assert!(ds.iter().all(|d| d.agent && d.start_line.is_none()));
+                assert!(ds.iter().all(|d| d.agent && d.start_line.is_none() && !d.stale && d.line_text.is_none()));
             }
         }
     }
@@ -766,6 +793,9 @@ mod tests {
                     start_line: Some(8),
                     text: "nit".into(),
                     agent: false,
+                    head: None,
+                    line_text: None,
+                    stale: false,
                 },
             )
             .unwrap();
@@ -795,6 +825,9 @@ mod tests {
             start_line: None,
             text: text.into(),
             agent: false,
+            head: None,
+            line_text: None,
+            stale: false,
         };
         let sent = s.add_draft("r1", &draft("sent")).unwrap();
         s.add_draft("r1", &draft("kept")).unwrap();

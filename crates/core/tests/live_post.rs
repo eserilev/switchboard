@@ -48,6 +48,9 @@ fn check_pr(repo: &std::path::Path, url: &str) -> Seen {
                         start_line: None,
                         text: "x".into(),
                         agent: false,
+                        head: None,
+                        line_text: None,
+                        stale: false,
                     });
                 }
             }

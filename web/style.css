@@ -326,3 +326,5 @@ tr.anchored td.ln::after { content: "●"; color: var(--accent); margin-left: 4p
 .xb { font: 600 11px/1 var(--mono); padding: 3px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel-2); color: var(--accent); cursor: pointer; }
 .xb:hover { border-color: var(--accent); }
 tr.gap .hidden { color: var(--muted); font-size: 11px; }
+.draft.stale { box-shadow: inset 3px 0 0 var(--error); }
+.draft .stalenote { font: 12px/1.4 var(--body); font-style: normal; color: var(--error); }

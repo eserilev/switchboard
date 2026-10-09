@@ -171,6 +171,27 @@ pub fn line_text(f: &ChangedFile, old: bool, n: u32) -> Option<String> {
     Some(String::from_utf8_lossy(l).into_owned())
 }
 
+/// The text of lines `from` to `to` of one side, joined with "\n".
+pub fn block_text(f: &ChangedFile, old: bool, from: u32, to: u32) -> Option<String> {
+    let lines: Option<Vec<String>> = (from..=to).map(|n| line_text(f, old, n)).collect();
+    lines.map(|l| l.join("\n"))
+}
+
+/// Where the lines `block` start in `f`, nearest to line `near`. All lines must be
+/// the same, in order, with the same spaces. `None` when the block is gone.
+pub fn move_block(f: &ChangedFile, old: bool, block: &str, near: u32) -> Option<u32> {
+    let want: Vec<&str> = block.split('\n').collect();
+    let count = if old { f.old.len() } else { f.new.len() } as u32;
+    let fits = |start: u32| {
+        want.iter()
+            .enumerate()
+            .all(|(k, w)| line_text(f, old, start + k as u32).as_deref() == Some(*w))
+    };
+    (1..=count)
+        .filter(|&s| s + want.len() as u32 - 1 <= count && fits(s))
+        .min_by_key(|s| s.abs_diff(near))
+}
+
 /// The index of the row that shows line `n` of one side in GitHub's diff.
 fn gh_row(rows: &[Row], old: bool, n: u32) -> Option<usize> {
     rows.iter().position(|r| {
@@ -231,6 +252,14 @@ pub fn plan(m: &DiffModel, gh: &[GhFile], drafts: &[DraftRow], old_on_github: bo
             p.errors.push(format!("{at}: the file has no such line at the reviewed head."));
             continue;
         };
+        // The comment was written on some text. That text must still be at its lines.
+        let moved = d.stale || d.line_text.as_deref().is_some_and(|t| t != ours.join("\n"));
+        if moved {
+            p.errors.push(format!(
+                "{at}: the code of this comment changed after you wrote it. Move the comment or delete it."
+            ));
+            continue;
+        }
         let outside = |reason: &str| Outside {
             draft: d.id,
             at: at.clone(),
@@ -475,6 +504,9 @@ Binary files /dev/null and b/img.png differ
             start_line: start,
             text: format!("comment {id}"),
             agent: false,
+            head: None,
+            line_text: None,
+            stale: false,
         }
     }
 
@@ -658,6 +690,39 @@ Binary files /dev/null and b/img.png differ
         // One comment more or less: another review, so the send goes on.
         assert!(!same_comments(&json!([{ "path": "a.rs", "line": 3, "side": "RIGHT", "body": "x" }]), &payload));
         assert!(!same_comments(&json!([]), &payload));
+    }
+
+    #[test]
+    fn a_comment_on_changed_code_stops_the_send() {
+        let gh = parse_pr_diff(GH);
+        let m = model();
+        let f = &m.files[0];
+        // Written on line 2, and line 2 still has that text: it goes.
+        let mut d = draft(1, "src/a.rs", "new", None, 2);
+        d.line_text = block_text(f, false, 2, 2);
+        assert_eq!(plan(&m, &gh, std::slice::from_ref(&d), true).inline.len(), 1);
+        // The text at line 2 is not the text it was written on: it stops.
+        d.line_text = Some("something else".into());
+        let p = plan(&m, &gh, &[d.clone()], true);
+        assert!(p.errors[0].contains("changed after you wrote it"), "{:?}", p.errors);
+        // A stale draft stops too.
+        d.line_text = None;
+        d.stale = true;
+        assert_eq!(plan(&m, &gh, &[d], true).errors.len(), 1);
+    }
+
+    #[test]
+    fn a_block_moves_to_its_text() {
+        let m = model();
+        let f = &m.files[0];
+        // "twenty" / "new" is at new 20-21; from a guess of 5 it still finds it.
+        assert_eq!(move_block(f, false, "twenty\nnew", 5), Some(20));
+        // The nearest copy wins: "l7" is only at line 7.
+        assert_eq!(move_block(f, false, "l7", 30), Some(7));
+        assert_eq!(move_block(f, false, "twenty\nnot here", 20), None);
+        assert_eq!(move_block(f, false, "gone", 1), None);
+        // Spaces count: a changed indent is changed code.
+        assert_eq!(move_block(f, false, " l7", 7), None);
     }
 
     #[test]

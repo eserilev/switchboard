@@ -381,6 +381,7 @@ Cost: each fork sends the guide context again. The prompt cache lasts a few minu
 - Steps whose files changed get a stale mark.
 - "Diff since last review" shows `git diff <old>..<new>` for each stale step.
 - Threads re-anchor by the line text. If the text is gone, the thread shows "line removed" and keeps the old anchor.
+- Drafts move too. A draft keeps the head and the exact text of its lines. **Update guide** finds that text in the new head, nearest to the old place, with all lines of a range in order and the same spaces, and moves the draft there. When the text is gone, the draft is stale: the list shows a note, the diff does not show it, and the send refuses it until you delete it or write it again.
 - "Update guide" resumes the guide session with the new head and asks for `guide_update_step` calls.
 
 ### 11.8 Send the review
@@ -395,6 +396,7 @@ Cost: each fork sends the guide context again. The prompt cache lasts a few minu
    - The text of each line must be the same in GitHub's diff and in the verified diff model. A difference stops the whole send.
    - A draft with no line, or with a line that GitHub's diff does not show, goes into the summary as `` `path:line`: text``. GitHub refuses a line comment there.
    - A draft on a file or line that the model does not have stops the send.
+   - A draft that is stale, or whose stored text is not the text at its lines in the model, stops the send. Without this, a draft from before an update goes on the old line number, which is another line of the new code.
 3. The window shows the plan: the GitHub login, the head commit, the comments on lines, the comments that go into the summary and why, and the agent drafts. Nothing is sent before your click on **Submit review**.
 4. The send uses the plan that you saw. The app builds the plan again and compares a fingerprint of it. If the plan changed, the app sends nothing and asks you to check again.
 5. One `POST /repos/{repo}/pulls/{n}/reviews` call sends the review: `commit_id` is the reviewed head, each comment has `path`, `side` (`RIGHT` or `LEFT`), `line`, and for a range `start_line` and `start_side`. GitHub accepts all comments or none.
@@ -402,7 +404,8 @@ Cost: each fork sends the guide context again. The prompt cache lasts a few minu
 
 Limits:
 - GitHub refuses an approval of your own PR. The window shows GitHub's reason.
-- If the app stops between GitHub's answer and the store write, the drafts stay. A second send makes a second review.
+- One send of a review runs at a time.
+- If the app stops between GitHub's answer and the store write, the drafts stay. Before the next send, the app reads your reviews on the PR. A review at the same commit, with the same type, summary and line comments, counts as this send: the app records it and does not send again. After new commits the commit differs, so this check does not find it.
 
 ### 11.9 Review rounds
 
