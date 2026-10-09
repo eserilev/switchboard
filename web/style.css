@@ -181,7 +181,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .gactions { display: flex; gap: 8px; flex-wrap: wrap; }
 .file { display: flex; justify-content: space-between; align-items: center; gap: 8px; font: 600 12px/1 var(--mono); padding: 6px 8px 6px 14px; background: var(--panel-2); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 1; }
 .file .ctxnote { color: var(--muted); font-weight: 500; }
-.codewrap { overflow-x: auto; }
+.codewrap { overflow-x: auto; padding-bottom: 14px; }
 table.code { border-collapse: collapse; width: 100%; font: 12.5px/1.6 var(--mono); }
 table.code td { padding: 0 10px; white-space: pre; vertical-align: top; }
 table.code td.ln { width: 1%; text-align: right; color: var(--muted); user-select: none; cursor: pointer; font-variant-numeric: tabular-nums; }
