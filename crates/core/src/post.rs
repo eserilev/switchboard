@@ -66,11 +66,41 @@ fn header_path(p: &str, prefix: &str) -> Option<String> {
     Some(p.strip_prefix(prefix).unwrap_or(&p).to_owned())
 }
 
+/// A path as git writes it in a diff header. git puts a path with special bytes in
+/// quotes, with C escapes: `"caf\303\251.rs"` is `café.rs`.
 fn unquote(p: &str) -> String {
-    p.strip_prefix('"')
-        .and_then(|p| p.strip_suffix('"'))
-        .unwrap_or(p)
-        .to_owned()
+    let Some(inner) = p.strip_prefix('"').and_then(|p| p.strip_suffix('"')) else {
+        return p.to_owned();
+    };
+    let b = inner.as_bytes();
+    let mut out: Vec<u8> = vec![];
+    let mut k = 0;
+    while k < b.len() {
+        if b[k] != b'\\' || k + 1 >= b.len() {
+            out.push(b[k]);
+            k += 1;
+            continue;
+        }
+        let c = b[k + 1];
+        let octal = |x: u8| (b'0'..=b'7').contains(&x);
+        if octal(c) && k + 3 < b.len() && octal(b[k + 2]) && octal(b[k + 3]) {
+            out.push((c - b'0') * 64 + (b[k + 2] - b'0') * 8 + (b[k + 3] - b'0'));
+            k += 4;
+            continue;
+        }
+        out.push(match c {
+            b'n' => b'\n',
+            b't' => b'\t',
+            b'a' => 7,
+            b'b' => 8,
+            b'f' => 12,
+            b'r' => b'\r',
+            b'v' => 11,
+            other => other,
+        });
+        k += 2;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// A comment that goes on a line of the PR.
@@ -454,6 +484,16 @@ Binary files /dev/null and b/img.png differ
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, ["src/a.rs", "moved.rs", "gone.rs", "img.png"]);
         assert!(files[3].rows.is_empty());
+    }
+
+    #[test]
+    fn quoted_paths_are_decoded() {
+        assert_eq!(unquote("\"caf\\303\\251.rs\""), "café.rs");
+        assert_eq!(unquote("\"a\\\"b\\\\c\\td.rs\""), "a\"b\\c\td.rs");
+        assert_eq!(unquote("plain/path.rs"), "plain/path.rs");
+        let diff = "diff --git \"a/caf\\303\\251.rs\" \"b/caf\\303\\251.rs\"\n--- \"a/caf\\303\\251.rs\"\n+++ \"b/caf\\303\\251.rs\"\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/my file.rs b/my file.rs\n--- a/my file.rs\t\n+++ b/my file.rs\t\n@@ -1 +1 @@\n-a\n+b\n";
+        let paths: Vec<String> = parse_pr_diff(diff).into_iter().map(|f| f.path).collect();
+        assert_eq!(paths, ["café.rs", "my file.rs"]);
     }
 
     #[test]

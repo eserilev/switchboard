@@ -9,20 +9,29 @@ use switchboard_core::repos::git;
 use switchboard_core::store::DraftRow;
 use switchboard_core::{coverage, post, review};
 
-#[test]
-#[ignore]
-fn every_changed_line_goes_on_its_line() {
-    let repo = PathBuf::from(std::env::var("SB_REAL_REPO").expect("set SB_REAL_REPO"));
-    let url = std::env::var("SB_LIVE_PR").expect("set SB_LIVE_PR");
-    let pr = review::gh_view(&url).unwrap();
-    let have = |oid: &str| git(&repo, &["cat-file", "-e", &format!("{oid}^{{commit}}")]).is_ok();
+/// What one PR had, for the totals.
+#[derive(Default)]
+struct Seen {
+    drafts: usize,
+    files: usize,
+    renames: usize,
+    deletes: usize,
+    binary: usize,
+    odd_paths: usize,
+}
+
+/// Makes a draft on every changed line of one PR and checks the plan. Panics on a
+/// line that does not go on its line.
+fn check_pr(repo: &std::path::Path, url: &str) -> Seen {
+    let pr = review::gh_view(url).unwrap();
+    let have = |oid: &str| git(repo, &["cat-file", "-e", &format!("{oid}^{{commit}}")]).is_ok();
     if !have(&pr.head_ref_oid) || !have(&pr.base_ref_oid) {
-        let remote = review::find_remote(&repo, &repo_name(&url)).expect("no remote for the PR");
-        git(&repo, &["fetch", "-q", "--no-tags", &remote, &format!("pull/{}/head", pr.number), &pr.base_ref_name]).unwrap();
+        let remote = review::find_remote(repo, &repo_name(url)).expect("no remote for the PR");
+        git(repo, &["fetch", "-q", "--no-tags", &remote, &format!("pull/{}/head", pr.number), &pr.base_ref_name]).unwrap();
     }
-    let base = git(&repo, &["merge-base", &pr.base_ref_oid, &pr.head_ref_oid]).unwrap();
-    let m = coverage::build(&repo, &base, &pr.head_ref_oid).unwrap();
-    let gh = post::parse_pr_diff(&review::gh_pr_diff(&repo_name(&url), pr.number).unwrap());
+    let base = git(repo, &["merge-base", &pr.base_ref_oid, &pr.head_ref_oid]).unwrap();
+    let m = coverage::build(repo, &base, &pr.head_ref_oid).unwrap();
+    let gh = post::parse_pr_diff(&review::gh_pr_diff(&repo_name(url), pr.number).unwrap());
 
     let mut drafts = vec![];
     let mut id = 0;
@@ -45,19 +54,62 @@ fn every_changed_line_goes_on_its_line() {
         }
     }
     let p = post::plan(&m, &gh, &drafts, true);
-    println!(
-        "{} files, {} drafts: {} on lines, {} into the summary, {} errors",
-        m.files.len(),
-        drafts.len(),
-        p.inline.len(),
-        p.outside.len(),
-        p.errors.len()
-    );
-    for o in p.outside.iter().take(10) {
-        println!("summary: {} ({})", o.at, o.reason);
+    assert!(p.errors.is_empty(), "#{}: {:?}", pr.number, &p.errors[..p.errors.len().min(10)]);
+    assert!(p.outside.is_empty(), "#{}: {:?}", pr.number, &p.outside[..p.outside.len().min(10)]);
+    assert_eq!(p.inline.len(), drafts.len(), "#{}", pr.number);
+    let odd = |p: &str| p.contains(' ') || !p.is_ascii() || p.contains('"');
+    Seen {
+        drafts: drafts.len(),
+        files: m.files.len(),
+        renames: m.files.iter().filter(|f| f.old_path.is_some() && f.new_path.is_some() && f.old_path != f.new_path).count(),
+        deletes: m.files.iter().filter(|f| f.new_path.is_none()).count(),
+        binary: m.files.iter().filter(|f| f.binary).count(),
+        odd_paths: m.files.iter().filter(|f| odd(f.path())).count(),
     }
-    assert!(p.errors.is_empty(), "{:?}", &p.errors[..p.errors.len().min(10)]);
-    assert_eq!(p.inline.len(), drafts.len());
+}
+
+#[test]
+#[ignore]
+fn every_changed_line_goes_on_its_line() {
+    let repo = PathBuf::from(std::env::var("SB_REAL_REPO").expect("set SB_REAL_REPO"));
+    let url = std::env::var("SB_LIVE_PR").expect("set SB_LIVE_PR");
+    let s = check_pr(&repo, &url);
+    println!("{} files, {} drafts, all on their lines", s.files, s.drafts);
+}
+
+/// The same check on many open PRs of a repo.
+///   SB_REAL_REPO=~/Documents/Code/Ethereum/Consensus/lighthouse SB_POST_REPO=sigp/lighthouse \
+///   SB_POST_COUNT=60 cargo test -p switchboard-core --test live_post -- --ignored --nocapture many_prs
+#[test]
+#[ignore]
+fn many_prs() {
+    let repo = PathBuf::from(std::env::var("SB_REAL_REPO").expect("set SB_REAL_REPO"));
+    let name = std::env::var("SB_POST_REPO").unwrap_or_else(|_| "sigp/lighthouse".into());
+    let count = std::env::var("SB_POST_COUNT").unwrap_or_else(|_| "60".into());
+    // `open` or `merged`. Merged PRs have more renames.
+    let state = std::env::var("SB_POST_STATE").unwrap_or_else(|_| "open".into());
+    let out = std::process::Command::new("gh")
+        .args(["pr", "list", "-R", &name, "--state", &state, "-L", &count, "--json", "url,isDraft"])
+        .output()
+        .unwrap();
+    let prs: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let mut total = Seen::default();
+    let mut n = 0;
+    for pr in prs.as_array().unwrap() {
+        let url = pr["url"].as_str().unwrap();
+        let s = check_pr(&repo, url);
+        total.drafts += s.drafts;
+        total.files += s.files;
+        total.renames += s.renames;
+        total.deletes += s.deletes;
+        total.binary += s.binary;
+        total.odd_paths += s.odd_paths;
+        n += 1;
+    }
+    println!(
+        "{n} PRs: {} files, {} drafts on their lines; {} renames, {} deleted files, {} binary files, {} paths with spaces, quotes or non-ASCII",
+        total.files, total.drafts, total.renames, total.deletes, total.binary, total.odd_paths
+    );
 }
 
 fn repo_name(url: &str) -> String {
