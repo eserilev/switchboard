@@ -145,4 +145,29 @@ def CutGood (rows : List Row) (ctx : Nat) (out : List Row) : Prop :=
     isHeader q = false ∧ ∃ k, rows[k]? = some q ∧
       h.old.val = oldBefore rows k + 1 ∧ h.new.val = newBefore rows k + 1)
 
+/-! ## The rows of a guide step
+
+`step_cut` gives the rows that a step shows of a file, and the change rows that it
+does not show. -/
+
+/-- Row `r` shows a line of step range `g`: a line of the side of `g`, with a number
+from `g.from` to `g.to`. -/
+def Shows (g : StepRange) (r : Row) : Prop :=
+  0 < (if g.old then r.old.val else r.new.val) ∧
+  g.from.val ≤ (if g.old then r.old.val else r.new.val) ∧
+  (if g.old then r.old.val else r.new.val) ≤ g.to.val
+
+/-- The headers of `out`, a cut of the full row list `rows`, are right: `out` starts with
+a header and does not end with one, a header marks every gap, and after each header comes
+a kept row `k` of the full list. The header carries the number of the next old line and of
+the next new line at that row, counted from the start of the file. -/
+def HeadersGood (rows : List Row) (out : List Row) : Prop :=
+  (∀ r, out.head? = some r → isHeader r = true) ∧
+  (∀ r, out.getLast? = some r → isHeader r = false) ∧
+  (∀ a b, (a, b) ∈ out.zip out.tail → isHeader a = false → isHeader b = false →
+    ∃ k, rows[k]? = some a ∧ rows[k + 1]? = some b) ∧
+  (∀ h q, (h, q) ∈ out.zip out.tail → isHeader h = true →
+    isHeader q = false ∧ ∃ k, rows[k]? = some q ∧
+      h.old.val = oldBefore rows k + 1 ∧ h.new.val = newBefore rows k + 1)
+
 end GuideCheck.Spec

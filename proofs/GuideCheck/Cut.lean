@@ -112,11 +112,12 @@ theorem before_le (rs : List Row) (k : Nat) : oldBefore rs k ≤ k ∧ newBefore
   exact ⟨(List.length_filter_le _ _).trans (List.length_take_le _ _),
     (List.length_filter_le _ _).trans (List.length_take_le _ _)⟩
 
-/-- What the cut has done after rows `0..k`. `kept` is true when row `k - 1` is kept. -/
-def CutSoFar (rs : List Row) (ctx : Nat) (out : List Row) (k : Nat) (kept : Bool) : Prop :=
+/-- What a cut has done after rows `0..k`, when it keeps the rows `t` with `P t`.
+`kept` is true when row `k - 1` is kept. -/
+def CutSoFarP (rs : List Row) (P : Nat → Prop) (out : List Row) (k : Nat) (kept : Bool) : Prop :=
   (out.filter (fun r => !isHeader r)).Sublist (rs.take k) ∧
-  (∀ t r, t < k → rs[t]? = some r → isChange r = true → r ∈ out) ∧
-  (∀ r ∈ out, isHeader r = false → ∃ t, rs[t]? = some r ∧ NearChange rs ctx t) ∧
+  (∀ t r, t < k → rs[t]? = some r → P t → r ∈ out) ∧
+  (∀ r ∈ out, isHeader r = false → ∃ t, rs[t]? = some r ∧ P t) ∧
   (∀ r, out.head? = some r → isHeader r = true) ∧
   (∀ r, out.getLast? = some r → isHeader r = false) ∧
   (∀ a b, (a, b) ∈ out.zip out.tail → isHeader a = false → isHeader b = false →
@@ -126,14 +127,18 @@ def CutSoFar (rs : List Row) (ctx : Nat) (out : List Row) (k : Nat) (kept : Bool
       h.old.val = oldBefore rs t + 1 ∧ h.new.val = newBefore rs t + 1) ∧
   (kept = true → 0 < k ∧ out.getLast? = rs[k - 1]?)
 
-theorem cut_start (rs : List Row) (ctx : Nat) : CutSoFar rs ctx [] 0 false := by
-  simp [CutSoFar]
+/-- What `cut_rows` has done: it keeps the rows near a change. -/
+abbrev CutSoFar (rs : List Row) (ctx : Nat) : List Row → Nat → Bool → Prop :=
+  CutSoFarP rs (NearChange rs ctx)
+
+theorem cut_start (rs : List Row) (P : Nat → Prop) : CutSoFarP rs P [] 0 false := by
+  simp [CutSoFarP]
 
 /-- Row `k` is kept, and row `k - 1` was kept too: no header. -/
-theorem cut_keep_run (rs : List Row) (ctx : Nat) (out : List Row) (k : Nat)
-    (hinv : CutSoFar rs ctx out k true) (r : Row) (hr : rs[k]? = some r) (hnh : isHeader r = false)
-    (hnear : NearChange rs ctx k) :
-    CutSoFar rs ctx (out ++ [r]) (k + 1) true := by
+theorem cut_keep_run (rs : List Row) (P : Nat → Prop) (out : List Row) (k : Nat)
+    (hinv : CutSoFarP rs P out k true) (r : Row) (hr : rs[k]? = some r) (hnh : isHeader r = false)
+    (hnear : P k) :
+    CutSoFarP rs P (out ++ [r]) (k + 1) true := by
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := hinv
   obtain ⟨hk, hlast⟩ := h8 rfl
   have hklen : k < rs.length := (List.getElem?_eq_some_iff.mp hr).1
@@ -174,11 +179,11 @@ theorem cut_keep_run (rs : List Row) (ctx : Nat) (out : List Row) (k : Nat)
     simp [hr]
 
 /-- Row `k` is kept, and row `k - 1` was not: a header first. -/
-theorem cut_keep_new (rs : List Row) (ctx : Nat) (out : List Row) (k : Nat)
-    (hinv : CutSoFar rs ctx out k false) (r : Row) (hr : rs[k]? = some r) (hnh : isHeader r = false)
-    (hnear : NearChange rs ctx k) (h : Row) (hh : isHeader h = true)
+theorem cut_keep_new (rs : List Row) (P : Nat → Prop) (out : List Row) (k : Nat)
+    (hinv : CutSoFarP rs P out k false) (r : Row) (hr : rs[k]? = some r) (hnh : isHeader r = false)
+    (hnear : P k) (h : Row) (hh : isHeader h = true)
     (hho : h.old.val = oldBefore rs k + 1) (hhn : h.new.val = newBefore rs k + 1) :
-    CutSoFar rs ctx (out ++ [h] ++ [r]) (k + 1) true := by
+    CutSoFarP rs P (out ++ [h] ++ [r]) (k + 1) true := by
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, _⟩ := hinv
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [List.take_add_one, hr, List.filter_append, List.filter_append]
@@ -221,17 +226,17 @@ theorem cut_keep_new (rs : List Row) (ctx : Nat) (out : List Row) (k : Nat)
     simp [hr]
 
 /-- Row `k` is left out. -/
-theorem cut_drop (rs : List Row) (ctx : Nat) (out : List Row) (k : Nat) (kept : Bool)
-    (hinv : CutSoFar rs ctx out k kept)
-    (hfar : ¬ NearChange rs ctx k) :
-    CutSoFar rs ctx out (k + 1) false := by
+theorem cut_drop (rs : List Row) (P : Nat → Prop) (out : List Row) (k : Nat) (kept : Bool)
+    (hinv : CutSoFarP rs P out k kept)
+    (hfar : ¬ P k) :
+    CutSoFarP rs P out (k + 1) false := by
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, _⟩ := hinv
   refine ⟨h1.trans (List.take_sublist_take_left (by omega)), ?_, h3, h4, h5, h6, h7, by simp⟩
   intro t x ht hx hc
   by_cases htk : t < k
   · exact h2 t x htk hx hc
-  · rw [show t = k by omega] at hx
-    exact absurd ⟨k, x, hx, hc, by simp [ndist]⟩ hfar
+  · rw [show t = k by omega] at hc
+    exact absurd hc hfar
 
 @[step]
 theorem shows_old_spec (r : Row) : shows_old r ⦃ b => b = showsOld r ⦄ := by
@@ -343,7 +348,7 @@ theorem cut_done (rs : List Row) (ctx : Nat) (out : List Row) (kept : Bool)
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, _⟩ := h
   refine ⟨by simpa using h1, fun r hr hc => ?_, h3, h4, h5, h6, h7⟩
   obtain ⟨t, ht, rfl⟩ := List.getElem_of_mem hr
-  exact h2 t _ ht (List.getElem?_eq_getElem ht) hc
+  exact h2 t _ ht (List.getElem?_eq_getElem ht) ⟨t, _, List.getElem?_eq_getElem ht, hc, by simp [ndist]⟩
 
 /-- `cut_rows` never panics, and its cut is correct on any rows with no header. -/
 theorem cut_rows_spec (rows : Slice Row) (ctx : Usize)
@@ -351,7 +356,7 @@ theorem cut_rows_spec (rows : Slice Row) (ctx : Usize)
     cut_rows rows ctx ⦃ out => CutGood rows.val ctx.val out.val ⦄ := by
   unfold cut_rows
   apply WP.spec_mono (cut_rows_loop_spec rows ctx hsize hnh _ 0#usize 1#usize 1#usize false
-    (by simp) (by simp) (by simp [oldBefore]) (by simp [newBefore]) (by simpa using cut_start rows.val ctx.val))
+    (by simp) (by simp) (by simp [oldBefore]) (by simp [newBefore]) (by simpa using cut_start rows.val (NearChange rows.val ctx.val)))
   intro out h
   rcases h with h | h
   · exact cut_done _ _ _ _ h

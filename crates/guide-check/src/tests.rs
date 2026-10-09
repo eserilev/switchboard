@@ -498,3 +498,81 @@ fn rows_agree_with_the_spec_on_random_inputs() {
     }
     assert!(rebuilt > 5_000, "only {rebuilt} files rebuild");
 }
+
+/// The old step cut in core, as a plain model: slices from the ranges, merged, each
+/// cut alone, with the lines before the slice added to its header numbers.
+fn step_model(rows: &[Row], ranges: &[StepRange], ctx: usize) -> (Vec<Row>, Vec<Row>) {
+    let show = |r: &Row, g: &StepRange| {
+        let n = if g.old { r.old } else { r.new };
+        n > 0 && g.from <= n && n <= g.to
+    };
+    let mut parts: Vec<(usize, usize)> = vec![];
+    for g in ranges {
+        let Some(mut lo) = (0..rows.len()).find(|&k| show(&rows[k], g)) else {
+            continue;
+        };
+        let mut hi = (lo..rows.len()).rev().find(|&k| show(&rows[k], g)).unwrap();
+        for _ in 0..ctx {
+            if lo == 0 || is_change(&rows[lo - 1]) {
+                break;
+            }
+            lo -= 1;
+        }
+        for _ in 0..ctx {
+            if hi + 1 >= rows.len() || is_change(&rows[hi + 1]) {
+                break;
+            }
+            hi += 1;
+        }
+        parts.push((lo, hi));
+    }
+    parts.sort();
+    let mut merged: Vec<(usize, usize)> = vec![];
+    for (lo, hi) in parts {
+        match merged.last_mut() {
+            Some(last) if lo <= last.1 + 1 => last.1 = last.1.max(hi),
+            _ => merged.push((lo, hi)),
+        }
+    }
+    let mut out = vec![];
+    for &(lo, hi) in &merged {
+        let old_before = rows[..lo].iter().filter(|r| shows_old(r)).count();
+        let new_before = rows[..lo].iter().filter(|r| shows_new(r)).count();
+        for mut r in cut_model(&rows[lo..=hi], ctx) {
+            if r.kind == Kind::Header {
+                r.old += old_before;
+                r.new += new_before;
+            }
+            out.push(r);
+        }
+    }
+    let hidden = (0..rows.len())
+        .filter(|&k| is_change(&rows[k]) && !merged.iter().any(|&(lo, hi)| lo <= k && k <= hi))
+        .map(|k| rows[k])
+        .collect();
+    (out, hidden)
+}
+
+#[test]
+fn step_cut_agrees_with_the_old_step_rows() {
+    let mut r = Rng(0x57e9_c0de);
+    let mut checked = 0;
+    for _ in 0..20_000 {
+        let d = random_file(&mut r);
+        let rows = number_rows(&d.removed, &d.added);
+        let ranges: Vec<StepRange> = (0..r.below(4))
+            .map(|_| {
+                let from = r.below(10) as usize;
+                StepRange {
+                    old: r.chance(50),
+                    from,
+                    to: from + r.below(4) as usize,
+                }
+            })
+            .collect();
+        let ctx = r.below(5) as usize;
+        assert_eq!(step_cut(&rows, &ranges, ctx), step_model(&rows, &ranges, ctx));
+        checked += 1;
+    }
+    assert_eq!(checked, 20_000);
+}

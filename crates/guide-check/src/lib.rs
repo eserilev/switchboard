@@ -441,5 +441,238 @@ pub fn cut_rows(rows: &[Row], ctx: usize) -> Vec<Row> {
     out
 }
 
+/// A range of a guide step: lines `from..=to` of the old side (`old`) or the new side.
+pub struct StepRange {
+    pub old: bool,
+    pub from: usize,
+    pub to: usize,
+}
+
+/// The rows `lo..=hi` that a step shows, before the cut.
+pub struct Part {
+    pub lo: usize,
+    pub hi: usize,
+}
+
+/// The number of the line of side `old` that row `r` shows, or 0.
+pub fn side_number(r: &Row, old: bool) -> usize {
+    if old {
+        return r.old;
+    }
+    r.new
+}
+
+/// True when row `r` shows a line of range `g`.
+pub fn shows(r: &Row, g: &StepRange) -> bool {
+    let n = side_number(r, g.old);
+    if n == 0 {
+        return false;
+    }
+    if n < g.from {
+        return false;
+    }
+    n <= g.to
+}
+
+/// The first row index that shows a line of `g`, or `rows.len()`.
+pub fn first_shown(rows: &[Row], g: &StepRange) -> usize {
+    let mut k = 0;
+    while k < rows.len() {
+        if shows(&rows[k], g) {
+            return k;
+        }
+        k += 1;
+    }
+    k
+}
+
+/// The last row index that shows a line of `g`, or `lo` when no row after `lo` does.
+pub fn last_shown(rows: &[Row], g: &StepRange, lo: usize) -> usize {
+    let mut k = rows.len();
+    while k > lo {
+        k -= 1;
+        if shows(&rows[k], g) {
+            return k;
+        }
+    }
+    lo
+}
+
+/// Moves `lo` back by up to `ctx` rows, but not onto a removed or added row.
+pub fn grow_back(rows: &[Row], lo: usize, ctx: usize) -> usize {
+    let mut lo = lo;
+    let mut t = 0;
+    while t < ctx {
+        if lo == 0 {
+            return lo;
+        }
+        if is_change(&rows[lo - 1]) {
+            return lo;
+        }
+        lo -= 1;
+        t += 1;
+    }
+    lo
+}
+
+/// Moves `hi` on by up to `ctx` rows, but not onto a removed or added row. Needs `hi < rows.len()`.
+pub fn grow_ahead(rows: &[Row], hi: usize, ctx: usize) -> usize {
+    let mut hi = hi;
+    let mut t = 0;
+    while t < ctx {
+        if hi + 1 >= rows.len() {
+            return hi;
+        }
+        if is_change(&rows[hi + 1]) {
+            return hi;
+        }
+        hi += 1;
+        t += 1;
+    }
+    hi
+}
+
+/// The part of range `g` when its first shown row is `lo`: up to its last shown row,
+/// grown by up to `ctx` rows of context on each side. Needs `lo < rows.len()`.
+pub fn part_of(rows: &[Row], g: &StepRange, lo: usize, ctx: usize) -> Part {
+    let hi = last_shown(rows, g, lo);
+    Part {
+        lo: grow_back(rows, lo, ctx),
+        hi: grow_ahead(rows, hi, ctx),
+    }
+}
+
+/// One part for each range that shows a line: from its first to its last row,
+/// grown by up to `ctx` rows of context on each side.
+pub fn step_parts(rows: &[Row], ranges: &[StepRange], ctx: usize) -> Vec<Part> {
+    let mut parts = Vec::new();
+    let mut i = 0;
+    while i < ranges.len() {
+        let lo = first_shown(rows, &ranges[i]);
+        if lo < rows.len() {
+            parts.push(part_of(rows, &ranges[i], lo, ctx));
+        }
+        i += 1;
+    }
+    parts
+}
+
+/// True when some part holds row index `k`.
+pub fn in_parts(parts: &[Part], k: usize) -> bool {
+    let mut i = 0;
+    while i < parts.len() {
+        if parts[i].lo <= k {
+            if k <= parts[i].hi {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// For each row, true when a part of the step holds it. Parts that overlap or
+/// touch make one run of true bits: one slice of the file.
+pub fn step_mask(rows: &[Row], ranges: &[StepRange], ctx: usize) -> Vec<bool> {
+    let parts = step_parts(rows, ranges, ctx);
+    let mut mask = Vec::new();
+    let mut k = 0;
+    while k < rows.len() {
+        mask.push(in_parts(&parts, k));
+        k += 1;
+    }
+    mask
+}
+
+/// True when a change row is at or before row `k`, at most `ctx` rows back, with
+/// every row from it to `k` in the mask. Needs `k < rows.len() == mask.len()`.
+pub fn change_back(rows: &[Row], mask: &[bool], k: usize, ctx: usize) -> bool {
+    let start = window_start(k, ctx);
+    let mut c = k + 1;
+    while c > start {
+        c -= 1;
+        if !mask[c] {
+            return false;
+        }
+        if is_change(&rows[c]) {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when a change row is at or after row `k`, at most `ctx` rows on, with
+/// every row from `k` to it in the mask. Needs `k < rows.len() == mask.len()`.
+pub fn change_ahead(rows: &[Row], mask: &[bool], k: usize, ctx: usize) -> bool {
+    let end = window_end(k, ctx, rows.len());
+    let mut c = k;
+    while c < end {
+        if !mask[c] {
+            return false;
+        }
+        if is_change(&rows[c]) {
+            return true;
+        }
+        c += 1;
+    }
+    false
+}
+
+/// True when the cut of a step keeps row `k`: the mask holds it, and a change row
+/// in the same run of the mask is at most `ctx` rows away.
+pub fn kept_in(rows: &[Row], mask: &[bool], k: usize, ctx: usize) -> bool {
+    if !mask[k] {
+        return false;
+    }
+    if change_back(rows, mask, k, ctx) {
+        return true;
+    }
+    change_ahead(rows, mask, k, ctx)
+}
+
+/// The cut of each run of the mask, as `cut_rows` does it, in one pass. A header
+/// counts the old and new lines from the start of the file, not of the run.
+/// Needs `mask.len() == rows.len()`. The rows must have no header.
+pub fn cut_in(rows: &[Row], mask: &[bool], ctx: usize) -> Vec<Row> {
+    let mut out = Vec::new();
+    let mut k = 0;
+    let mut old = 1;
+    let mut new = 1;
+    // True when row `k - 1` is kept.
+    let mut kept = false;
+    while k < rows.len() {
+        let keep = kept_in(rows, mask, k, ctx);
+        if keep {
+            keep_row(&mut out, kept, rows[k], old, new);
+        }
+        kept = keep;
+        old = bump(old, shows_old(&rows[k]));
+        new = bump(new, shows_new(&rows[k]));
+        k += 1;
+    }
+    out
+}
+
+/// The change rows that the mask leaves out. Needs `mask.len() == rows.len()`.
+pub fn hidden_changes(rows: &[Row], mask: &[bool]) -> Vec<Row> {
+    let mut out = Vec::new();
+    let mut k = 0;
+    while k < rows.len() {
+        if is_change(&rows[k]) {
+            if !mask[k] {
+                out.push(rows[k]);
+            }
+        }
+        k += 1;
+    }
+    out
+}
+
+/// The rows that a guide step shows of a file, and the change rows it does not show.
+pub fn step_cut(rows: &[Row], ranges: &[StepRange], ctx: usize) -> (Vec<Row>, Vec<Row>) {
+    let mask = step_mask(rows, ranges, ctx);
+    (cut_in(rows, &mask, ctx), hidden_changes(rows, &mask))
+}
+
 #[cfg(test)]
 mod tests;

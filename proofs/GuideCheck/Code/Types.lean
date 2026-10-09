@@ -53,4 +53,19 @@ structure Row where
   old : Std.Usize
   new : Std.Usize
 
+/-- [guide_check::StepRange]
+    Source: 'crates/guide-check/src/lib.rs', lines 445:0-449:1
+    Visibility: public -/
+structure StepRange where
+  old : Bool
+  «from» : Std.Usize
+  «to» : Std.Usize
+
+/-- [guide_check::Part]
+    Source: 'crates/guide-check/src/lib.rs', lines 452:0-455:1
+    Visibility: public -/
+structure Part where
+  lo : Std.Usize
+  hi : Std.Usize
+
 end guide_check

@@ -1009,4 +1009,553 @@ def cut_rows
   (rows : Slice Row) (ctx : Std.Usize) : Result (alloc.vec.Vec Row) := do
   cut_rows_loop rows ctx (alloc.vec.Vec.new Row) 0#usize 1#usize 1#usize false
 
+/-- [guide_check::side_number]:
+    Source: 'crates/guide-check/src/lib.rs', lines 458:0-463:1
+    Visibility: public -/
+def side_number (r : Row) (old : Bool) : Result Std.Usize := do
+  if old
+  then ok r.old
+  else ok r.new
+
+/-- [guide_check::shows]:
+    Source: 'crates/guide-check/src/lib.rs', lines 466:0-475:1
+    Visibility: public -/
+def shows (r : Row) (g : StepRange) : Result Bool := do
+  let n ← side_number r g.old
+  if n = 0#usize
+  then ok false
+  else if n < g.from
+       then ok false
+       else ok (n <= g.to)
+
+/-- [guide_check::first_shown]: loop body 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 480:4-487:1
+    Visibility: public -/
+@[rust_loop_body]
+def first_shown_loop.body
+  (rows : Slice Row) (g : StepRange) (k : Std.Usize) :
+  Result (ControlFlow Std.Usize Std.Usize)
+  := do
+  let i := Slice.len rows
+  if k < i
+  then
+    let r ← Slice.index_usize rows k
+    let b ← shows r g
+    if b
+    then ok (done k)
+    else let k1 ← k + 1#usize
+         ok (cont k1)
+  else ok (done k)
+
+/-- [guide_check::first_shown]: loop 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 480:4-487:1
+    Visibility: public -/
+@[rust_loop]
+def first_shown_loop
+  (rows : Slice Row) (g : StepRange) (k : Std.Usize) : Result Std.Usize := do
+  loop
+    (fun k1 => first_shown_loop.body rows g k1)
+    k
+
+/-- [guide_check::first_shown]:
+    Source: 'crates/guide-check/src/lib.rs', lines 478:0-487:1
+    Visibility: public -/
+@[reducible]
+def first_shown (rows : Slice Row) (g : StepRange) : Result Std.Usize := do
+  first_shown_loop rows g 0#usize
+
+/-- [guide_check::last_shown]: loop body 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 492:4-499:1
+    Visibility: public -/
+@[rust_loop_body]
+def last_shown_loop.body
+  (rows : Slice Row) (g : StepRange) (lo : Std.Usize) (k : Std.Usize) :
+  Result (ControlFlow Std.Usize Std.Usize)
+  := do
+  if k > lo
+  then
+    let k1 ← k - 1#usize
+    let r ← Slice.index_usize rows k1
+    let b ← shows r g
+    if b
+    then ok (done k1)
+    else ok (cont k1)
+  else ok (done lo)
+
+/-- [guide_check::last_shown]: loop 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 492:4-499:1
+    Visibility: public -/
+@[rust_loop]
+def last_shown_loop
+  (rows : Slice Row) (g : StepRange) (lo : Std.Usize) (k : Std.Usize) :
+  Result Std.Usize
+  := do
+  loop
+    (fun k1 => last_shown_loop.body rows g lo k1)
+    k
+
+/-- [guide_check::last_shown]:
+    Source: 'crates/guide-check/src/lib.rs', lines 490:0-499:1
+    Visibility: public -/
+def last_shown
+  (rows : Slice Row) (g : StepRange) (lo : Std.Usize) : Result Std.Usize := do
+  let k := Slice.len rows
+  last_shown_loop rows g lo k
+
+/-- [guide_check::grow_back]: loop body 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 1:0-516:1
+    Visibility: public -/
+@[rust_loop_body]
+def grow_back_loop.body
+  (rows : Slice Row) (ctx : Std.Usize) (lo : Std.Usize) (t : Std.Usize) :
+  Result (ControlFlow (Std.Usize × Std.Usize) Std.Usize)
+  := do
+  if t < ctx
+  then
+    if lo = 0#usize
+    then ok (done lo)
+    else
+      let i ← lo - 1#usize
+      let r ← Slice.index_usize rows i
+      let b ← is_change r
+      if b
+      then ok (done lo)
+      else let t1 ← t + 1#usize
+           ok (cont (i, t1))
+  else ok (done lo)
+
+/-- [guide_check::grow_back]: loop 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 1:0-516:1
+    Visibility: public -/
+@[rust_loop]
+def grow_back_loop
+  (rows : Slice Row) (ctx : Std.Usize) (lo : Std.Usize) (t : Std.Usize) :
+  Result Std.Usize
+  := do
+  loop
+    (fun (lo1, t1) => grow_back_loop.body rows ctx lo1 t1)
+    (lo, t)
+
+/-- [guide_check::grow_back]:
+    Source: 'crates/guide-check/src/lib.rs', lines 502:0-516:1
+    Visibility: public -/
+@[reducible]
+def grow_back
+  (rows : Slice Row) (lo : Std.Usize) (ctx : Std.Usize) :
+  Result Std.Usize
+  := do
+  grow_back_loop rows ctx lo 0#usize
+
+/-- [guide_check::grow_ahead]: loop body 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 1:0-533:1
+    Visibility: public -/
+@[rust_loop_body]
+def grow_ahead_loop.body
+  (rows : Slice Row) (ctx : Std.Usize) (hi : Std.Usize) (t : Std.Usize) :
+  Result (ControlFlow (Std.Usize × Std.Usize) Std.Usize)
+  := do
+  if t < ctx
+  then
+    let i ← hi + 1#usize
+    let i1 := Slice.len rows
+    if i >= i1
+    then ok (done hi)
+    else
+      let r ← Slice.index_usize rows i
+      let b ← is_change r
+      if b
+      then ok (done hi)
+      else let t1 ← t + 1#usize
+           ok (cont (i, t1))
+  else ok (done hi)
+
+/-- [guide_check::grow_ahead]: loop 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 1:0-533:1
+    Visibility: public -/
+@[rust_loop]
+def grow_ahead_loop
+  (rows : Slice Row) (ctx : Std.Usize) (hi : Std.Usize) (t : Std.Usize) :
+  Result Std.Usize
+  := do
+  loop
+    (fun (hi1, t1) => grow_ahead_loop.body rows ctx hi1 t1)
+    (hi, t)
+
+/-- [guide_check::grow_ahead]:
+    Source: 'crates/guide-check/src/lib.rs', lines 519:0-533:1
+    Visibility: public -/
+@[reducible]
+def grow_ahead
+  (rows : Slice Row) (hi : Std.Usize) (ctx : Std.Usize) :
+  Result Std.Usize
+  := do
+  grow_ahead_loop rows ctx hi 0#usize
+
+/-- [guide_check::part_of]:
+    Source: 'crates/guide-check/src/lib.rs', lines 537:0-543:1
+    Visibility: public -/
+def part_of
+  (rows : Slice Row) (g : StepRange) (lo : Std.Usize) (ctx : Std.Usize) :
+  Result Part
+  := do
+  let hi ← last_shown rows g lo
+  let i ← grow_back rows lo ctx
+  let i1 ← grow_ahead rows hi ctx
+  ok { lo := i, hi := i1 }
+
+/-- [guide_check::step_parts]: loop body 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 550:4-556:5
+    Visibility: public -/
+@[rust_loop_body]
+def step_parts_loop.body
+  (rows : Slice Row) (ranges : Slice StepRange) (ctx : Std.Usize)
+  (parts : alloc.vec.Vec Part) (i : Std.Usize) :
+  Result (ControlFlow ((alloc.vec.Vec Part) × Std.Usize) (alloc.vec.Vec Part))
+  := do
+  let i1 := Slice.len ranges
+  if i < i1
+  then
+    let sr ← Slice.index_usize ranges i
+    let lo ← first_shown rows sr
+    let i2 := Slice.len rows
+    let parts1 ←
+      if lo < i2
+      then do
+           let p ← part_of rows sr lo ctx
+           alloc.vec.Vec.push parts p
+      else ok parts
+    let i3 ← i + 1#usize
+    ok (cont (parts1, i3))
+  else ok (done parts)
+
+/-- [guide_check::step_parts]: loop 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 550:4-556:5
+    Visibility: public -/
+@[rust_loop]
+def step_parts_loop
+  (rows : Slice Row) (ranges : Slice StepRange) (ctx : Std.Usize)
+  (parts : alloc.vec.Vec Part) (i : Std.Usize) :
+  Result (alloc.vec.Vec Part)
+  := do
+  loop
+    (fun (parts1, i1) => step_parts_loop.body rows ranges ctx parts1 i1)
+    (parts, i)
+
+/-- [guide_check::step_parts]:
+    Source: 'crates/guide-check/src/lib.rs', lines 547:0-558:1
+    Visibility: public -/
+@[reducible]
+def step_parts
+  (rows : Slice Row) (ranges : Slice StepRange) (ctx : Std.Usize) :
+  Result (alloc.vec.Vec Part)
+  := do
+  step_parts_loop rows ranges ctx (alloc.vec.Vec.new Part) 0#usize
+
+/-- [guide_check::in_parts]: loop body 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 563:4-572:1
+    Visibility: public -/
+@[rust_loop_body]
+def in_parts_loop.body
+  (parts : Slice Part) (k : Std.Usize) (i : Std.Usize) :
+  Result (ControlFlow Std.Usize Bool)
+  := do
+  let i1 := Slice.len parts
+  if i < i1
+  then
+    let p ← Slice.index_usize parts i
+    if p.lo <= k
+    then
+      if k <= p.hi
+      then ok (done true)
+      else let i2 ← i + 1#usize
+           ok (cont i2)
+    else let i2 ← i + 1#usize
+         ok (cont i2)
+  else ok (done false)
+
+/-- [guide_check::in_parts]: loop 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 563:4-572:1
+    Visibility: public -/
+@[rust_loop]
+def in_parts_loop
+  (parts : Slice Part) (k : Std.Usize) (i : Std.Usize) : Result Bool := do
+  loop
+    (fun i1 => in_parts_loop.body parts k i1)
+    i
+
+/-- [guide_check::in_parts]:
+    Source: 'crates/guide-check/src/lib.rs', lines 561:0-572:1
+    Visibility: public -/
+@[reducible]
+def in_parts (parts : Slice Part) (k : Std.Usize) : Result Bool := do
+  in_parts_loop parts k 0#usize
+
+/-- [guide_check::step_mask]: loop body 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 580:4-583:5
+    Visibility: public -/
+@[rust_loop_body]
+def step_mask_loop.body
+  (rows : Slice Row) (parts : alloc.vec.Vec Part) (mask : alloc.vec.Vec Bool)
+  (k : Std.Usize) :
+  Result (ControlFlow ((alloc.vec.Vec Bool) × Std.Usize) (alloc.vec.Vec Bool))
+  := do
+  let i := Slice.len rows
+  if k < i
+  then
+    let s := alloc.vec.Vec.deref parts
+    let b ← in_parts s k
+    let mask1 ← alloc.vec.Vec.push mask b
+    let k1 ← k + 1#usize
+    ok (cont (mask1, k1))
+  else ok (done mask)
+
+/-- [guide_check::step_mask]: loop 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 580:4-583:5
+    Visibility: public -/
+@[rust_loop]
+def step_mask_loop
+  (rows : Slice Row) (parts : alloc.vec.Vec Part) (mask : alloc.vec.Vec Bool)
+  (k : Std.Usize) :
+  Result (alloc.vec.Vec Bool)
+  := do
+  loop
+    (fun (mask1, k1) => step_mask_loop.body rows parts mask1 k1)
+    (mask, k)
+
+/-- [guide_check::step_mask]:
+    Source: 'crates/guide-check/src/lib.rs', lines 576:0-585:1
+    Visibility: public -/
+def step_mask
+  (rows : Slice Row) (ranges : Slice StepRange) (ctx : Std.Usize) :
+  Result (alloc.vec.Vec Bool)
+  := do
+  let parts ← step_parts rows ranges ctx
+  step_mask_loop rows parts (alloc.vec.Vec.new Bool) 0#usize
+
+/-- [guide_check::change_back]: loop body 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 1:0-602:1
+    Visibility: public -/
+@[rust_loop_body]
+def change_back_loop.body
+  (rows : Slice Row) (mask : Slice Bool) (start : Std.Usize) (c : Std.Usize) :
+  Result (ControlFlow Std.Usize Bool)
+  := do
+  if c > start
+  then
+    let c1 ← c - 1#usize
+    let b ← Slice.index_usize mask c1
+    if b
+    then
+      let r ← Slice.index_usize rows c1
+      let b1 ← is_change r
+      if b1
+      then ok (done true)
+      else ok (cont c1)
+    else ok (done false)
+  else ok (done false)
+
+/-- [guide_check::change_back]: loop 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 1:0-602:1
+    Visibility: public -/
+@[rust_loop]
+def change_back_loop
+  (rows : Slice Row) (mask : Slice Bool) (start : Std.Usize) (c : Std.Usize) :
+  Result Bool
+  := do
+  loop
+    (fun c1 => change_back_loop.body rows mask start c1)
+    c
+
+/-- [guide_check::change_back]:
+    Source: 'crates/guide-check/src/lib.rs', lines 589:0-602:1
+    Visibility: public -/
+def change_back
+  (rows : Slice Row) (mask : Slice Bool) (k : Std.Usize) (ctx : Std.Usize) :
+  Result Bool
+  := do
+  let start ← window_start k ctx
+  let c ← k + 1#usize
+  change_back_loop rows mask start c
+
+/-- [guide_check::change_ahead]: loop body 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 1:0-619:1
+    Visibility: public -/
+@[rust_loop_body]
+def change_ahead_loop.body
+  (rows : Slice Row) (mask : Slice Bool) («end» : Std.Usize) (c : Std.Usize)
+  :
+  Result (ControlFlow Std.Usize Bool)
+  := do
+  if c < «end»
+  then
+    let b ← Slice.index_usize mask c
+    if b
+    then
+      let r ← Slice.index_usize rows c
+      let b1 ← is_change r
+      if b1
+      then ok (done true)
+      else let c1 ← c + 1#usize
+           ok (cont c1)
+    else ok (done false)
+  else ok (done false)
+
+/-- [guide_check::change_ahead]: loop 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 1:0-619:1
+    Visibility: public -/
+@[rust_loop]
+def change_ahead_loop
+  (rows : Slice Row) (mask : Slice Bool) («end» : Std.Usize) (c : Std.Usize)
+  :
+  Result Bool
+  := do
+  loop
+    (fun c1 => change_ahead_loop.body rows mask «end» c1)
+    c
+
+/-- [guide_check::change_ahead]:
+    Source: 'crates/guide-check/src/lib.rs', lines 606:0-619:1
+    Visibility: public -/
+def change_ahead
+  (rows : Slice Row) (mask : Slice Bool) (k : Std.Usize) (ctx : Std.Usize) :
+  Result Bool
+  := do
+  let i := Slice.len rows
+  let «end» ← window_end k ctx i
+  change_ahead_loop rows mask «end» k
+
+/-- [guide_check::kept_in]:
+    Source: 'crates/guide-check/src/lib.rs', lines 623:0-631:1
+    Visibility: public -/
+def kept_in
+  (rows : Slice Row) (mask : Slice Bool) (k : Std.Usize) (ctx : Std.Usize) :
+  Result Bool
+  := do
+  let b ← Slice.index_usize mask k
+  if b
+  then
+    let b1 ← change_back rows mask k ctx
+    if b1
+    then ok true
+    else change_ahead rows mask k ctx
+  else ok false
+
+/-- [guide_check::cut_in]: loop body 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 643:4-652:5
+    Visibility: public -/
+@[rust_loop_body]
+def cut_in_loop.body
+  (rows : Slice Row) (mask : Slice Bool) (ctx : Std.Usize)
+  (out : alloc.vec.Vec Row) (k : Std.Usize) (old : Std.Usize) (new : Std.Usize)
+  (kept : Bool) :
+  Result (ControlFlow ((alloc.vec.Vec Row) × Std.Usize × Std.Usize ×
+    Std.Usize × Bool) (alloc.vec.Vec Row))
+  := do
+  let i := Slice.len rows
+  if k < i
+  then
+    let keep ← kept_in rows mask k ctx
+    let out1 ←
+      if keep
+      then do
+           let r ← Slice.index_usize rows k
+           keep_row out kept r old new
+      else ok out
+    let r ← Slice.index_usize rows k
+    let b ← shows_old r
+    let old1 ← bump old b
+    let b1 ← shows_new r
+    let new1 ← bump new b1
+    let k1 ← k + 1#usize
+    ok (cont (out1, k1, old1, new1, keep))
+  else ok (done out)
+
+/-- [guide_check::cut_in]: loop 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 643:4-652:5
+    Visibility: public -/
+@[rust_loop]
+def cut_in_loop
+  (rows : Slice Row) (mask : Slice Bool) (ctx : Std.Usize)
+  (out : alloc.vec.Vec Row) (k : Std.Usize) (old : Std.Usize) (new : Std.Usize)
+  (kept : Bool) :
+  Result (alloc.vec.Vec Row)
+  := do
+  loop
+    (fun (out1, k1, old1, new1, kept1) => cut_in_loop.body rows mask ctx out1
+      k1 old1 new1 kept1)
+    (out, k, old, new, kept)
+
+/-- [guide_check::cut_in]:
+    Source: 'crates/guide-check/src/lib.rs', lines 636:0-654:1
+    Visibility: public -/
+@[reducible]
+def cut_in
+  (rows : Slice Row) (mask : Slice Bool) (ctx : Std.Usize) :
+  Result (alloc.vec.Vec Row)
+  := do
+  cut_in_loop rows mask ctx (alloc.vec.Vec.new Row) 0#usize 1#usize 1#usize
+    false
+
+/-- [guide_check::hidden_changes]: loop body 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 660:4-667:5
+    Visibility: public -/
+@[rust_loop_body]
+def hidden_changes_loop.body
+  (rows : Slice Row) (mask : Slice Bool) (out : alloc.vec.Vec Row)
+  (k : Std.Usize) :
+  Result (ControlFlow ((alloc.vec.Vec Row) × Std.Usize) (alloc.vec.Vec Row))
+  := do
+  let i := Slice.len rows
+  if k < i
+  then
+    let r ← Slice.index_usize rows k
+    let b ← is_change r
+    let out1 ←
+      if b
+      then
+        do
+        let b1 ← Slice.index_usize mask k
+        if b1
+        then ok out
+        else alloc.vec.Vec.push out r
+      else ok out
+    let k1 ← k + 1#usize
+    ok (cont (out1, k1))
+  else ok (done out)
+
+/-- [guide_check::hidden_changes]: loop 0:
+    Source: 'crates/guide-check/src/lib.rs', lines 660:4-667:5
+    Visibility: public -/
+@[rust_loop]
+def hidden_changes_loop
+  (rows : Slice Row) (mask : Slice Bool) (out : alloc.vec.Vec Row)
+  (k : Std.Usize) :
+  Result (alloc.vec.Vec Row)
+  := do
+  loop
+    (fun (out1, k1) => hidden_changes_loop.body rows mask out1 k1)
+    (out, k)
+
+/-- [guide_check::hidden_changes]:
+    Source: 'crates/guide-check/src/lib.rs', lines 657:0-669:1
+    Visibility: public -/
+@[reducible]
+def hidden_changes
+  (rows : Slice Row) (mask : Slice Bool) : Result (alloc.vec.Vec Row) := do
+  hidden_changes_loop rows mask (alloc.vec.Vec.new Row) 0#usize
+
+/-- [guide_check::step_cut]:
+    Source: 'crates/guide-check/src/lib.rs', lines 672:0-675:1
+    Visibility: public -/
+def step_cut
+  (rows : Slice Row) (ranges : Slice StepRange) (ctx : Std.Usize) :
+  Result ((alloc.vec.Vec Row) × (alloc.vec.Vec Row))
+  := do
+  let mask ← step_mask rows ranges ctx
+  let s := alloc.vec.Vec.deref mask
+  let v ← cut_in rows s ctx
+  let s1 := alloc.vec.Vec.deref mask
+  let v1 ← hidden_changes rows s1
+  ok (v, v1)
+
 end guide_check

@@ -11,3 +11,8 @@ import Statements
 #print axioms Statements.check_G8
 #print axioms Statements.check_G9
 #print axioms Statements.check_G10
+#print axioms Statements.check_S1
+#print axioms Statements.check_S2
+#print axioms Statements.check_S3
+#print axioms Statements.check_S4
+#print axioms Statements.check_S5

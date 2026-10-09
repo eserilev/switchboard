@@ -8,3 +8,4 @@ import GuideCheck.Check
 import GuideCheck.Meaning
 import GuideCheck.Rows
 import GuideCheck.Cut
+import GuideCheck.Step
