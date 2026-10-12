@@ -644,12 +644,7 @@ impl Hub {
             Some(p) => std::fs::read_to_string(expand(p)).map_err(|err| format!("{p}: {err}"))?,
             None => review::DEFAULT_PROMPT.to_owned(),
         };
-        let specs: Vec<String> = config
-            .review
-            .spec_clones
-            .iter()
-            .map(|s| expand(s).to_string_lossy().into_owned())
-            .collect();
+        let specs = spec_dirs(&config);
         let prompt = match update.clone() {
             Some(u) => u,
             None => {
@@ -668,6 +663,7 @@ impl Hub {
             fork: false,
             env: &env,
             mcp: Some((&self.sb, id, &sock)),
+            dirs: &specs,
         };
         let result = review::run(&run, |ev| {
             if let Stream::Init { session, .. } = ev {
@@ -1231,7 +1227,9 @@ impl Hub {
         // Threads use the active connection (D4).
         let conn = self.active_connection();
         let _ = connection;
-        let env = connections::env(&self.config(), &conn)?;
+        let config = self.config();
+        let env = connections::env(&config, &conn)?;
+        let specs = spec_dirs(&config);
         let sock = self.paths.sock();
         let run = Run {
             cwd: &tree,
@@ -1240,6 +1238,7 @@ impl Hub {
             fork,
             env: &env,
             mcp: Some((&self.sb, id, &sock)),
+            dirs: &specs,
         };
         let result = review::run(&run, |ev| match ev {
             Stream::Init { session, .. } if fork => {
@@ -1296,7 +1295,9 @@ impl Hub {
                 .map(|r| r.row.tree.clone())
                 .ok_or("gone")?,
         );
-        let env = connections::env(&self.config(), &self.active_connection())?;
+        let config = self.config();
+        let env = connections::env(&config, &self.active_connection())?;
+        let specs = spec_dirs(&config);
         let run = Run {
             cwd: &tree,
             prompt: ask,
@@ -1304,6 +1305,7 @@ impl Hub {
             fork: true,
             env: &env,
             mcp: None,
+            dirs: &specs,
         };
         match review::run(&run, |_| {})? {
             Stream::Result {
@@ -1890,6 +1892,16 @@ fn thread_prompt(step: &Value, t: &ThreadRow, pins: &[String], question: &str) -
     p
 }
 
+/// The spec clones of the config, with `~` expanded.
+fn spec_dirs(config: &crate::config::Config) -> Vec<String> {
+    config
+        .review
+        .spec_clones
+        .iter()
+        .map(|s| expand(s).to_string_lossy().into_owned())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1939,3 +1951,4 @@ mod tests {
         assert!(p.ends_with("saturating or safe?"));
     }
 }
+

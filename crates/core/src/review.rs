@@ -441,6 +441,8 @@ pub struct Run<'a> {
     pub env: &'a [(String, String)],
     /// The `sb` binary and review id, for the MCP server.
     pub mcp: Option<(&'a Path, &'a str, &'a Path)>,
+    /// Folders outside `cwd` that the agent can read: the spec clones.
+    pub dirs: &'a [String],
 }
 
 pub fn args(run: &Run) -> Vec<String> {
@@ -470,6 +472,9 @@ pub fn args(run: &Run) -> Vec<String> {
         "--disallowedTools".into(),
         DENIED.into(),
     ]);
+    for d in run.dirs {
+        a.extend(["--add-dir".into(), d.clone()]);
+    }
     if let Some((sb, review, sock)) = run.mcp {
         let cfg = json!({ "mcpServers": { "sb": {
             "command": sb.to_string_lossy(), "args": ["mcp"],
@@ -1019,6 +1024,7 @@ mod tests {
             fork: true,
             env: &[],
             mcp: None,
+            dirs: &[],
         });
         let s = a.join(" ");
         assert!(s.contains("--resume g1 --fork-session"));
@@ -1032,8 +1038,11 @@ mod tests {
             fork: false,
             env: &[],
             mcp: Some((Path::new("/sb"), "r1", Path::new("/s"))),
+            dirs: &["/specs a".into()],
         });
         assert!(!b.contains(&"--fork-session".to_owned()));
+        let i = b.iter().position(|x| x == "--add-dir").unwrap();
+        assert_eq!(b[i + 1], "/specs a");
         let i = b.iter().position(|x| x == "--mcp-config").unwrap();
         let cfg: Value = serde_json::from_str(&b[i + 1]).unwrap();
         assert_eq!(cfg["mcpServers"]["sb"]["env"]["SB_REVIEW"], "r1");
