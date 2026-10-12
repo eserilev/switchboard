@@ -1,5 +1,6 @@
 //! Switchboard core: everything below the window.
 
+pub mod cleanup;
 pub mod config;
 pub mod connections;
 pub mod control;

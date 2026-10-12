@@ -71,6 +71,10 @@ window.__TAURI__ = {
         case "nvim_open": case "review_nvim": return "p3";
         case "review_drafts_text": return "beacon_node/gloas.rs:11: nit: use safe_sub";
         case "review_open": return "r1";
+        // A closed round of PR 999 exists; PR 10071 has none.
+        case "review_prior": return args.url.includes("/pull/999") ? { id: "r0", round: 1, head: "abc1234567890", sent: 2 } : null;
+        // A first close finds changes; a close with a choice closes.
+        case "review_close": return args.keep || args.discard ? { closed: true, changes: [] } : { closed: false, changes: [" M beacon_node/gloas.rs", "?? notes.txt"] };
         case "review_file_rows": return { head: d.diff.head, rows: Array.from({ length: 60 }, (_, i) => i + 1).flatMap((n) =>
           n === 11 ? [{ kind: "-", old: 11, new: null, text: "let il = vec![];" }, { kind: "+", old: null, new: 11, text: "let il = self.get(slot - 1)?;" }, { kind: "+", old: null, new: 12, text: "let b = 2;" }]
           : [{ kind: " ", old: n, new: n < 11 ? n : n + 1, text: n === 10 ? "let a = 1;" : `line ${n}` }]) };

@@ -362,11 +362,36 @@ impl Store {
     }
 
     pub fn open_reviews(&self) -> R<Vec<ReviewRow>> {
-        let mut s = self.db.prepare(
+        self.review_rows("closed IS NULL ORDER BY opened", params![])
+    }
+
+    /// The closed reviews, oldest first.
+    pub fn closed_reviews(&self) -> R<Vec<ReviewRow>> {
+        self.review_rows("closed IS NOT NULL ORDER BY opened", params![])
+    }
+
+    /// One review, open or closed.
+    pub fn review(&self, id: &str) -> R<Option<ReviewRow>> {
+        Ok(self.review_rows("id = ?1", params![id])?.pop())
+    }
+
+    /// The last closed round of a PR that has a guide: a later round can start from it.
+    pub fn last_closed(&self, repo: &str, number: u64) -> R<Option<ReviewRow>> {
+        Ok(self
+            .review_rows(
+                "closed IS NOT NULL AND repo = ?1 AND number = ?2 AND guide IS NOT NULL AND head != ''
+                 ORDER BY round DESC, opened DESC LIMIT 1",
+                params![repo, number as i64],
+            )?
+            .pop())
+    }
+
+    fn review_rows(&self, filter: &str, args: &[&dyn rusqlite::ToSql]) -> R<Vec<ReviewRow>> {
+        let mut s = self.db.prepare(&format!(
             "SELECT id, url, repo, number, title, head, base, tree, connection, guide_session, guide, round, since, scope_note
-             FROM review WHERE closed IS NULL ORDER BY opened",
-        )?;
-        let rows = s.query_map([], |r| {
+             FROM review WHERE {filter}"
+        ))?;
+        let rows = s.query_map(args, |r| {
             Ok(ReviewRow {
                 id: r.get(0)?,
                 url: r.get(1)?,

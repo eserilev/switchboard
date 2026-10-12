@@ -77,6 +77,8 @@ pub(crate) struct Start {
     pub first: Option<String>,
     /// The connection. With none, the active one.
     pub connection: Option<String>,
+    /// The rust-analyzer plugin on or off. With none, on when the tree has a `Cargo.toml`.
+    pub rust: Option<bool>,
 }
 
 pub(crate) struct Pane {
@@ -149,6 +151,10 @@ pub struct Hub {
     pub(crate) sink: Arc<dyn Sink>,
     pub(crate) sb: PathBuf,
     pub(crate) reviews: Mutex<HashMap<String, crate::hub_review::ReviewState>>,
+    /// Held while a review worktree is made or removed, and while a close takes a
+    /// review out. So a removal never meets a checkout of the same folder (SPEC 11.10).
+    /// Lock order: `trees`, then `reviews`.
+    pub(crate) trees: Mutex<()>,
     /// The last size the window asked for.
     size: Mutex<(u16, u16)>,
     me: Weak<Hub>,
@@ -204,11 +210,15 @@ impl Hub {
             sb,
             reviews: Mutex::default(),
             size: Mutex::new((200, 50)),
+            trees: Mutex::new(()),
             me: me.clone(),
         });
         hub.keep_session()?;
         hub.reattach()?;
         hub.load_reviews();
+        // Old review worktrees go in the background: a removal can take seconds.
+        let h = hub.clone();
+        std::thread::spawn(move || h.sweep_closed());
         if let Some(err) = config_error {
             hub.sink
                 .emit("error", json!({ "scope": "config", "message": err }));
@@ -581,7 +591,7 @@ impl Hub {
             return Ok((vec![shell], env));
         }
         let settings = self.paths.settings_dir().join(format!("{id}.json"));
-        let rust = tree.join("Cargo.toml").exists();
+        let rust = start.rust.unwrap_or_else(|| tree.join("Cargo.toml").exists());
         std::fs::write(&settings, hooks::settings(&self.sb, rust).to_string()).map_err(e)?;
         env.extend(connections::env(
             &self.config(),

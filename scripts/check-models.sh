@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check the Quint model of the permission flow (SPEC 25).
+# Check the Quint models: the permission flow (SPEC 25) and review close (SPEC 26).
 # SAMPLES sets the number of random runs for each step profile (default 100000).
 # STEPS sets the length of each run (default 50).
 set -euo pipefail
@@ -38,4 +38,24 @@ check step Always
 check stepNoCrash Always
 check stepPrompt "Always Tiles"
 check stepPromptNoCrash "Always Tiles"
+
+# Review close and worktree cleanup (SPEC 26). The fixed traces include the old
+# order, which must leak; the random runs then check the code's order.
+quint typecheck review_close.qnt
+quint typecheck review_close_test.qnt
+quint test review_close_test.qnt
+echo "== review_close step: $samples runs of $steps steps"
+quint run review_close.qnt --step=step --invariants Always \
+    --max-samples="$samples" --max-steps="$steps" --verbosity=1
+# The code before each fix must fail: no open check at the checkout, a bool
+# Discard, a checkout over kept work, a forced removal of a locked worktree. If
+# one passes, the model lost the bug it is for.
+for old in stepNoGate stepBoolDiscard stepNoGuard stepForceLock; do
+    if quint run review_close.qnt --step="$old" --invariants Always \
+        --max-samples="$samples" --max-steps="$steps" --verbosity=0 > /dev/null 2>&1; then
+        echo "error: $old passed: the model no longer sees that bug" >&2
+        exit 1
+    fi
+    echo "== $old fails, as it must"
+done
 echo "models ok"

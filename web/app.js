@@ -512,7 +512,8 @@ function cycleConnection() {
 
 // ---------- launcher (SPEC 9) ----------
 
-const L = { list: [], sel: 0, where: "main", run: "claude", pr: null };
+// `prior`: the last closed round of the typed PR. `prSel` 0 starts the next round, 1 a full review.
+const L = { list: [], sel: 0, where: "main", run: "claude", pr: null, prior: null, priorUrl: null, prSel: 0 };
 const fuzzy = (q, s) => { let j = 0; for (const c of s.toLowerCase()) if (c === q[j]) j++; return j === q.length; };
 const setSeg = (id, v) => document.querySelectorAll(`#${id} button`).forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === v));
 const agentIn = (tree) => S.panes.some((p) => p.kind === "claude" && p.tree === tree && p.lamp !== "ended");
@@ -520,6 +521,13 @@ const agentIn = (tree) => S.panes.some((p) => p.kind === "claude" && p.tree === 
 function filterRepos() {
   const q = $("#lq").value.trim();
   L.pr = /github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(q) ? q : null;
+  if (L.pr !== L.priorUrl) {
+    L.priorUrl = L.pr;
+    L.prior = null;
+    L.prSel = 0;
+    const url = L.pr;
+    if (url) invoke("review_prior", { url }).then((p) => { if (L.priorUrl === url) { L.prior = p; drawLauncher(); } }).catch(() => {});
+  }
   L.list = L.pr ? [] : S.repos.filter((r) => fuzzy(q.toLowerCase(), r.name));
   L.sel = Math.min(L.sel, Math.max(0, L.list.length - 1));
   return q;
@@ -528,8 +536,13 @@ function filterRepos() {
 function drawLauncher() {
   const q = filterRepos();
   const open = (r) => S.panes.filter((p) => p.tree === r.path || r.worktrees.some((w) => w.path === p.tree)).length;
-  $("#lrepos").innerHTML = L.pr
-    ? `<li aria-selected="true"><span class="rn">Review ${esc(q.split("/pull/")[1]?.split(/[/#?]/)[0] || "")}</span><span class="rp">${esc(q)}</span></li>`
+  const num = esc(q.split("/pull/")[1]?.split(/[/#?]/)[0] || "");
+  const p = L.prior;
+  $("#lrepos").innerHTML = L.pr && p
+    ? `<li data-pr="0" aria-selected="${L.prSel === 0}"><span class="rn">Round ${p.round + 1} of #${num}</span><span class="rp">The changes since ${esc(p.head.slice(0, 9))}, the head of round ${p.round}${p.sent ? ` · you sent ${p.sent} review${p.sent > 1 ? "s" : ""}` : ""}</span></li>
+       <li data-pr="1" aria-selected="${L.prSel === 1}"><span class="rn">New full review of #${num}</span><span class="rp">${esc(q)}</span></li>`
+    : L.pr
+    ? `<li aria-selected="true"><span class="rn">Review ${num}</span><span class="rp">${esc(q)}</span></li>`
     : L.list.length
       ? L.list.map((r, i) => `<li role="option" data-i="${i}" aria-selected="${i === L.sel}"><span class="rn">${esc(r.name)}</span><span class="rp">${esc(r.path)} · ${esc(r.branch)}</span>
           <span class="rb">${r.dirty ? '<span class="badge dirty">dirty</span>' : ""}${open(r) ? `<span class="badge th">${open(r)} open</span>` : ""}</span></li>`).join("")
@@ -585,7 +598,7 @@ function closeLauncher() {
 async function launch() {
   if (L.pr) {
     closeLauncher();
-    const id = await call("review_open", { url: L.pr });
+    const id = await call("review_open", { url: L.pr, roundOf: L.prior && L.prSel === 0 ? L.prior.id : null });
     await refreshReviews();
     setTab(id);
     return;
@@ -609,8 +622,13 @@ $("#lcancel").addEventListener("click", closeLauncher);
 $("#lgo").addEventListener("click", launch);
 $("#launcher").addEventListener("click", (e) => { if (e.target.id === "launcher") closeLauncher(); });
 $("#lq").addEventListener("input", () => { L.sel = 0; pickRepo(0); });
-$("#lrepos").addEventListener("click", (e) => { const li = e.target.closest("li[data-i]"); if (li) pickRepo(+li.dataset.i); });
-$("#lrepos").addEventListener("dblclick", (e) => { if (e.target.closest("li[data-i]")) launch(); });
+$("#lrepos").addEventListener("click", (e) => {
+  const pr = e.target.closest("li[data-pr]");
+  if (pr) { L.prSel = +pr.dataset.pr; drawLauncher(); return; }
+  const li = e.target.closest("li[data-i]");
+  if (li) pickRepo(+li.dataset.i);
+});
+$("#lrepos").addEventListener("dblclick", (e) => { if (e.target.closest("li[data-i], li[data-pr]")) launch(); });
 $("#lwhere").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { L.where = b.dataset.v; drawLauncher(); if (L.where === "new") $("#lbranch").focus(); } });
 $("#lrun").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { L.run = b.dataset.v; drawLauncher(); } });
 $("#llayouts").addEventListener("click", async (e) => {
@@ -630,6 +648,11 @@ $("#lsave").addEventListener("click", async () => {
 $("#launcher").addEventListener("keydown", (e) => {
   if (e.key === "Escape") { e.preventDefault(); closeLauncher(); }
   else if (e.key === "Enter" && (e.target.matches("input, select") || e.target.id === "lgo")) { e.preventDefault(); launch(); }
+  else if (e.target.id === "lq" && L.pr && L.prior && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+    e.preventDefault();
+    L.prSel = e.key === "ArrowDown" ? 1 : 0;
+    drawLauncher();
+  }
   else if (e.target.id === "lq" && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
     e.preventDefault();
     pickRepo(Math.max(0, Math.min(L.list.length - 1, L.sel + (e.key === "ArrowDown" ? 1 : -1))));
@@ -670,6 +693,7 @@ listen("review", (e) => {
   window.SBReview?.update(e.payload);
   if (!was) drawTabs();
 });
+listen("review_cleanup", (e) => toast(e.payload.note));
 listen("review_closed", (e) => {
   S.reviews.delete(e.payload);
   if (S.tab === e.payload) setTab("board");

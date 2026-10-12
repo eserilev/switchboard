@@ -269,6 +269,8 @@ tr.anchored td.ln::after { content: "●"; color: var(--accent); margin-left: 4p
 .fsec.warn > b { color: var(--needs); }
 .ferr { color: var(--error); }
 .fbtns { display: flex; justify-content: flex-end; gap: 8px; }
+.fbox p { margin: 0; }
+.fchanges { margin: 0; padding-left: 18px; max-height: 240px; overflow-y: auto; font-size: 12px; }
 .empty-review { padding: 40px; color: var(--muted); }
 
 /* Markdown from the agent */

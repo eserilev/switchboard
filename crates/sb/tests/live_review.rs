@@ -43,7 +43,7 @@ fn live_review_of_a_tiny_pr() {
     )
     .unwrap();
 
-    let id = hub.review_open(&url).unwrap();
+    let id = hub.review_open(&url, None).unwrap();
     let t0 = Instant::now();
     let v = loop {
         let v = hub.review_view(&id).unwrap();

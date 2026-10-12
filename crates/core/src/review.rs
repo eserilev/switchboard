@@ -219,55 +219,97 @@ pub fn fetch(repo_dir: &Path, remote: &str, pr: &PrInfo) -> Result<Fetched, Stri
 
 /// As `fetch`, with the worktree named `name`. Each review round has its own worktree.
 pub fn fetch_into(repo_dir: &Path, remote: &str, pr: &PrInfo, name: &str) -> Result<Fetched, String> {
+    let (head, base) = fetch_refs(repo_dir, remote, pr)?;
+    let tree = checkout_tree(repo_dir, name, &head)?;
+    Ok(Fetched { head, base, tree })
+}
+
+/// Fetches the PR head and the base, and points the branch `sb-pr-<n>` at the head. Returns the head
+/// and the merge base. It makes no worktree: the hub does that under its tree lock.
+pub fn fetch_refs(repo_dir: &Path, remote: &str, pr: &PrInfo) -> Result<(String, String), String> {
     let branch = format!("sb-pr-{}", pr.number);
     let have = |oid: &str| {
         !oid.is_empty() && git(repo_dir, &["cat-file", "-e", &format!("{oid}^{{commit}}")]).is_ok()
     };
     // Fetch only what is missing. A fetch from a big remote takes long.
+    // The head is the fetched commit, never a read of the branch or of FETCH_HEAD: a
+    // close of another review of this PR can delete the branch, and another fetch
+    // can change FETCH_HEAD (SPEC 11.10). So the fetch goes to a ref of its own.
     let t0 = std::time::Instant::now();
-    if have(&pr.head_ref_oid) {
+    let head = if have(&pr.head_ref_oid) {
         tracing::info!(target: "sb::review", head = %pr.head_ref_oid, "PR head is already local");
-        git(
-            repo_dir,
-            &[
-                "update-ref",
-                &format!("refs/heads/{branch}"),
-                &pr.head_ref_oid,
-            ],
-        )?;
+        pr.head_ref_oid.clone()
     } else {
         tracing::info!(target: "sb::review", remote, number = pr.number, "fetching the PR head");
-        git(
-            repo_dir,
-            &[
-                "fetch",
-                "-q",
-                "--no-tags",
-                remote,
-                &format!("+pull/{}/head:refs/heads/{branch}", pr.number),
-            ],
-        )?;
+        let oid = fetch_one(repo_dir, remote, &format!("pull/{}/head", pr.number))?;
         tracing::info!(target: "sb::review", ms = t0.elapsed().as_millis() as u64, "fetched the PR head");
-    }
+        oid
+    };
+    // The branch is for you, to find the PR in the clone. Nothing here reads it.
+    git(repo_dir, &["update-ref", &format!("refs/heads/{branch}"), &head])?;
     let base_tip = if have(&pr.base_ref_oid) {
         tracing::info!(target: "sb::review", base = %pr.base_ref_oid, "PR base is already local");
         pr.base_ref_oid.clone()
     } else {
         let t1 = std::time::Instant::now();
         tracing::info!(target: "sb::review", remote, base = %pr.base_ref_name, "fetching the PR base");
-        git(
-            repo_dir,
-            &["fetch", "-q", "--no-tags", remote, &pr.base_ref_name],
-        )?;
+        let oid = fetch_one(repo_dir, remote, &pr.base_ref_name)?;
         tracing::info!(target: "sb::review", ms = t1.elapsed().as_millis() as u64, "fetched the PR base");
-        git(repo_dir, &["rev-parse", "FETCH_HEAD"])?
+        oid
     };
-    let head = git(repo_dir, &["rev-parse", &branch])?;
     let base = git(repo_dir, &["merge-base", &base_tip, &head])?;
+    Ok((head, base))
+}
+
+/// Fetches `src` of `remote` and returns its commit. The fetch goes to a ref of its
+/// own, deleted after, so two fetches at the same time do not mix.
+fn fetch_one(repo_dir: &Path, remote: &str, src: &str) -> Result<String, String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let tmp = format!(
+        "refs/switchboard/fetch/{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let oid = git(repo_dir, &["fetch", "-q", "--no-tags", remote, &format!("+{src}:{tmp}")])
+        .and_then(|_| git(repo_dir, &["rev-parse", &format!("{tmp}^{{commit}}")]));
+    let _ = git(repo_dir, &["update-ref", "-d", &tmp]);
+    oid
+}
+
+/// Puts `head` in the worktree `name` next to `repo_dir`, detached. Makes the
+/// worktree when it is missing.
+pub fn checkout_tree(repo_dir: &Path, name: &str, head: &str) -> Result<PathBuf, String> {
+    checkout_tree_for(repo_dir, name, head, None)
+}
+
+/// As `checkout_tree`. `own` is the worktree of the open review that checks out:
+/// an Update of it moves its HEAD as before, and git carries your edits along or
+/// stops on a conflict. Any other existing folder must be free of work.
+pub fn checkout_tree_for(repo_dir: &Path, name: &str, head: &str, own: Option<&Path>) -> Result<PathBuf, String> {
     let tree = worktree_path(repo_dir, name);
     tracing::info!(target: "sb::review", tree = %tree.display(), exists = tree.exists(), "PR worktree");
-    if tree.exists() {
-        git(&tree, &["checkout", "-q", "--detach", &head])?;
+    if tree.exists() && own.is_some_and(|o| same_path(o, &tree)) {
+        git(&tree, &["checkout", "-q", "--detach", head])?;
+    } else if tree.exists() {
+        // A folder that a closed review kept with your work: a checkout would carry
+        // the changes into this review or leave the commits to `git gc`.
+        // A folder of the same name that is not a review worktree is yours.
+        let st = tree_state(repo_dir, &tree)?;
+        if !st.worktree || !st.detached {
+            return Err(format!(
+                "{} exists and is not a review worktree of this clone. Move it, then use Retry.",
+                tree.display()
+            ));
+        }
+        let work = st.changes;
+        if !work.is_empty() {
+            return Err(format!(
+                "{} has work that is not in git ({}). Commit it, move it, or remove the folder, then use Retry.",
+                tree.display(),
+                work.iter().take(3).cloned().collect::<Vec<_>>().join("; ")
+            ));
+        }
+        git(&tree, &["checkout", "-q", "--detach", head])?;
     } else {
         git(
             repo_dir,
@@ -277,11 +319,101 @@ pub fn fetch_into(repo_dir: &Path, remote: &str, pr: &PrInfo, name: &str) -> Res
                 "-q",
                 "--detach",
                 &tree.to_string_lossy(),
-                &head,
+                head,
             ],
         )?;
     }
-    Ok(Fetched { head, base, tree })
+    Ok(tree)
+}
+
+/// Keeps the head and the base of a review alive, with a ref of its own for each:
+/// `refs/switchboard/<review>/head` and `.../base`. A later round needs them. Without
+/// the refs, a removed worktree and a force-push leave them to `git gc`. The base can
+/// be a tree id (`round_base`); a ref keeps a tree too.
+pub fn pin(repo_dir: &Path, review: &str, head: &str, base: &str) -> Result<(), String> {
+    if review.is_empty() || !review.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(format!("bad review id {review:?}"));
+    }
+    for (name, oid) in [("head", head), ("base", base)] {
+        if !oid.is_empty() {
+            git(repo_dir, &["update-ref", &format!("refs/switchboard/{review}/{name}"), oid])?;
+        }
+    }
+    Ok(())
+}
+
+/// What a removal of a review worktree would lose, and whether it is one.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TreeState {
+    /// The folder exists.
+    pub exists: bool,
+    /// `git worktree list` of the main checkout has it, and it is not the main checkout.
+    pub worktree: bool,
+    /// It has no branch checked out. Review worktrees are always detached.
+    pub detached: bool,
+    /// `git worktree lock` was run on it.
+    pub locked: bool,
+    /// Changed and untracked files (not ignored ones), and commits made in it.
+    pub changes: Vec<String>,
+}
+
+/// True when two paths name the same folder, also through a symlink.
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    a == b || real(a) == real(b)
+}
+
+/// The state of `tree`, a worktree of the repo at `main`.
+pub fn tree_state(main: &Path, tree: &Path) -> Result<TreeState, String> {
+    let mut st = TreeState {
+        exists: tree.is_dir(),
+        ..TreeState::default()
+    };
+    let list = git(main, &["worktree", "list", "--porcelain"])?;
+    if let Some(w) = crate::repos::parse_worktrees(&list, main)
+        .into_iter()
+        .find(|w| same_path(Path::new(&w.path), tree))
+    {
+        st.worktree = true;
+        st.detached = w.branch == "detached";
+        st.locked = list.split("\n\n").any(|b| {
+            b.lines().next().and_then(|l| l.strip_prefix("worktree ")).is_some_and(|p| same_path(Path::new(p), tree))
+                && b.lines().any(|l| l == "locked" || l.starts_with("locked "))
+        });
+    }
+    if !st.exists || !st.worktree {
+        return Ok(st);
+    }
+    st.changes = local_changes(main, tree)?;
+    Ok(st)
+}
+
+/// The work in a worktree that only the folder holds: changed and untracked files
+/// (not ignored ones), and commits that no branch, tag, remote or pin reaches.
+pub fn local_changes(main: &Path, tree: &Path) -> Result<Vec<String>, String> {
+    let status = git(tree, &["status", "--porcelain", "--untracked-files=all"])?;
+    let mut out: Vec<String> = status.lines().map(|l| l.trim_end().to_owned()).filter(|l| !l.is_empty()).collect();
+    let head = git(tree, &["rev-parse", "HEAD"])?;
+    let own = git(
+        main,
+        &["rev-list", "--max-count=20", &head, "--not", "--branches", "--tags", "--remotes", "--glob=refs/switchboard/*"],
+    )?;
+    out.extend(own.lines().filter(|l| !l.is_empty()).map(|c| format!("commit {} made in the worktree", &c[..c.len().min(12)])));
+    Ok(out)
+}
+
+/// Removes the worktree `tree` of the repo at `main`. With `force`, its changes go too.
+pub fn remove_tree(main: &Path, tree: &Path, force: bool) -> Result<(), String> {
+    let path = tree.to_string_lossy();
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        // Once: a locked worktree still refuses. A lock is your "do not remove".
+        args.push("--force");
+    }
+    args.push(&path);
+    git(main, &args)?;
+    let _ = git(main, &["worktree", "prune"]);
+    Ok(())
 }
 
 /// The prompt for the guide session.
@@ -372,6 +504,14 @@ pub fn validate_step(
 /// One event from `claude -p --output-format stream-json`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stream {
+    /// The process started, in a process group of its own with this id. A close
+    /// of the review stops the group (`stop_run`).
+    Started {
+        pid: u32,
+    },
+    /// The output ended. Next, `run` reaps the process: its pid is then free for
+    /// another process, so nothing may signal it after this event.
+    Exited,
     Init {
         session: String,
         /// MCP servers that failed to start.
@@ -429,6 +569,22 @@ pub fn parse_stream(line: &str) -> Option<Stream> {
                 .map(str::to_owned),
         }),
         _ => None,
+    }
+}
+
+/// Stops a `claude -p` run and every process of its group: its tools and its MCP
+/// server. `pid` is the group id from `Stream::Started`.
+pub fn stop_run(pid: u32) {
+    signal_group(pid, libc::SIGTERM);
+}
+
+fn signal_group(pid: u32, sig: libc::c_int) {
+    // A pid of 0 or 1 as a group would reach far more than the run.
+    if pid > 1 {
+        // SAFETY: kill(2) takes plain integers and reads no memory.
+        unsafe {
+            libc::kill(-(pid as libc::pid_t), sig);
+        }
     }
 }
 
@@ -503,8 +659,11 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
             ));
         }
     }
+    use std::os::unix::process::CommandExt;
     let mut child = Command::new("claude")
         .args(args(run))
+        // Its own process group, so a stop reaches its tools and its MCP server too.
+        .process_group(0)
         .current_dir(run.cwd)
         .envs(run.env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
@@ -530,12 +689,13 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
     });
     // A watchdog kills a run that takes too long.
     let pid = child.id();
+    on(&Stream::Started { pid });
     let t0 = std::time::Instant::now();
     tracing::info!(target: "sb::claude", pid, cwd = %run.cwd.display(), resume = ?run.resume, fork = run.fork, prompt = %crate::proto::first_line(run.prompt, 100), "claude -p started");
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
     let watchdog = std::thread::spawn(move || {
         if done_rx.recv_timeout(RUN_TIMEOUT).is_err() {
-            let _ = Command::new("kill").arg("-9").arg(pid.to_string()).status();
+            signal_group(pid, libc::SIGKILL);
             return true;
         }
         false
@@ -557,7 +717,7 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
                 Stream::Result { error, .. } => {
                     tracing::info!(target: "sb::claude", pid, error, ms = t0.elapsed().as_millis() as u64, "claude -p result")
                 }
-                Stream::Delta(_) => {}
+                Stream::Delta(_) | Stream::Started { .. } | Stream::Exited => {}
             }
             on(&ev);
             if matches!(ev, Stream::Result { .. }) {
@@ -565,6 +725,7 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
             }
         }
     }
+    on(&Stream::Exited);
     let status = child.wait().map_err(|e| e.to_string())?;
     let _ = done_tx.send(());
     let killed = watchdog.join().unwrap_or(false);
@@ -968,6 +1129,34 @@ mod tests {
             Some("origin")
         );
         assert_eq!(remote_for(v, "sigp/other"), None);
+    }
+
+    /// A stop reaches the whole group: a tool that the run started stops too.
+    #[test]
+    fn stop_run_stops_the_group() {
+        use std::os::unix::process::CommandExt;
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 30 & echo $!; wait"])
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        let tool: i32 = line.trim().parse().unwrap();
+        // SAFETY: kill with signal 0 only checks that the process exists.
+        let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+        assert!(alive(tool));
+        stop_run(child.id());
+        child.wait().unwrap();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while alive(tool) && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!alive(tool), "the tool of the run still runs");
+        // Pids 0 and 1 as a group are never signalled.
+        stop_run(0);
+        stop_run(1);
     }
 
     #[test]

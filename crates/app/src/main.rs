@@ -129,7 +129,8 @@ commands! {
         Ok(json!({ "leader": c.leader, "nvim": switchboard_core::nvim::installed() }))
     };
     reviews() -> Value => |h| Ok(json!(h.reviews()));
-    review_open(url: String) -> String => |h| h.review_open(&url);
+    review_open(url: String, round_of: Option<String>) -> String => |h| h.review_open(&url, round_of.as_deref());
+    review_prior(url: String) -> Value => |h| h.review_prior(&url).map(|v| json!(v));
     review_view(id: String) -> Value => |h| h.review_view(&id).map(|v| json!(v));
     review_diff(id: String, step: String) -> Value => |h| h.review_diff(&id, &step).map(|v| json!(v));
     review_file_rows(id: String, path: String) -> Value => |h| h.review_file_rows(&id, &path).map(|v| json!(v));
@@ -151,7 +152,7 @@ commands! {
     review_term(id: String, step: Option<String>, start: bool) -> Option<String> => |h| h.review_term(&id, step.as_deref(), start);
     review_step_note(id: String, step: String) -> String => |h| h.review_step_note(&id, &step);
     review_retry(id: String) -> () => |h| h.review_retry(&id);
-    review_close(id: String) -> () => |h| h.review_close(&id);
+    review_close(id: String, keep: bool, discard: Option<Vec<String>>) -> Value => |h| h.review_close(&id, keep, discard).map(|v| json!(v));
     review_nvim(id: String, path: String, line: u32) -> String => |h| h.review_nvim(&id, &path, line);
 }
 
@@ -295,6 +296,7 @@ fn main() {
             review_post,
             review_update,
             review_round,
+            review_prior,
             review_term,
             review_step_note,
             review_retry,
@@ -303,6 +305,15 @@ fn main() {
             log,
             open_url,
         ])
-        .run(tauri::generate_context!())
-        .expect("the window failed to start");
+        .build(tauri::generate_context!())
+        .expect("the window failed to start")
+        .run(|app, event| {
+            // Review runs have process groups of their own: no terminal signal and
+            // no watchdog reaches them after a quit.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(hub) = app.try_state::<Arc<Hub>>() {
+                    hub.stop_runs();
+                }
+            }
+        });
 }

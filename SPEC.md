@@ -253,8 +253,12 @@ Paste a GitHub PR URL into the launcher, and it opens a review (11).
 
 1. `gh pr view <url> --json number,headRefOid,headRefName,headRepository,baseRefName,title`.
 2. The app finds the local clone of the base repo from the repo list.
-3. `git fetch <remote> pull/<n>/head:pr-<n>`.
-4. `git worktree add <repo>-pr<n> pr-<n>`.
+3. The PR head is fetched into a private ref (`refs/switchboard/fetch/...`), read, and the ref is deleted. Then the branch `sb-pr-<n>` points at the head, for you. Nothing in the app reads that branch: a close of another review of the PR can delete it. The base is fetched the same way, so two fetches at the same time do not share `FETCH_HEAD`.
+4. Under the tree lock, and only while the review is open: `git worktree add --detach <repo>-pr<n> <head>`, or `<repo>-pr<n>-r<k>` for round k (11.9). An existing folder gets `git checkout --detach <head>` only when it is a detached worktree of this clone with no work in it (11.10). Else the review shows an error: a folder of yours with that name, or a kept folder with your changes, stays as it is. The review's own folder is the exception: an Update moves its HEAD as before, git carries your edits along, and a conflict stops it with git's error.
+6. Before an Update fetches, the review's current head is pinned, so a force-push never makes it look like a local commit.
+5. The review's head and base get refs of their own: `refs/switchboard/<review>/head` and `.../base` (11.10).
+
+If a closed round of the PR exists and no review of it is open, the launcher offers **Round N+1 of #n** first, and **New full review** below it.
 
 `gh pr checkout` is not used. It changes the current folder and makes no worktree.
 
@@ -359,11 +363,12 @@ The question column is a real Claude Code pane, as on the board. It replaces the
 1. The pane starts when the guide is ready: interactive `claude` in the review worktree, with `--resume <guide> --fork-session`, so it has the context of the review. The guide session file does not change (S3).
 2. Its first message names the current step and asks Claude to wait for a question.
 3. It gets the spec clones with `--add-dir` and the pane hooks. It runs on the connection of the guide session, because the session file is in that connection's folder. It has no `sb` MCP tools, so it cannot change the guide.
-4. One pane for each review worktree and PR number, titled `Ask #<number>`. It shows as a tile on the board too. The app finds it again by its title and worktree. After a rename, the app starts a new one. An ended pane with no session id is not used again.
-5. With `--fork-session`, the hooks report the new session id (checked on 2026-10-11). A later resume of the pane uses that id, so it never writes into the guide session. A resume does not pass `--add-dir` again.
-6. The live terminal moves into the column while the review tab shows. Another tab takes it back.
-7. "Send step" types one line with the current step into the prompt, without Enter. A click on a line number types the path, the line and its text. The text goes in as one bracketed paste, with control characters changed to spaces. While the pane asks for a permission or trust, nothing is typed: a "1" in the text would pick an answer.
-8. The guide agent writes the step fields, and the first message goes into a tmux command. tmux reads one command per line, and its quotes do not hide a line break. So the step line has no control characters, and the tmux client refuses any command with a line break.
+4. It runs with the rust-analyzer plugin off: it answers questions, and rust-analyzer takes 1 to 4 GB for each copy.
+5. One pane for each review worktree and PR number, titled `Ask #<number>`. It shows as a tile on the board too. The app finds it again by its title and worktree. After a rename, the app starts a new one. An ended pane with no session id is not used again.
+6. With `--fork-session`, the hooks report the new session id (checked on 2026-10-11). A later resume of the pane uses that id, so it never writes into the guide session. A resume does not pass `--add-dir` again.
+7. The live terminal moves into the column while the review tab shows. Another tab takes it back.
+8. "Send step" types one line with the current step into the prompt, without Enter. A click on a line number types the path, the line and its text. The text goes in as one bracketed paste, with control characters changed to spaces. While the pane asks for a permission or trust, nothing is typed: a "1" in the text would pick an answer.
+9. The guide agent writes the step fields, and the first message goes into a tmux command. tmux reads one command per line, and its quotes do not hide a line break. So the step line has no control characters, and the tmux client refuses any command with a line break.
 
 The threads below still exist in the store and the backend. The window no longer starts them.
 
@@ -436,6 +441,7 @@ After you send a review, the author pushes new commits. A new round reviews only
 
 - When the head changes (11.7), the header offers **Start round N+1** next to **Update guide**.
 - A round is a new review of the same PR, in its own tab (`#10182 R2`) and its own worktree (`pr10182-r2`). The round before stays open until you close it.
+- A round can also start after the round before is closed: open the PR again, and the launcher offers the next round (9.2). `since` is then the head of the last closed round with a guide. Its pinned ref keeps that commit, also after a force-push and a `git gc` (11.10).
 - `since` is the head that the round before covered. The base of the round's diff is:
   - `since`, when the author only added commits on top of it.
   - `since` with the new base branch merged in (`git merge-tree --write-tree`), when the author rebased or merged the base branch. The round then leaves out the changes that came from the base branch. The header says so.
@@ -446,6 +452,37 @@ After you send a review, the author pushes new commits. A new round reviews only
 - Tests: git repos for each case (added commits, base merge, rebase, conflict, a conflict with other merged files), and open Lighthouse PRs (`crates/core/tests/real_rounds.rs`), with a commit in the middle of each PR as the round-1 head. On 22 PRs: 12 plain, 6 with a base merge or rebase, 4 with one conflicted file each. No file from the base branch shows, except the conflicted files. Before the per-file rule, those 4 PRs showed up to 266 files of the base branch.
 - The GitHub count check (24) is for a first round only, because GitHub counts the whole PR.
 - **Finish review** in a round works as in 11.8. A comment on the old side goes into the summary, because the old side of a round is the code of the round before, not GitHub's base.
+
+### 11.10 Close and cleanup
+
+**Close review** ends the review and cleans up after it. The store keeps the review, its drafts and what you sent, for a later round.
+
+1. If the worktree has changes, nothing happens yet. Changes are changed and untracked files (not ignored ones, so `target/` does not count), and commits at HEAD that no branch, tag, remote or pin reaches (`review::local_changes`). The window lists them and offers **Cancel**, **Keep the folder** and **Discard the changes**. Discard sends back the list you saw. A change that is not on it makes the close ask again, and the removal later drops only changes on that list.
+2. Under the tree lock, the review leaves `Hub.reviews`. The store gets its last row and its close time.
+3. A running guide run gets SIGTERM. Each `claude -p` runs in a process group of its own, and the signal goes to the group, so its tools and its `sb mcp` server stop too. A run that starts after the close stops at its start. The run clears its pid before it reaps the process, so a stale pid is never signalled. At app exit, `stop_runs` stops every running guide run: a process group of its own gets no signal from the terminal.
+4. The review's Claude pane closes. Its nvim panes in the worktree close when nvim reports no unsaved file; an nvim that does not answer counts as unsaved.
+5. In the background, under the tree lock, `clean_after`:
+   - pins the head and the base again;
+   - removes the worktree when `cleanup::verdict` allows it: a detached, unlocked worktree that a review row names, that no open review uses, with no other pane in it, and with no change that you did not see and discard;
+   - compares folders by their real path, so a path through a symlink matches a pane at the real path;
+   - removes with one `--force` at most, so `git worktree lock` always holds;
+   - deletes `sb-pr-<n>` when no review of the PR is open and the branch still points at the review's head, and runs `git worktree prune`;
+   - when the worktree stays, sends `review_cleanup` with the reason, and the window shows it.
+6. At start, the app runs the same cleanup for every closed review with a folder on disk, with no discard. Reviews closed before this version and cleanups cut short by a quit go there.
+
+After **Submit review**, the dialog offers **Close review** and **Keep open**. It does not close by itself: a round 2 often follows, and both choices allow it.
+
+The tree lock (`Hub.trees`) makes the checkout of a review and the removal of a folder exclusive. A fetch makes its worktree only after the network part, under the lock, and only while the review is open. The row takes the path in the same section. So a review closed during its fetch gets no folder, and a close always sees the folder that it has to remove. Lock order: `trees`, then `reviews`.
+
+The pins `refs/switchboard/<review>/head` and `.../base` stay. They are small, and a later round can need any closed round's head.
+
+Tests:
+- `cleanup::tests`: 20,000 random fact sets, with locks and partly seen change lists. A removal happens exactly when the folder is safe to remove, and it drops only changes that you saw and discarded.
+- `crates/core/tests/cleanup_git.rs`: real git. 40 random worktrees (edits, untracked files, ignored files, local commits, a force-push, a change after you looked) through the rule, the removal and `git gc --prune=now`. No work goes without a choice, and the pinned commits stay. A round after a close, a rebase, a force-push and a gc still gets its base. The test fails when the pin is off. Locks, a kept folder with work, a commit that only a branch or a pin reaches, a folder of yours with the review's name, and symlinked paths each have a case.
+- `review::tests::stop_run_stops_the_group`: a tool that a run started stops with the run.
+- The end-to-end test also checks that an Update of an open review keeps working with your edit in its folder, and that another review of that folder then refuses it.
+- `crates/sb/tests/review_close.rs`: a real hub and tmux, and a local git remote that serves `pull/7/head`. The clone is reached through a symlink and your pane opens at the real path. Close with changes asks and changes nothing; Discard with a short list asks again; Discard closes the Claude pane, keeps your pane and the folder, and sends a note (with a text compare of paths, the folder went: the test fails); the sweep removes the folder after you close your pane; a review closed during its fetch gets no folder; a round starts from a closed round; 25 races of close against the checkout leave no folder, with both orders seen. Before the private fetch ref, this test found a fetch that read the PR branch while a cleanup deleted it.
+- `models/review_close.qnt` (26).
 
 ## 12. Agents
 
@@ -906,3 +943,18 @@ P2 and P6 hold because each request has its own socket and channel, so a reply c
 - The `needs` notification, the lamps other than the buttons, and the store.
 - The window draws all tiles from the `pane` events. The model has one copy of each tile, and it can be old.
 - Pane ids are not used again after a close.
+
+## 26. Model check of review close
+
+`models/review_close.qnt` models the review map, the folders on disk, the background jobs (fetch, then checkout), close with its three choices, the cleanup threads, the sweep at start, and your panes, locks and numbered changes. Two round-1 reviews of one PR share a folder; a round 2 has its own. Each action is one critical section of the code under the tree lock.
+
+The invariant `Always`:
+- `OpenKeepsFolder`: an open review that has its folder keeps it.
+- `NoLostWork`: a removal never drops a change that you did not see and discard.
+- `NoCarry`: a checkout never runs over your work in a kept folder. An Update of a review in its own folder is not a carry: git moves your edits along, as you expect.
+- `LockHolds`: a removal never takes a locked worktree.
+- `NoSilentLeak`: when no job and no cleanup is left, each folder on disk is in use by an open review, has a pane of yours, or a note told you why it stays.
+
+A `Mode` turns one fix off at a time: the open check at the checkout, the Discard list, the checkout guard, and the lock rule. `scripts/check-models.sh` runs 10 fixed traces and 100,000 random runs of 50 steps of the code. Then it runs each mode with one fix off, and each must break `Always`; the script fails if one passes, so the model keeps the bugs it is for. Removing the open-review check from the cleanup rule also makes the random runs fail.
+
+Not checked: the full state space, because Apalache needs Java, which is not installed here. The model is small (3 reviews, 2 folders), and the random runs reach the bugs above in under a second.

@@ -123,6 +123,23 @@
   check("open sends the request", open && open.repo === "/c/lighthouse" && open.place === "new" && open.branch === "feat-x" && open.run === "claude", JSON.stringify(open));
   check("launcher closes after open", $("#launcher").hidden);
 
+  // A PR with a closed round: the launcher offers the next round, or a full review.
+  $("#newpane").click();
+  await wait(50);
+  q.value = "https://github.com/sigp/lighthouse/pull/999";
+  q.dispatchEvent(new Event("input"));
+  await wait(100);
+  check("a closed round offers the next round first", $$("#lrepos li[data-pr]").length === 2 && $('#lrepos li[data-pr="0"]').textContent.includes("Round 2 of #999") && $('#lrepos li[data-pr="0"]').getAttribute("aria-selected") === "true" && $("#lrepos").textContent.includes("you sent 2 reviews"), $("#lrepos").textContent);
+  q.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  await wait(20);
+  check("down picks the full review", $('#lrepos li[data-pr="1"]').getAttribute("aria-selected") === "true");
+  q.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+  await wait(20);
+  $("#lgo").click();
+  await wait(400);
+  check("the next round opens from the closed round", called("review_open")[0]?.[1].roundOf === "r0", JSON.stringify(called("review_open")[0]?.[1]));
+  window.SB.setTab("board");
+
   $("#newpane").click();
   await wait(50);
   q.value = "https://github.com/sigp/lighthouse/pull/10071";
@@ -131,7 +148,7 @@
   check("PR URL shows a review item", $("#lrepos").textContent.includes("Review 10071") && $("#lrows").hidden);
   $("#lgo").click();
   await wait(400);
-  check("PR URL opens the review tab", called("review_open").length === 1 && !$("#view-review").hidden);
+  check("PR URL opens the review tab", called("review_open").length === 2 && called("review_open")[1][1].roundOf === null && !$("#view-review").hidden);
 
   // Review
   check("review tab button", $$('#tabs [data-tab="r1"]').length === 1);
@@ -250,7 +267,10 @@
   await wait(150);
   const post = called("review_post")[0]?.[1];
   check("submit sends the type, summary and preview token", post && post.event === "APPROVE" && post.summary === "LGTM" && post.token === "tok1", JSON.stringify(post));
-  check("the dialog closes after the send", $("#rfinish").hidden);
+  check("after the send, the dialog offers Close review", !$("#rfinish").hidden && $("#rfinish").textContent.includes("Review sent") && [...$$("#rfinish [data-b]")].map((b) => b.textContent).join() === "Keep open,Close review");
+  $('#rfinish [data-b="0"]').click();
+  await wait(50);
+  check("Keep open keeps the review", $("#rfinish").hidden && !called("review_close").length);
   docKey("n");
   await wait(100);
   check("n marks the step", called("review_mark").some((c) => c[1].step === "s2" && c[1].checked));
@@ -422,6 +442,17 @@
     window.__emit("review", window.__data.reviews[0]);
     await wait(1200);
   }
+
+  // Close: a worktree with changes asks first, and nothing closes before the choice.
+  $('#rhead [data-act="close"]').click();
+  await wait(150);
+  check("a close with changes lists them and asks", !$("#rfinish").hidden && $("#rfinish").textContent.includes("notes.txt") && called("review_close").length === 1 && called("review_close")[0][1].discard === null && called("review_close")[0][1].keep === false, $("#rfinish").textContent);
+  [...$$("#rfinish [data-b]")].find((b) => b.textContent === "Discard the changes").click();
+  await wait(150);
+  check("Discard sends the changes you saw", called("review_close").length === 2 && JSON.stringify(called("review_close")[1][1].discard) === JSON.stringify([" M beacon_node/gloas.rs", "?? notes.txt"]) && $("#rfinish").hidden);
+  window.__emit("review_cleanup", { review: "r1", note: "/c/lighthouse-pr10071 stays: in use by nvim." });
+  await wait(50);
+  check("a kept folder shows a note", $("#toast")?.textContent.includes("stays: in use by nvim"), $("#toast")?.textContent);
 
   // Back to the board with the leader.
   key(" ", { ctrl: true, code: "Space" });

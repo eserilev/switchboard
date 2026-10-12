@@ -242,7 +242,7 @@
           window.SB.setTab(nid);
         } catch (err) { toast(err); }
       }
-      if (act === "close") call("review_close", { id: r.id });
+      if (act === "close") closeReview(r.id);
     };
   }
 
@@ -692,12 +692,45 @@
       const url = await invoke("review_post", { id, event: f.event, summary: $("#rsummary").value, token: f.preview.token });
       f.sending = false;
       closeFinish(id);
-      toast(`Review sent: ${url}`);
+      // The author often pushes a fix: a later round can start from this one, also after a close.
+      showBox(id, `<h4>Review sent</h4><p><a href="${esc(url)}">${esc(url)}</a></p>
+        <p>Close the review now? Its worktree and Claude pane go. When the author pushes again, open the PR and pick the next round.</p>`,
+        [["Keep open", false], ["Close review", true]], (v) => v && closeReview(id));
     } catch (e) {
       f.sending = false;
       f.error = String(e);
       btn.textContent = "Submit review";
       drawPreview(id);
+    }
+  }
+
+  // A small dialog in the finish layer. `buttons` is [label, value]; the last one is
+  // the main one. `on` gets the value of the clicked button, or null on Escape.
+  function showBox(id, html, buttons, on) {
+    const box = $("#rfinish");
+    if (!box || S.tab !== id) return;
+    box.innerHTML = `<div class="fbox" role="dialog" aria-modal="true">${html}
+      <div class="fbtns">${buttons.map(([label], i) => `<button class="btn${i === buttons.length - 1 ? " primary" : ""}" data-b="${i}">${esc(label)}</button>`).join("")}</div></div>`;
+    box.hidden = false;
+    const done = (v) => { box.hidden = true; box.innerHTML = ""; on(v); };
+    box.querySelectorAll("[data-b]").forEach((b) => (b.onclick = () => done(buttons[+b.dataset.b][1])));
+    box.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape") done(null); };
+    box.querySelector(".btn.primary")?.focus();
+  }
+
+  // Closes a review. When its worktree has changes, you choose first (SPEC 11.10).
+  // "Discard" sends the list you saw: a change that came after it is not dropped.
+  async function closeReview(id, keep = false, discard = null) {
+    try {
+      const res = await invoke("review_close", { id, keep, discard });
+      if (res.closed) return;
+      const list = res.changes.slice(0, 30).map((c) => `<li><code>${esc(c)}</code></li>`).join("") + (res.changes.length > 30 ? `<li>and ${res.changes.length - 30} more</li>` : "");
+      const again = discard ? "<p>New changes came after you looked.</p>" : "";
+      showBox(id, `<h4>Close review</h4>${again}<p>The review's worktree has changes. A removal loses them:</p><ul class="fchanges">${list}</ul>`,
+        [["Cancel", null], ["Keep the folder", "keep"], ["Discard the changes", "discard"]],
+        (v) => v === "keep" ? closeReview(id, true) : v === "discard" && closeReview(id, false, res.changes));
+    } catch (e) {
+      toast(e);
     }
   }
 

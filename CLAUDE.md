@@ -22,6 +22,7 @@ A desktop app for many AI agents on one screen, plus a guided PR review. `SPEC.m
 After a change to `guide-check`, run `scripts/check-proofs.sh`. It regenerates `proofs/GuideCheck/Code`; commit that too. Never weaken a statement in `proofs/Statements.lean` to make a proof pass.
 
 After a change to the permission flow (`sb permit`, `on_permit`, `permit_answer`, `answer_permits`), run `scripts/check-models.sh` and keep `models/permit.qnt` true (SPEC 25).
+After a change to review close or worktree cleanup (`review_close`, `clean_after`, `sweep_closed`, `fetch`, `cleanup::verdict`), run it too and keep `models/review_close.qnt` true (SPEC 26).
 
 ## Build and test
 

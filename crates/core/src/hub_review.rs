@@ -24,6 +24,47 @@ pub(crate) struct ReviewState {
     pub attempts: u32,
     pub proposal: Option<Value>,
     pub coverage: Option<CoverageView>,
+    /// The pid of the guide's `claude -p` run while it runs. A close stops it.
+    pub run_pid: Option<u32>,
+}
+
+impl ReviewState {
+    fn new(row: ReviewRow, status: &str, error: Option<String>) -> ReviewState {
+        ReviewState {
+            row,
+            status: status.into(),
+            error,
+            new_head: None,
+            last_poll: now(),
+            model: None,
+            attempts: 0,
+            proposal: None,
+            coverage: None,
+            run_pid: None,
+        }
+    }
+}
+
+/// The error of a background job whose review closed while it ran.
+const CLOSED: &str = "the review was closed";
+
+/// What a close did, for the window.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct CloseResult {
+    /// False when the worktree has changes and you have not chosen yet.
+    pub closed: bool,
+    /// The changes that a removal would lose.
+    pub changes: Vec<String>,
+}
+
+/// What a closed round of a PR offers to a new review of it.
+#[derive(Serialize, Clone, Debug)]
+pub struct Prior {
+    pub id: String,
+    pub round: u32,
+    pub head: String,
+    /// The reviews you sent in that round.
+    pub sent: usize,
 }
 
 /// Rejected guides before the app completes the guide itself.
@@ -263,20 +304,9 @@ impl Hub {
                 .guide
                 .is_none()
                 .then(|| "The guide was not finished. Use Retry.".to_owned());
-            reviews.insert(
-                row.id.clone(),
-                ReviewState {
-                    row,
-                    status: status.into(),
-                    error,
-                    new_head: None,
-                    last_poll: 0,
-                    model: None,
-                    attempts: 0,
-                    proposal: None,
-                    coverage: None,
-                },
-            );
+            let mut st = ReviewState::new(row, status, error);
+            st.last_poll = 0;
+            reviews.insert(st.row.id.clone(), st);
         }
     }
 
@@ -381,7 +411,34 @@ impl Hub {
     }
 
     /// Opens a review from a PR URL. The work runs in the background; `review` events report it.
-    pub fn review_open(&self, url: &str) -> Res<String> {
+    /// The last closed round of the PR at `url`, when no review of it is open.
+    pub fn review_prior(&self, url: &str) -> Res<Option<Prior>> {
+        let pr = review::parse_url(url).ok_or("not a GitHub PR URL")?;
+        let open = self
+            .reviews
+            .lock()
+            .unwrap()
+            .values()
+            .any(|r| r.row.repo == pr.repo && r.row.number == pr.number);
+        if open {
+            return Ok(None);
+        }
+        let store = self.store.lock().unwrap();
+        let Some(row) = store.last_closed(&pr.repo, pr.number).map_err(e)? else {
+            return Ok(None);
+        };
+        let sent = store.posted(&row.id).map_err(e)?.len();
+        Ok(Some(Prior {
+            id: row.id,
+            round: row.round,
+            head: row.head,
+            sent,
+        }))
+    }
+
+    /// Opens a review of the PR at `url`. An open review of it wins. With `round_of`,
+    /// a closed round of the PR, it starts the next round from that round's head.
+    pub fn review_open(&self, url: &str, round_of: Option<&str>) -> Res<String> {
         let pr = review::parse_url(url).ok_or("not a GitHub PR URL")?;
         let existing = self
             .reviews
@@ -393,6 +450,19 @@ impl Hub {
             .map(|r| r.row.id.clone());
         if let Some(id) = existing {
             return Ok(id);
+        }
+        if let Some(prev) = round_of {
+            let prev = self
+                .store
+                .lock()
+                .unwrap()
+                .review(prev)
+                .map_err(e)?
+                .ok_or(format!("no review {prev}"))?;
+            if prev.repo != pr.repo || prev.number != pr.number {
+                return Err(format!("review {} is not of this PR", prev.id));
+            }
+            return self.start_round(&prev);
         }
         let id = self.store.lock().unwrap().next_id("r").map_err(e)?;
         let row = ReviewRow {
@@ -411,20 +481,10 @@ impl Hub {
             since: None,
             scope_note: None,
         };
-        self.reviews.lock().unwrap().insert(
-            id.clone(),
-            ReviewState {
-                row,
-                status: "fetching".into(),
-                error: None,
-                new_head: None,
-                last_poll: now(),
-                model: None,
-                attempts: 0,
-                proposal: None,
-                coverage: None,
-            },
-        );
+        self.reviews
+            .lock()
+            .unwrap()
+            .insert(id.clone(), ReviewState::new(row, "fetching", None));
         self.emit_review(&id);
         let hub = self.arc();
         let rid = id.clone();
@@ -449,7 +509,7 @@ impl Hub {
         tracing::info!(target: "sb::review", review = id, ms = ms(), files = pr.files.len(), head = %pr.head_ref_oid, "review: got the PR");
         let (dir, remote) = self.find_clone(&repo)?;
         tracing::info!(target: "sb::review", review = id, ms = ms(), clone = %dir.display(), %remote, "review: found the clone");
-        let f = review::fetch_into(&dir, &remote, &pr, &worktree_name(pr.number, round))?;
+        let f = self.fetch(id, &dir, &remote, &pr, round)?;
         tracing::info!(target: "sb::review", review = id, ms = ms(), tree = %f.tree.display(), "review: worktree ready");
         if f.head != pr.head_ref_oid {
             return Err(format!(
@@ -458,6 +518,7 @@ impl Hub {
             ));
         }
         let (base, note) = scope(&f, round, since.as_deref())?;
+        review::pin(&dir, id, &f.head, &base)?;
         if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
             r.row.title = pr.title.clone();
             r.row.head = f.head.clone();
@@ -665,14 +726,30 @@ impl Hub {
             mcp: Some((&self.sb, id, &sock)),
             dirs: &specs,
         };
-        let result = review::run(&run, |ev| {
-            if let Stream::Init { session, .. } = ev {
+        let result = review::run(&run, |ev| match ev {
+            Stream::Started { pid } => match self.reviews.lock().unwrap().get_mut(id) {
+                Some(r) => r.run_pid = Some(*pid),
+                // The review closed before the run started: stop it now.
+                None => review::stop_run(*pid),
+            },
+            // Past here `run` reaps the process, and its pid can go to another one.
+            Stream::Exited => {
+                if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
+                    r.run_pid = None;
+                }
+            }
+            Stream::Init { session, .. } => {
                 if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
                     r.row.guide_session = Some(session.clone());
                 }
                 self.save_row(id);
             }
-        })?;
+            _ => {}
+        });
+        if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
+            r.run_pid = None;
+        }
+        let result = result?;
         let has_guide = self.finalize_guide(id)?;
         match result {
             Stream::Result { .. } if has_guide => self.set_status(id, "ready", None),
@@ -700,6 +777,11 @@ impl Hub {
             .get(id)
             .map(|r| r.row.clone())
             .ok_or(format!("no review {id}"))?;
+        self.start_round(&prev)
+    }
+
+    /// A new round after `prev`, an open or a closed round of the same PR.
+    fn start_round(&self, prev: &ReviewRow) -> Res<String> {
         if prev.head.is_empty() || prev.guide.is_none() {
             return Err("Finish this round first: it has no guide yet.".into());
         }
@@ -730,20 +812,10 @@ impl Hub {
             since: Some(prev.head.clone()),
             scope_note: None,
         };
-        self.reviews.lock().unwrap().insert(
-            nid.clone(),
-            ReviewState {
-                row,
-                status: "fetching".into(),
-                error: None,
-                new_head: None,
-                last_poll: now(),
-                model: None,
-                attempts: 0,
-                proposal: None,
-                coverage: None,
-            },
-        );
+        self.reviews
+            .lock()
+            .unwrap()
+            .insert(nid.clone(), ReviewState::new(row, "fetching", None));
         self.save_row(&nid);
         self.emit_review(&nid);
         let hub = self.arc();
@@ -1577,15 +1649,202 @@ impl Hub {
         Ok(None)
     }
 
-    pub fn review_close(&self, id: &str) -> Res<()> {
-        self.reviews.lock().unwrap().remove(id);
-        self.store
+    /// Fetches the PR and puts its head in the review's worktree. The checkout runs
+    /// under the tree lock, and only while the review is open: a review closed during
+    /// the network fetch gets no worktree. The review row takes the path in the same
+    /// lock, so a close always sees the worktree it has to remove.
+    fn fetch(&self, id: &str, dir: &Path, remote: &str, pr: &PrInfo, round: u32) -> Res<review::Fetched> {
+        // The head this review has now: pinned before the fetch moves `sb-pr-<n>`, so
+        // it never looks like work of yours (a review from before the pins has none).
+        let (old_head, old_base) = self
+            .reviews
             .lock()
             .unwrap()
-            .close_review(id, now())
-            .map_err(e)?;
+            .get(id)
+            .map(|r| (r.row.head.clone(), r.row.base.clone()))
+            .unwrap_or_default();
+        if !old_head.is_empty() {
+            review::pin(dir, id, &old_head, &old_base)?;
+        }
+        let (head, base) = review::fetch_refs(dir, remote, pr)?;
+        let _trees = self.trees.lock().unwrap();
+        let own = match self.reviews.lock().unwrap().get(id) {
+            None => return Err(CLOSED.into()),
+            Some(r) => (!r.row.tree.is_empty()).then(|| PathBuf::from(&r.row.tree)),
+        };
+        let tree = review::checkout_tree_for(dir, &worktree_name(pr.number, round), &head, own.as_deref())?;
+        if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
+            r.row.tree = tree.to_string_lossy().into_owned();
+        }
+        Ok(review::Fetched { head, base, tree })
+    }
+
+    /// Closes a review and cleans up after it (SPEC 11.10).
+    /// - No choice (`keep` false, `discard` None): when the worktree has changes,
+    ///   nothing happens, and the result lists them, so you can choose.
+    /// - `discard` Some(list): the changes you saw go with the worktree. When it now
+    ///   has a change that is not on the list, nothing happens, and the result lists
+    ///   the changes again.
+    /// - `keep`: the worktree stays when it has changes.
+    ///
+    /// The close stops the guide run, closes the review's Claude pane and its nvim
+    /// panes with no unsaved files, and then removes the worktree in the background.
+    pub fn review_close(&self, id: &str, keep: bool, discard: Option<Vec<String>>) -> Res<CloseResult> {
+        let row = self
+            .reviews
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|r| r.row.clone())
+            .ok_or(format!("no review {id}"))?;
+        let tree = PathBuf::from(&row.tree);
+        let main = (!row.tree.is_empty()).then(|| repos::main_checkout(&tree)).flatten();
+        if !keep {
+            if let Some(main) = &main {
+                let st = review::tree_state(main, &tree)?;
+                let seen = discard.as_deref().unwrap_or(&[]);
+                if st.exists && st.worktree && st.changes.iter().any(|c| !seen.contains(c)) {
+                    return Ok(CloseResult {
+                        closed: false,
+                        changes: st.changes,
+                    });
+                }
+            }
+        }
+        // Take the review out under the tree lock: a checkout of it is then either
+        // done, with the path in `row`, or never happens.
+        let (row, pid) = {
+            let _trees = self.trees.lock().unwrap();
+            let st = self.reviews.lock().unwrap().remove(id).ok_or("gone")?;
+            (st.row, st.run_pid)
+        };
+        tracing::info!(target: "sb::review", review = id, tree = %row.tree, ?pid, keep, ?discard, "review close");
+        {
+            // The last row, with its worktree path, so the sweep at start finds it.
+            let store = self.store.lock().unwrap();
+            store.save_review(&row, now()).map_err(e)?;
+            store.close_review(id, now()).map_err(e)?;
+        }
+        if let Some(pid) = pid {
+            review::stop_run(pid);
+        }
+        if !row.tree.is_empty() {
+            for pane in self.review_panes(&row) {
+                let _ = self.close(&pane);
+            }
+        }
         self.sink.emit("review_closed", json!(id));
-        Ok(())
+        let hub = self.arc();
+        std::thread::spawn(move || {
+            let note = hub.clean_after(&row, discard.unwrap_or_default());
+            if let Some(note) = note {
+                hub.sink.emit("review_cleanup", json!({ "review": row.id, "note": note }));
+            }
+        });
+        Ok(CloseResult {
+            closed: true,
+            changes: vec![],
+        })
+    }
+
+    /// The panes that a close of `row` stops: its Claude pane, and nvim panes in its
+    /// worktree with no unsaved files.
+    fn review_panes(&self, row: &ReviewRow) -> Vec<String> {
+        let title = format!("Ask #{}", row.number);
+        let nvim_dir = self.paths.nvim_dir();
+        let panes: Vec<(String, String, Option<String>)> = self
+            .panes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| review::same_path(Path::new(&p.row.tree), Path::new(&row.tree)))
+            .map(|p| (p.row.id.clone(), p.row.kind.clone(), p.row.title.clone()))
+            .collect();
+        panes
+            .into_iter()
+            .filter(|(_, kind, t)| match kind.as_str() {
+                "claude" => t.as_deref() == Some(title.as_str()),
+                "nvim" => nvim_saved(&crate::nvim::socket(&nvim_dir, Path::new(&row.tree))),
+                _ => false,
+            })
+            .map(|(id, _, _)| id)
+            .collect()
+    }
+
+    /// Removes the worktree of a closed review when the rule allows it, and the PR
+    /// branch when no open review of the PR is left. Pins the head first. Returns a
+    /// note for the window when the worktree stays.
+    fn clean_after(&self, row: &ReviewRow, discard: Vec<String>) -> Option<String> {
+        if row.tree.is_empty() {
+            return None;
+        }
+        let tree = PathBuf::from(&row.tree);
+        let main = repos::main_checkout(&tree)
+            .or_else(|| self.find_clone(&row.repo).ok().map(|(d, _)| d))?;
+        if let Err(err) = review::pin(&main, &row.id, &row.head, &row.base) {
+            tracing::warn!(target: "sb::review", review = %row.id, %err, "pin failed: the worktree stays");
+            return Some(format!("{} stays: {err}", row.tree));
+        }
+        let _trees = self.trees.lock().unwrap();
+        let (open_review, pr_open) = {
+            let reviews = self.reviews.lock().unwrap();
+            (
+                reviews.values().any(|r| !r.row.tree.is_empty() && review::same_path(Path::new(&r.row.tree), &tree)),
+                reviews.values().any(|r| r.row.repo == row.repo && r.row.number == row.number),
+            )
+        };
+        let panes: Vec<String> = self
+            .panes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| review::same_path(Path::new(&p.row.tree), &tree))
+            .map(|p| p.row.title.clone().unwrap_or_else(|| format!("{} pane {}", p.row.kind, p.row.id)))
+            .collect();
+        let state = match review::tree_state(&main, &tree) {
+            Ok(s) => s,
+            Err(err) => return Some(format!("{} stays: {err}", row.tree)),
+        };
+        let facts = crate::cleanup::Facts {
+            tree: state,
+            in_store: true,
+            open_review,
+            panes,
+            discard,
+        };
+        let verdict = crate::cleanup::verdict(&facts);
+        tracing::info!(target: "sb::review", review = %row.id, tree = %row.tree, ?verdict, "review cleanup");
+        let note = match verdict {
+            crate::cleanup::Verdict::Remove { force } => {
+                review::remove_tree(&main, &tree, force).err().map(|err| format!("{} stays: {err}", row.tree))
+            }
+            crate::cleanup::Verdict::Gone => None,
+            crate::cleanup::Verdict::Keep(why) => Some(format!("{} stays: {why}.", row.tree)),
+            crate::cleanup::Verdict::Ask(c) => Some(format!("{} stays: it has {} change(s).", row.tree, c.len())),
+        };
+        // The branch goes only while it still points at this review's head: a commit
+        // of yours on it stays.
+        if !pr_open && !row.head.is_empty() {
+            let _ = repos::git(&main, &["update-ref", "-d", &format!("refs/heads/sb-pr-{}", row.number), &row.head]);
+        }
+        let _ = repos::git(&main, &["worktree", "prune"]);
+        note
+    }
+
+    /// At start: cleans up after reviews that closed before this version, and after
+    /// cleanups that a quit cut short. Same rule as a close, with no discard.
+    pub(crate) fn sweep_closed(&self) {
+        let rows = self.store.lock().unwrap().closed_reviews().unwrap_or_default();
+        let mut done = std::collections::HashSet::new();
+        // The newest row of a folder decides: rows are oldest first.
+        for row in rows.iter().rev() {
+            if row.tree.is_empty() || !done.insert(row.tree.clone()) || !Path::new(&row.tree).exists() {
+                continue;
+            }
+            if let Some(note) = self.clean_after(row, vec![]) {
+                tracing::info!(target: "sb::review", review = %row.id, %note, "sweep");
+            }
+        }
     }
 
     // ---------- new commits (SPEC 11.7) ----------
@@ -1652,7 +1911,7 @@ impl Hub {
         self.set_status(id, "updating", None);
         let pr = review::gh_view(&url)?;
         let (dir, remote) = self.find_clone(&repo)?;
-        let f = review::fetch_into(&dir, &remote, &pr, &worktree_name(pr.number, round))?;
+        let f = self.fetch(id, &dir, &remote, &pr, round)?;
         if f.head != pr.head_ref_oid {
             return Err(format!(
                 "the PR head moved during the fetch (GitHub {}, fetched {}). Use Update again.",
@@ -1661,6 +1920,7 @@ impl Hub {
         }
         let changed = review::changed_files(&f.tree, &old, &f.head).unwrap_or_default();
         let (base, note) = scope(&f, round, since.as_deref())?;
+        review::pin(&dir, id, &f.head, &base)?;
         if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
             r.row.head = f.head.clone();
             r.row.base = base;
@@ -1847,6 +2107,8 @@ impl Hub {
                 first: Some(first),
                 // The guide session file is in the config dir of its connection.
                 connection,
+                // It answers questions; rust-analyzer would take 1 to 4 GB for each review.
+                rust: Some(false),
             },
         )?;
         Ok(Some(view.id))
@@ -1855,6 +2117,36 @@ impl Hub {
     /// One line that tells the review's Claude Code pane the current step.
     pub fn review_step_note(&self, id: &str, step: &str) -> Res<String> {
         Ok(step_note(&self.step(id, step)?))
+    }
+
+    /// Stops every running guide run. The app calls it at exit.
+    pub fn stop_runs(&self) {
+        for pid in self.reviews.lock().unwrap().values().filter_map(|r| r.run_pid) {
+            review::stop_run(pid);
+        }
+    }
+
+    /// Tests only: adds a review row as a review with a guide, with no gh and no agent.
+    #[doc(hidden)]
+    pub fn debug_add_review(&self, row: ReviewRow) {
+        let id = row.id.clone();
+        self.reviews
+            .lock()
+            .unwrap()
+            .insert(id.clone(), ReviewState::new(row, "ready", None));
+        self.save_row(&id);
+    }
+
+    /// Tests only: the fetch and the gated checkout of a review, with no gh.
+    #[doc(hidden)]
+    pub fn debug_fetch(&self, id: &str, dir: &Path, remote: &str, pr: &PrInfo, round: u32) -> Res<PathBuf> {
+        self.fetch(id, dir, remote, pr, round).map(|f| f.tree)
+    }
+
+    /// Tests only: the cleanup that runs at start.
+    #[doc(hidden)]
+    pub fn debug_sweep(&self) {
+        self.sweep_closed()
     }
 
     pub fn review_repo_of(&self, id: &str) -> Option<PathBuf> {
@@ -1920,6 +2212,14 @@ impl Drop for Sending {
     fn drop(&mut self) {
         SENDING.lock().unwrap().retain(|x| x != &self.0);
     }
+}
+
+/// True when the nvim at `sock` has no unsaved file. An nvim that does not answer
+/// counts as unsaved, so its pane stays.
+fn nvim_saved(sock: &Path) -> bool {
+    crate::nvim::expr(sock, "len(getbufinfo({'bufmodified': 1}))")
+        .map(|n| n.trim() == "0")
+        .unwrap_or(false)
 }
 
 /// "I am on step s2 "Title" (a.rs:3-9 (new))." on one line. The guide agent wrote
