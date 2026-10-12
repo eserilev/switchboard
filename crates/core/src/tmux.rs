@@ -137,6 +137,11 @@ impl Tmux {
 
     /// Runs one tmux command and returns its reply lines.
     pub fn cmd(&self, command: &str) -> Reply {
+        // tmux reads one command per line, and quotes do not hide a line break.
+        // A break in an argument would start a second command.
+        if command.contains(['\n', '\r']) {
+            return Err(Error::Tmux("a tmux command cannot hold a line break".into()));
+        }
         let t0 = std::time::Instant::now();
         let rx = {
             let mut link = self.link.lock().unwrap();

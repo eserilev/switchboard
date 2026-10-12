@@ -1794,6 +1794,69 @@ impl Hub {
         self.nvim_open(&tree, Some((&file.to_string_lossy(), line.max(1))))
     }
 
+    /// The Claude Code pane of a review. It forks the guide session in the review
+    /// worktree, so it knows the review. With no pane and `start`, it starts one that
+    /// opens on `step`. Returns the pane id.
+    pub fn review_term(&self, id: &str, step: Option<&str>, start: bool) -> Res<Option<String>> {
+        let (tree, number, repo, session, connection) = {
+            let r = self.reviews.lock().unwrap();
+            let r = r.get(id).ok_or("gone")?;
+            (
+                r.row.tree.clone(),
+                r.row.number,
+                r.row.repo.clone(),
+                r.row.guide_session.clone(),
+                r.row.connection.clone(),
+            )
+        };
+        let title = format!("Ask #{number}");
+        let found = self
+            .panes
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|p| {
+                p.row.kind == "claude"
+                    && p.row.tree == tree
+                    && p.row.title.as_deref() == Some(title.as_str())
+                    // An ended fork with no session id cannot resume: start a new one.
+                    && (p.lamp() != crate::lamp::Lamp::Ended || p.row.session.is_some())
+            })
+            .map(|p| p.row.id.clone());
+        if found.is_some() || !start {
+            return Ok(found);
+        }
+        let session = session.ok_or("the guide session has not started")?;
+        let first = match step {
+            Some(s) => format!(
+                "{} Wait for my question. Reply only: Ready.",
+                step_note(&self.step(id, s)?)
+            ),
+            None => "I have questions about this review. Wait for my question. Reply only: Ready.".into(),
+        };
+        let name = repo.rsplit('/').next().unwrap_or(&repo).to_owned();
+        let view = self.spawn(
+            "claude",
+            &name,
+            Path::new(&tree),
+            Some(title),
+            crate::hub::Start {
+                resume: Some(session),
+                fork: true,
+                dirs: spec_dirs(&self.config()),
+                first: Some(first),
+                // The guide session file is in the config dir of its connection.
+                connection,
+            },
+        )?;
+        Ok(Some(view.id))
+    }
+
+    /// One line that tells the review's Claude Code pane the current step.
+    pub fn review_step_note(&self, id: &str, step: &str) -> Res<String> {
+        Ok(step_note(&self.step(id, step)?))
+    }
+
     pub fn review_repo_of(&self, id: &str) -> Option<PathBuf> {
         let tree = self
             .reviews
@@ -1857,6 +1920,27 @@ impl Drop for Sending {
     fn drop(&mut self) {
         SENDING.lock().unwrap().retain(|x| x != &self.0);
     }
+}
+
+/// "I am on step s2 "Title" (a.rs:3-9 (new))." on one line. The guide agent wrote
+/// these fields, so control characters become spaces: the line goes into a tmux
+/// command and into the pane as keys.
+fn step_note(step: &Value) -> String {
+    let mut p = format!(
+        "I am on step {} \"{}\"",
+        step["id"].as_str().unwrap_or("?"),
+        step["title"].as_str().unwrap_or("")
+    );
+    let ranges = coverage::step_ranges(step);
+    if !ranges.is_empty() {
+        let list: Vec<String> = ranges
+            .iter()
+            .map(|r| format!("{}:{}-{} ({})", r.file, r.from, r.to, r.side))
+            .collect();
+        p += &format!(" ({})", list.join(", "));
+    }
+    p.push('.');
+    p.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
 }
 
 fn thread_prompt(step: &Value, t: &ThreadRow, pins: &[String], question: &str) -> String {
@@ -1949,6 +2033,16 @@ mod tests {
         assert!(p.contains("`builder_params.slot - 1,`"));
         assert!(p.contains("- Use safe_sub."));
         assert!(p.ends_with("saturating or safe?"));
+    }
+
+    #[test]
+    fn step_note_is_one_line() {
+        let step = json!({"id":"s2","title":"Two\nlines","ranges":[{"file":"a.rs","side":"new","from":3,"to":9}]});
+        assert_eq!(step_note(&step), "I am on step s2 \"Two lines\" (a.rs:3-9 (new)).");
+        // A line break in any field would start a second tmux command.
+        let step = json!({"id":"s1\nrun-shell 'x' #","title":"t\r\u{1b}[2J","ranges":[{"file":"a\n.rs","side":"new","from":1,"to":1}]});
+        let note = step_note(&step);
+        assert!(!note.chars().any(char::is_control), "{note:?}");
     }
 }
 

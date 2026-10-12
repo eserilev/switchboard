@@ -60,7 +60,12 @@ window.__TAURI__ = {
           return "r2";
         }
         case "review_diff": return { head: d.diff.head, sections: d.diff.sections.map((x) => ({ ...x, other: { lines: 4, steps: ["s1"] } })) };
-        case "review_ask": return "t2";
+        case "review_term": {
+          // The review's Claude pane starts on the first call with start.
+          if (args.start && !d.panes.some((x) => x.id === "p8")) d.panes.push(pane({ id: "p8", title: "Ask #10071", tree: "/c/lighthouse-pr10071", lamp: "turn" }));
+          return d.panes.some((x) => x.id === "p8") ? "p8" : null;
+        }
+        case "review_step_note": return 'I am on step s2 "Proposal path passes slot - 1" (beacon_node/gloas.rs:11-12 (new)).';
         case "pane_expand": return btoa("\x1b[H\x1b[2Jhello from the live pane\r\n$ ");
         case "pane_open": return pane({ id: "p9", tree: args.req.repo });
         case "nvim_open": case "review_nvim": return "p3";

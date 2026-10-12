@@ -1,20 +1,20 @@
-// Review tabs (SPEC 11): steps, guide + diff, threads and drafts.
+// Review tabs (SPEC 11): steps, guide + diff, a Claude Code pane and drafts.
 
 (() => {
   const { S, call, invoke, esc, toast, $ } = window.SB;
-  const R = new Map(); // review id -> { cur, anchor, active, pending: Map(thread -> text), diff: Map(step -> view), busy: Set }
-  // Your place in each review survives a restart: the step, the active thread, Step or All.
+  const R = new Map(); // review id -> { cur, anchor, term (the Claude pane), diff: Map(step -> view) }
+  // Your place in each review survives a restart: the step, Guide or Files, the file.
   const placeKey = (id) => `sb.review.place.${id}`;
   const loadPlace = (id) => { try { return JSON.parse(localStorage.getItem(placeKey(id)) || "{}"); } catch (_) { return {}; } };
   const savePlace = (id) => {
     const l = R.get(id);
     if (!l) return;
-    try { localStorage.setItem(placeKey(id), JSON.stringify({ cur: l.cur, active: l.active, all: l.all, mode: l.mode, file: l.file, viewed: [...l.viewed], vhead: l.vhead })); } catch (_) {}
+    try { localStorage.setItem(placeKey(id), JSON.stringify({ cur: l.cur, mode: l.mode, file: l.file, viewed: [...l.viewed], vhead: l.vhead })); } catch (_) {}
   };
   const local = (id) => {
     if (!R.has(id)) {
       const p = loadPlace(id);
-      R.set(id, { cur: p.cur || 0, anchor: null, active: p.active || null, all: !!p.all, pending: new Map(), diff: new Map(), busy: new Set(), loading: new Set(),
+      R.set(id, { cur: p.cur || 0, anchor: null, term: null, diff: new Map(), loading: new Set(),
         // Guide shows the steps; Files shows every changed file, like GitHub's "Files changed".
         full: new Map(), shown: new Map(),
         mode: p.mode === "files" ? "files" : "guide", file: p.file || null, files: null, viewed: new Set(p.viewed || []), vhead: p.vhead || null });
@@ -44,23 +44,25 @@
     const r = S.reviews.get(id);
     if (!r) return;
     const l = local(id);
+    // The live terminal can sit in the old markup: take it out first.
+    window.SB.parkLive();
     view().innerHTML = `
       <div class="rhead" id="rhead"></div>
       <div class="rcols">
         <div class="col"><ol class="steps" id="rsteps"></ol></div>
         <div class="col center" id="rcenter"><div class="guide" id="rguide"></div><div id="rdiff"></div></div>
         <div class="col">
-          <div class="tbar"><div class="seg" id="rscope"><button type="button" data-v="step">Step</button><button type="button" data-v="all">All</button></div><span class="tcount" id="rtcount"></span></div>
-          <div class="threads" id="rthreads"></div>
-          <div class="anchorchip" id="ranchor"></div>
-          <form class="ask" id="rask"><label for="rq" hidden>Question</label><textarea id="rq"></textarea><button class="btn primary" type="submit">Ask</button></form>
+          <div class="tbar"><span class="tlabel">Claude</span><button class="btn small" type="button" id="rstep" title="Type the current step into Claude's prompt">Send step</button></div>
+          <div class="askhost" id="rterm"><div class="askwait" id="raskwait"></div></div>
           <div class="drafts" id="rdrafts"></div>
         </div>
       </div>
       <div class="finish" id="rfinish" hidden></div>`;
-    $("#rask").addEventListener("submit", (e) => { e.preventDefault(); ask(id); });
-    $("#rq").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(id); } });
+    $("#rstep").onclick = () => sendStep(id);
+    $("#raskwait").onclick = (e) => { if (e.target.closest("[data-show]")) showTerm(id); };
+    l.term = null;
     update(r, true);
+    openTerm(id);
   }
 
   function update(r, fresh) {
@@ -79,7 +81,8 @@
       drawSteps(r);
       drawGuide(r);
     }
-    drawThreads(r);
+    if (!l.term && !l.opening && r.status === "ready") openTerm(r.id);
+    drawTermWait(r);
     drawDrafts(r);
     const key = diffKey(r);
     if (key && !l.diff.has(key)) loadDiff(r.id);
@@ -118,7 +121,6 @@
     l.anchor = null;
     l.compose = null;
     l.placing = null;
-    l.active = null;
     savePlace(id);
     update(S.reviews.get(id));
   }
@@ -132,7 +134,6 @@
     l.file = f.path;
     l.anchor = null;
     l.compose = null;
-    l.active = null;
     savePlace(id);
     update(S.reviews.get(id));
     $(`#rsteps [data-f="${CSS.escape(f.path)}"]`)?.scrollIntoView({ block: "nearest" });
@@ -400,10 +401,9 @@
       const path = td.dataset.side === "old" ? (sec.old_path || sec.path) : sec.path;
       const same = l.anchor && l.anchor.path === path && l.anchor.line === line && l.anchor.side === td.dataset.side;
       l.anchor = same ? null : { path, side: td.dataset.side, line, text: td.nextElementSibling.textContent.slice(1), head: d.head || "" };
-      l.active = null;
       drawDiff(r);
-      drawThreads(r);
-      $("#rq").focus();
+      // The line goes into Claude's prompt, for a question about it.
+      if (l.anchor) typeInto(r.id, `${path}:${line}${td.dataset.side === "old" ? " (old side)" : ""} \`${l.anchor.text.trim()}\` `);
     };
     const first = $("#rdiff tr.focus") || $("#rdiff tr.add, #rdiff tr.del");
     if (first && !l.scrolled?.has(key)) {
@@ -572,78 +572,6 @@
     });
   }
 
-  function drawThreads(r) {
-    const l = local(r.id);
-    const s = steps(r)[l.cur];
-    if (!s) { $("#rthreads").innerHTML = ""; return; }
-    const all = l.all;
-    const mine = all ? r.threads : l.mode === "files" ? r.threads.filter((t) => t.path && (t.path === l.file || t.path === curFile(l)?.old_path)) : r.threads.filter((t) => t.step === s.id);
-    const stepIndex = (sid) => steps(r).findIndex((x) => x.id === sid);
-    document.querySelectorAll("#rscope button").forEach((b) => b.setAttribute("aria-pressed", String((b.dataset.v === "all") === all)));
-    const one = $('#rscope [data-v="step"]');
-    if (one) one.textContent = l.mode === "files" ? "File" : "Step";
-    $("#rtcount").textContent = r.threads.length ? `${r.threads.length} in review` : "";
-    // Keep the scroll place; stay at the bottom when you were at the bottom.
-    const box = $("#rthreads");
-    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-    const top = box.scrollTop;
-    box.innerHTML = mine.map((t) => {
-      const si = stepIndex(t.step);
-      const stepName = si >= 0 ? `Step ${si + 1}` : "Old step";
-      const at = t.line ? `${(t.path || "").split("/").pop()}:${t.line}${t.side === "old" ? " (old)" : ""}` : "";
-      const where = all ? [stepName, at].filter(Boolean).join(" · ") : at || stepName;
-      const busy = t.busy || l.busy.has(t.id);
-      const msgs = t.messages.map((m, i) => {
-        if (m.me) return `<div class="msg me">${esc(m.text)}</div>`;
-        const lastAnswer = i === t.messages.length - 1 && !busy;
-        const acts = lastAnswer ? `<div class="macts"><button data-pin="${esc(t.id)}">Pin</button><button data-draft="${esc(t.id)}">Draft</button></div>` : "";
-        return `<div class="msg md">${md(m.text)}${acts}</div>`;
-      }).join("");
-      const text = l.pending.get(t.id);
-      const pending = busy ? (text ? `<div class="msg md wait">${md(text)}</div>` : `<div class="msg wait">…</div>`) : "";
-      return `<div class="thread${l.active === t.id ? " active" : ""}" data-t="${esc(t.id)}">
-        <div class="anchor" title="${esc(t.path || "")}">${esc(where)}${t.removed ? '<span class="gone">line removed</span>' : ""}</div>${msgs}${pending}</div>`;
-    }).join("");
-    box.scrollTop = atBottom ? box.scrollHeight : top;
-    const anchorText = l.active ? "" : l.anchor ? `→ ${l.anchor.path.split("/").pop()}:${l.anchor.line}` : "";
-    $("#ranchor").textContent = anchorText;
-    $("#rthreads").onclick = async (e) => {
-      const b = e.target.closest("button");
-      if (b?.dataset.pin || b?.dataset.draft) {
-        e.stopPropagation();
-        const t = b.dataset.pin || b.dataset.draft;
-        b.disabled = true;
-        b.textContent = "…";
-        await call(b.dataset.pin ? "review_pin" : "review_draft", { id: r.id, thread: t }).catch(() => {});
-        return;
-      }
-      const th = e.target.closest(".thread");
-      if (!th) return;
-      const t = r.threads.find((x) => x.id === th.dataset.t);
-      const si = t ? stepIndex(t.step) : -1;
-      if (l.mode !== "files" && si >= 0 && si !== l.cur) {
-        // A thread of another step: go there, with the thread active.
-        go(r.id, si);
-        l.active = t.id;
-        savePlace(r.id);
-        drawThreads(r);
-        $("#rq").focus();
-        return;
-      }
-      l.active = l.active === th.dataset.t ? null : th.dataset.t;
-      savePlace(r.id);
-      drawThreads(r);
-      if (l.active) $("#rq").focus();
-    };
-    $("#rscope").onclick = (e) => {
-      const b = e.target.closest("button");
-      if (!b) return;
-      l.all = b.dataset.v === "all";
-      savePlace(r.id);
-      drawThreads(r);
-    };
-  }
-
   const EVENT_NAME = { COMMENT: "Comment", APPROVE: "Approve", REQUEST_CHANGES: "Request changes" };
 
   function drawDrafts(r) {
@@ -783,43 +711,81 @@
     ta.remove();
   }
 
-  async function ask(id) {
-    const r = S.reviews.get(id);
-    const l = local(id);
-    // In Files, a question belongs to the first step that covers the file.
-    const s = l.mode === "files" ? steps(r).find((x) => x.id === curFile(l)?.steps[0]) || steps(r)[l.cur] : steps(r)[l.cur];
-    const text = $("#rq").value.trim();
-    if (!s || !text) return;
-    const busy = l.active && (l.busy.has(l.active) || r.threads.find((t) => t.id === l.active)?.busy);
-    if (busy) return toast("This thread is still answering. Wait for it, or click the thread to start a new one.");
-    $("#rq").value = "";
-    try {
-      const t = await invoke("review_ask", { id, step: s.id, anchor: l.active ? null : l.anchor, thread: l.active, text });
-      l.active = t;
-      l.anchor = null;
-      savePlace(id);
-      l.busy.add(t);
-      l.pending.set(t, "");
-      const fresh = await invoke("review_view", { id });
-      S.reviews.set(id, fresh);
-      window.SBReview.update(fresh);
-    } catch (e) {
-      $("#rq").value = text;
-      toast(e);
-    }
+  // The step that the Claude pane hears about. In Files, the first step that covers the file.
+  function curStep(r, l) {
+    return l.mode === "files" ? steps(r).find((x) => x.id === curFile(l)?.steps[0]) || steps(r)[l.cur] : steps(r)[l.cur];
   }
 
-  function stream({ review, thread, delta }) {
-    const l = local(review);
-    l.pending.set(thread, (l.pending.get(thread) || "") + delta);
-    if (S.tab !== review) return;
-    const el = document.querySelector(`.thread[data-t="${CSS.escape(thread)}"] .msg.wait`);
-    if (!el) return;
-    const box = $("#rthreads");
-    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-    el.classList.add("md");
-    el.innerHTML = md(l.pending.get(thread));
-    if (atBottom) box.scrollTop = box.scrollHeight;
+  // Finds the review's Claude Code pane, or starts it when the guide is ready. The
+  // pane forks the guide session, so it knows the review (SPEC 11.5).
+  async function openTerm(id) {
+    const r = S.reviews.get(id);
+    const l = local(id);
+    if (!r || l.opening) return;
+    l.opening = true;
+    const ready = r.status === "ready" && steps(r).length > 0;
+    try {
+      const pane = await invoke("review_term", { id, step: curStep(r, l)?.id ?? null, start: ready });
+      if (pane) {
+        l.term = pane;
+        if (S.tab === id) await showTerm(id);
+      }
+    } catch (e) {
+      l.termError = String(e);
+    }
+    l.opening = false;
+    if (S.tab === id) drawTermWait(S.reviews.get(id));
+  }
+
+  async function showTerm(id) {
+    const l = local(id);
+    if (!l.term || S.tab !== id || !$("#rterm")) return;
+    if (!window.SB.paneById(l.term)) await window.SB.refreshPanes();
+    // The tab can change during the wait: take the host only now.
+    const host = $("#rterm");
+    if (S.tab !== id || !host) return;
+    // The pane is gone, for example closed on the board: start a new one.
+    if (!window.SB.paneById(l.term)) { l.term = null; return openTerm(id); }
+    await window.SB.expand(l.term, host);
+    drawTermWait(S.reviews.get(id));
+  }
+
+  function drawTermWait(r) {
+    const el = $("#raskwait");
+    if (!el || !r) return;
+    const l = local(r.id);
+    const shown = l.term && S.live === l.term && S.termHost === r.id;
+    el.hidden = !!shown;
+    el.innerHTML = l.term ? `<button class="btn small" data-show>Show Claude</button>`
+      : l.termError ? esc(l.termError)
+      : r.status === "ready" ? "Starting Claude…" : "Claude opens here when the guide is ready.";
+  }
+
+  // Types text into Claude's prompt, without Enter. The text comes from the PR, so
+  // control characters go, and it goes in as one paste. Not while Claude asks
+  // something: a "1" in the text would pick an answer.
+  async function typeInto(id, text) {
+    const l = local(id);
+    if (!l.term) return toast("Claude is not open yet.");
+    const p = window.SB.paneById(l.term);
+    if (p && (p.permit || p.trust || p.lamp === "needs")) return toast("Claude is asking you something. Answer it first.");
+    if (p && p.lamp === "ended") return toast("Claude has ended. Use Resume on its title bar.");
+    if (S.live !== l.term) await showTerm(id);
+    if (S.tab !== id) return;
+    const clean = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+    await invoke("pane_input", { id: l.term, data: `\x1b[200~${clean}\x1b[201~`, binary: false }).catch((e) => toast(e));
+    window.SB.term.focus();
+  }
+
+  async function sendStep(id) {
+    const r = S.reviews.get(id);
+    const s = curStep(r, local(id));
+    if (!s) return;
+    try {
+      typeInto(id, (await invoke("review_step_note", { id, step: s.id })) + " ");
+    } catch (e) {
+      toast(e);
+    }
   }
 
   function go(id, i) {
@@ -827,7 +793,6 @@
     const l = local(id);
     l.cur = Math.max(0, Math.min(steps(r).length - 1, i));
     l.anchor = null;
-    l.active = null;
     savePlace(id);
     update(r);
     $(`#rsteps [data-i="${l.cur}"]`)?.scrollIntoView({ block: "nearest" });
@@ -851,7 +816,6 @@
     else if (e.key === "j") files ? goFile(id, fileIndex(l) + 1) : go(id, l.cur + 1);
     else if (e.key === "k") files ? goFile(id, fileIndex(l) - 1) : go(id, l.cur - 1);
     else if (e.key === "n") files ? nextFile(id) : next(id);
-    else if (e.key === "d" && l.active) call("review_draft", { id, thread: l.active });
     else return;
     e.preventDefault();
   });
@@ -868,10 +832,9 @@
         l.head = r.head;
         l.guideLen = JSON.stringify(r.guide || "").length;
       }
-      for (const t of r.threads) if (!t.busy) { l.busy.delete(t.id); l.pending.delete(t.id); }
       update(r);
     },
-    stream,
+    termWait: (id) => drawTermWait(S.reviews.get(id)),
     // For the window checks only.
     _test: { items, reveal, STEP },
   };

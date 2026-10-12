@@ -148,6 +148,8 @@ commands! {
     review_post(id: String, event: String, summary: String, token: String) -> String => |h| h.review_post(&id, &event, &summary, &token);
     review_update(id: String) -> () => |h| h.review_update(&id);
     review_round(id: String) -> String => |h| h.review_round(&id);
+    review_term(id: String, step: Option<String>, start: bool) -> Option<String> => |h| h.review_term(&id, step.as_deref(), start);
+    review_step_note(id: String, step: String) -> String => |h| h.review_step_note(&id, &step);
     review_retry(id: String) -> () => |h| h.review_retry(&id);
     review_close(id: String) -> () => |h| h.review_close(&id);
     review_nvim(id: String, path: String, line: u32) -> String => |h| h.review_nvim(&id, &path, line);
@@ -293,6 +295,8 @@ fn main() {
             review_post,
             review_update,
             review_round,
+            review_term,
+            review_step_note,
             review_retry,
             review_close,
             review_nvim,

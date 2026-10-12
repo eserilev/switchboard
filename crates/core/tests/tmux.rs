@@ -148,6 +148,17 @@ fn a_paused_pane_runs_and_capture_reads_it() {
 }
 
 #[test]
+fn a_line_break_in_an_argument_starts_no_second_command() {
+    let s = server("newline");
+    let mark = s.dir.join("ran");
+    let evil = format!("x\nrun-shell 'touch {}' #", mark.display());
+    assert!(s.tmux.new_pane(&s.dir, &["sh", "-c", "sleep 5", &evil], &[]).is_err());
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!mark.exists());
+    assert!(!s.tmux.panes().unwrap().is_empty());
+}
+
+#[test]
 fn bad_command_returns_the_tmux_error() {
     let s = server("error");
     let err = s.tmux.capture("%999", "-").unwrap_err();

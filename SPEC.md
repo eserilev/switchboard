@@ -290,7 +290,7 @@ Opening a layout starts all its panes. Panes that already run are not started ag
 |---|---|
 | Steps | The guide in reading order. Each step: title, path and lines, a check mark, the thread count, a stale mark (11.7). |
 | Guide + diff | The current step: what the code does, what to check, pins, context links. Under it, the diff at the PR head: only the parts of each file that the step's ranges name, with 6 rows of context. A bar counts the other changed lines of the file, links the steps that cover them, and opens the whole file in the Files view. Each gap in a diff has buttons that show 20 hidden lines above or below, or the whole gap. The hidden lines come from `all_rows`: the proved numbering with no cut. |
-| Threads | The threads of the current step. Below them, the drafts. |
+| Claude | A Claude Code pane for questions (11.5). Below it, the drafts. |
 
 A review has its own tab. More than one review can be open, one tab for each PR.
 The review header shows the state of the guide session: fetching, writing, updating, ready or error.
@@ -352,7 +352,22 @@ Validation:
 - On a failed check, the tool returns an error with the reason. The agent can call again.
 - If the turn ends with no `guide_set_steps` call, the review tab shows the error and offers a retry.
 
-### 11.5 Threads
+### 11.5 Claude pane
+
+The question column is a real Claude Code pane, as on the board. It replaces the threads below in the window.
+
+1. The pane starts when the guide is ready: interactive `claude` in the review worktree, with `--resume <guide> --fork-session`, so it has the context of the review. The guide session file does not change (S3).
+2. Its first message names the current step and asks Claude to wait for a question.
+3. It gets the spec clones with `--add-dir` and the pane hooks. It runs on the connection of the guide session, because the session file is in that connection's folder. It has no `sb` MCP tools, so it cannot change the guide.
+4. One pane for each review worktree and PR number, titled `Ask #<number>`. It shows as a tile on the board too. The app finds it again by its title and worktree. After a rename, the app starts a new one. An ended pane with no session id is not used again.
+5. With `--fork-session`, the hooks report the new session id (checked on 2026-10-11). A later resume of the pane uses that id, so it never writes into the guide session. A resume does not pass `--add-dir` again.
+6. The live terminal moves into the column while the review tab shows. Another tab takes it back.
+7. "Send step" types one line with the current step into the prompt, without Enter. A click on a line number types the path, the line and its text. The text goes in as one bracketed paste, with control characters changed to spaces. While the pane asks for a permission or trust, nothing is typed: a "1" in the text would pick an answer.
+8. The guide agent writes the step fields, and the first message goes into a tmux command. tmux reads one command per line, and its quotes do not hide a line break. So the step line has no control characters, and the tmux client refuses any command with a line break.
+
+The threads below still exist in the store and the backend. The window no longer starts them.
+
+### 11.5.1 Threads (old)
 
 1. Click a line number in the diff to anchor a question to it. An anchor is the full path, the side (old or new), the line number, and the text of the line. Deleted lines take an anchor too.
 2. With no line, the question anchors to the step.
@@ -740,6 +755,8 @@ Where the build differs from the text above:
 - The guide session has no board tile. Its state shows in the review header.
 - A connection with no `dir` uses your own `~/.claude` and its login.
 - A thread fork and the pin and draft summaries use the active connection.
+- A review run stops at once when Claude reports that the `sb` MCP server failed, and before the start when the `sb` binary is missing. A missing `sb` once made the agent run on without its guide tools.
+- Review runs get each spec clone with `--add-dir`.
 - `--allowedTools`, `--disallowedTools` and `--mcp-config` take lists. The prompt of a `claude -p` run goes first, or one of them takes it.
 - Every `nvim --server` call times out after 3 s. An nvim that waits at "Press ENTER" never answers.
 - tmux `%pane:off` stops tmux from reading the pane. Tiles use `pause`.

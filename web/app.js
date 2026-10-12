@@ -18,6 +18,8 @@ const S = {
   live: null,
   focus: null,
   tab: "board",
+  // The review tab whose Claude column holds the live terminal.
+  termHost: null,
   reviews: new Map(),
   conn: { active: "default", list: [] },
   settings: { nvim: true },
@@ -43,6 +45,12 @@ const call = (cmd, args) => invoke(cmd, args).catch((e) => { log("warn", cmd, "f
 
 function setTab(tab) {
   if (tab !== "board") window.SB?.term?.blur();
+  // The terminal lives in a review's Claude column while that review shows.
+  if (S.termHost && S.termHost !== tab) {
+    S.termHost = null;
+    parkLive();
+    if (S.live) collapse();
+  }
   S.tab = tab;
   $("#view-board").hidden = tab !== "board";
   $("#view-review").hidden = tab === "board";
@@ -287,7 +295,7 @@ async function flushKeys() {
   flushKeys();
 }
 const send = (data, binary) => {
-  if (!S.live || S.tab !== "board") return;
+  if (!S.live || (S.tab !== "board" && S.termHost !== S.tab)) return;
   if (binary) {
     // Mouse reports are bytes, not text: they go on their own, after the keys.
     const id = S.live;
@@ -315,17 +323,34 @@ listen("pane_output", (e) => {
 });
 
 function fitLive() {
-  if (!S.live || $("#live").hidden) return;
+  if (!S.live || $("#live").hidden || !$("#term").offsetParent) return;
   fit.fit();
   invoke("pane_resize", { cols: term.cols, rows: term.rows }).catch(() => {});
 }
 let fitTimer;
 new ResizeObserver(() => { clearTimeout(fitTimer); fitTimer = setTimeout(fitLive, 60); }).observe($("#live"));
 
-async function expand(id) {
-  log("info", "expand", id);
+// Puts the live section back on the board.
+function parkLive() {
+  const live = $("#live");
+  if (live.parentElement !== $("#view-board")) $("#view-board").prepend(live);
+}
+
+// Shows a pane in the live terminal. With `host`, the terminal moves into that
+// element of the current review tab; without it, the board shows.
+async function expand(id, host) {
+  log("info", "expand", id, host ? "in review" : "");
   if (!paneById(id)) return;
-  if (S.tab !== "board") setTab("board");
+  if (host) {
+    // A host of a tab that no longer shows: do nothing.
+    if (S.tab === "board" || !host.isConnected) return;
+    S.termHost = S.tab;
+    if ($("#live").parentElement !== host) host.appendChild($("#live"));
+  } else {
+    parkLive();
+    S.termHost = null;
+    if (S.tab !== "board") setTab("board");
+  }
   S.live = id;
   S.focus = id;
   drawn = false;
@@ -358,6 +383,7 @@ function collapse() {
   $("#live").hidden = true;
   invoke("pane_collapse").catch(() => {});
   drawBoardNow();
+  if (S.termHost) window.SBReview?.termWait(S.termHost);
   if (was) $(`.pane[data-id="${CSS.escape(was)}"]`)?.focus();
 }
 
@@ -649,9 +675,8 @@ listen("review_closed", (e) => {
   if (S.tab === e.payload) setTab("board");
   else drawTabs();
 });
-listen("review_stream", (e) => window.SBReview?.stream(e.payload));
 
-window.SB = { S, invoke, call, listen, esc, toast, setTab, openNvim, expand, refreshPanes, term, $ };
+window.SB = { S, invoke, call, listen, esc, toast, setTab, openNvim, expand, collapse, parkLive, paneById, refreshPanes, term, $ };
 
 (async function start() {
   try {

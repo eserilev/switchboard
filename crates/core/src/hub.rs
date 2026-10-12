@@ -64,6 +64,21 @@ pub struct PermitView {
     pub summary: String,
 }
 
+/// How a claude pane starts.
+#[derive(Default)]
+pub(crate) struct Start {
+    /// A Claude session id to resume.
+    pub resume: Option<String>,
+    /// Resume as a new session, so the old one stays as it is.
+    pub fork: bool,
+    /// More folders that the agent can read.
+    pub dirs: Vec<String>,
+    /// The first message.
+    pub first: Option<String>,
+    /// The connection. With none, the active one.
+    pub connection: Option<String>,
+}
+
 pub(crate) struct Pane {
     pub row: PaneRow,
     pub tmux: Option<String>,
@@ -484,23 +499,24 @@ impl Hub {
                     .find(|v| v.id == id)
                     .ok_or("nvim pane is gone".into())
             }
-            "claude" | "shell" => self.spawn(&req.run, &name, &tree, req.title, None),
+            "claude" | "shell" => self.spawn(&req.run, &name, &tree, req.title, Start::default()),
             other => Err(format!("unknown run {other}")),
         }
     }
 
-    /// Starts a pane. `resume` is a Claude session id.
-    fn spawn(
+    /// Starts a pane.
+    pub(crate) fn spawn(
         &self,
         kind: &str,
         repo: &str,
         tree: &Path,
         title: Option<String>,
-        resume: Option<&str>,
+        start: Start,
     ) -> Res<PaneView> {
         let id = self.store.lock().unwrap().next_id("p").map_err(e)?;
-        let connection = (kind == "claude").then(|| self.active_connection());
-        let (argv, env) = self.command(kind, &id, tree, connection.as_deref(), resume)?;
+        let connection = (kind == "claude")
+            .then(|| start.connection.clone().unwrap_or_else(|| self.active_connection()));
+        let (argv, env) = self.command(kind, &id, tree, connection.as_deref(), &start)?;
         let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
         let env_ref: Vec<(&str, &str)> =
             env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
@@ -523,7 +539,8 @@ impl Hub {
             tree: tree.to_string_lossy().into_owned(),
             title,
             connection,
-            session: resume.map(str::to_owned),
+            // A fork gets a new session id. The hooks report it.
+            session: start.resume.clone().filter(|_| !start.fork),
             lamp: if kind == "claude" {
                 Lamp::Idle
             } else {
@@ -550,7 +567,7 @@ impl Hub {
         id: &str,
         tree: &Path,
         connection: Option<&str>,
-        resume: Option<&str>,
+        start: &Start,
     ) -> Res<(Vec<String>, Env)> {
         let mut env = vec![
             ("SB_PANE".to_owned(), id.to_owned()),
@@ -570,13 +587,18 @@ impl Hub {
             &self.config(),
             connection.unwrap_or(connections::DEFAULT),
         )?);
-        let mut argv = vec![
-            "claude".to_owned(),
-            "--settings".to_owned(),
-            settings.to_string_lossy().into_owned(),
-        ];
-        if let Some(s) = resume {
-            argv.extend(["--resume".into(), s.into()]);
+        // The first message goes first: `--add-dir` takes a list.
+        let mut argv = vec!["claude".to_owned()];
+        argv.extend(start.first.clone());
+        argv.extend(["--settings".to_owned(), settings.to_string_lossy().into_owned()]);
+        if let Some(s) = &start.resume {
+            argv.extend(["--resume".into(), s.clone()]);
+            if start.fork {
+                argv.push("--fork-session".into());
+            }
+        }
+        for d in &start.dirs {
+            argv.extend(["--add-dir".into(), d.clone()]);
         }
         Ok((argv, env))
     }
@@ -911,7 +933,11 @@ impl Hub {
     ) -> Res<()> {
         // A request of the old process is gone: its buttons go too.
         self.answer_permits(id, None);
-        let (argv, env) = self.command("claude", id, tree, Some(connection), Some(session))?;
+        let start = Start {
+            resume: Some(session.to_owned()),
+            ..Start::default()
+        };
+        let (argv, env) = self.command("claude", id, tree, Some(connection), &start)?;
         let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
         let env_ref: Vec<(&str, &str)> =
             env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
@@ -1220,7 +1246,7 @@ impl Hub {
                     repo,
                     Path::new(tree),
                     item["title"].as_str().map(str::to_owned),
-                    None,
+                    Start::default(),
                 )?;
             }
         }

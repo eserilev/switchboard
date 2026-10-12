@@ -139,8 +139,13 @@
   docKey("j");
   await wait(300);
   check("j goes to step 2", $('#rsteps [aria-current="step"]')?.dataset.i === "1");
-  check("answers render markdown", !!$("#rthreads .msg.md pre code") && !!$("#rthreads .msg.md strong") && $$("#rthreads .msg.md li").length === 2);
-  check("HTML in an answer is text, not code", !window.__xss && $("#rthreads").textContent.includes("<script>"));
+  // The Claude column: a real Claude Code pane that forks the guide session.
+  {
+    const first = called("review_term")[0]?.[1];
+    check("the review starts its Claude pane on the current step", first && first.id === "r1" && first.start === true && first.step === "s1", JSON.stringify(first));
+    check("the live terminal moves into the Claude column", !!$("#rterm #live") && !$("#live").hidden && window.SB.S.live === "p8" && window.SB.S.termHost === "r1");
+    check("the place is saved for a restart", JSON.parse(localStorage.getItem("sb.review.place.r1") || "{}").cur === 1);
+  }
   check("guide text renders markdown", !!$("#rguide .what strong") && !!$("#rguide .check code"));
   check("pin shows in the guide", $("#rguide").textContent.includes("Use safe_sub, not -."));
   check("diff renders with focus lines", $$("#rdiff tr.focus").length === 3, $$("#rdiff tr.focus").length);
@@ -148,27 +153,60 @@
   check("step shows its first range", $('#rsteps [data-i="1"] .loc')?.textContent === "beacon_node/gloas.rs:11-12 +1", $('#rsteps [data-i="1"] .loc')?.textContent);
   check("removed line has the old number", [...$$("#rdiff tr.del td.ln")].map((t) => t.textContent).join() === "11");
   check("thread anchor dot on line 11", !!$('#rdiff tr.anchored td.ln[data-ln="11"][data-side="new"]'));
-  check("thread renders with pin and draft actions", $$("#rthreads .thread").length === 1 && !!$('#rthreads [data-pin="t1"]'));
+  window.__calls.length = 0;
   $('#rdiff td.ln[data-ln="12"]').click();
-  await wait(50);
-  check("click a line sets the anchor", $("#ranchor").textContent.includes("gloas.rs:12"));
-  $("#rq").value = "is 12 needed?";
-  $("#rask").dispatchEvent(new Event("submit", { cancelable: true }));
-  await wait(200);
-  const ask = called("review_ask")[0]?.[1];
-  check("ask sends the anchor", ask && ask.step === "s2" && ask.anchor?.head === "ac92ae9aaaa" && ask.anchor?.line === 12 && ask.anchor.side === "new" && ask.thread === null && ask.anchor.text.includes("let b = 2"), JSON.stringify(ask));
-  window.__emit("review_stream", { review: "r1", thread: "t2", delta: "partial" });
-  // A long answer: the thread list scrolls inside the column.
+  await wait(100);
   {
-    const long = Object.assign({}, window.__data.reviews[0]);
-    long.threads = [Object.assign({}, long.threads[0], { messages: [{ id: 1, me: true, text: "long?" }, { id: 2, me: false, text: Array.from({ length: 120 }, (_, i) => `Line ${i} of a long answer.`).join("\n\n") }] })];
-    window.__emit("review", long);
+    const typed = called("pane_input").map((c) => c[1]);
+    check("a click on a line number types the line into Claude's prompt", typed.some((t) => t.id === "p8" && t.data === "\x1b[200~beacon_node/gloas.rs:12 `let b = 2;` \x1b[201~"), JSON.stringify(typed));
+  }
+  window.__calls.length = 0;
+  $("#rstep").click();
+  await wait(100);
+  {
+    const typed = called("pane_input").map((c) => c[1]);
+    check("Send step types the step into Claude's prompt, without Enter", called("review_step_note")[0]?.[1].step === "s2" && typed.some((t) => t.id === "p8" && t.data.startsWith("\x1b[200~I am on step s2") && !/[\r\n]/.test(t.data)), JSON.stringify(typed));
+  }
+  // No typing while Claude asks for a permission: a "1" in the text would answer it.
+  {
+    const p8 = window.SB.paneById("p8");
+    p8.permit = { id: "p8-1", summary: "Bash: ls" };
+    window.__calls.length = 0;
+    $('#rdiff td.ln[data-ln="11"]').click();
     await wait(100);
-    const box = $("#rthreads");
-    const col = box.parentElement.getBoundingClientRect();
-    check("long thread list scrolls inside its column", box.scrollHeight > box.clientHeight && box.getBoundingClientRect().bottom <= col.bottom + 1, `${box.scrollHeight} ${box.clientHeight} ${box.getBoundingClientRect().bottom} ${col.bottom} text=${box.textContent.length} tab=${window.SB.S.tab} step=${document.querySelector("#rsteps [aria-current=step]")?.dataset.i}`);
-    check("the ask box stays on screen", $("#rq").getBoundingClientRect().bottom <= window.innerHeight + 1, `${$("#rq").getBoundingClientRect().bottom} ${window.innerHeight}`);
-    // A long guide: the steps list scrolls too.
+    check("no typing into a permission prompt", !called("pane_input").length);
+    p8.permit = null;
+  }
+  // A tab switch while the pane list loads: the terminal stays off the hidden review.
+  {
+    const keep = window.SB.refreshPanes;
+    window.SB.refreshPanes = async () => { await wait(150); return keep(); };
+    $("#livetitle [data-collapse]").click();
+    await wait(50);
+    window.SB.S.panes = window.SB.S.panes.filter((x) => x.id !== "p8");
+    $("#raskwait [data-show]").click();
+    window.SB.setTab("board");
+    await wait(400);
+    check("a tab switch during the load keeps the terminal on the board", window.SB.S.termHost === null && $("#live").parentElement === $("#view-board"), `${window.SB.S.termHost} ${$("#live").parentElement?.id}`);
+    window.SB.refreshPanes = keep;
+    await keep();
+    window.SB.setTab("r1");
+    await wait(300);
+  }
+  window.SB.setTab("board");
+  await wait(100);
+  check("the board takes the terminal back", $("#live").parentElement === $("#view-board") && $("#live").hidden && window.SB.S.live === null && window.SB.S.termHost === null);
+  window.SB.setTab("r1");
+  await wait(200);
+  check("the review shows its Claude pane again", !!$("#rterm #live") && !$("#live").hidden && window.SB.S.live === "p8" && called("review_term").every((c) => c[1].id === "r1"));
+  $("#livetitle [data-collapse]").click();
+  await wait(100);
+  check("a collapsed Claude pane leaves a Show button", $("#live").hidden && !!$("#raskwait [data-show]") && !$("#raskwait").hidden);
+  $("#raskwait [data-show]").click();
+  await wait(200);
+  check("Show brings the pane back", !$("#live").hidden && window.SB.S.live === "p8");
+  // A long guide: the steps list scrolls inside its column.
+  {
     const many = Object.assign({}, window.__data.reviews[0]);
     many.guide = { steps: Array.from({ length: 60 }, (_, i) => ({ id: `s${i + 1}`, title: `Step number ${i + 1} with a title`, ranges: [] })) };
     window.__emit("review", many);
@@ -178,21 +216,6 @@
     window.__emit("review", window.__data.reviews[0]);
     await wait(100);
   }
-  // Step / All: the thread of step 2 shows from step 1 under All, and a click jumps to it.
-  docKey("k");
-  await wait(100);
-  check("Step view hides threads of other steps", !$$("#rthreads .thread").length);
-  $('#rscope [data-v="all"]').click();
-  await wait(50);
-  check("All shows every thread with its step", $$("#rthreads .thread").length === 1 && $("#rthreads .anchor").textContent.startsWith("Step 2"), $("#rthreads").textContent.slice(0, 80));
-  $("#rthreads .thread").click();
-  await wait(100);
-  check("a click jumps to the thread's step and makes it active", $('#rsteps [aria-current="step"]')?.dataset.i === "1" && $("#rthreads .thread.active"));
-  check("the place is saved for a restart", JSON.parse(localStorage.getItem("sb.review.place.r1") || "{}").cur === 1);
-  $('#rscope [data-v="step"]').click();
-  await wait(50);
-  $("#rthreads .thread.active")?.click();
-  await wait(50);
   check("drafts list with copy", $("#rdrafts").textContent.includes("nit: use safe_sub") && !!$("#rdrafts [data-copy]"));
   // Diff colors come from the row kind, and the step bar does not hide them.
   {
@@ -228,9 +251,6 @@
   const post = called("review_post")[0]?.[1];
   check("submit sends the type, summary and preview token", post && post.event === "APPROVE" && post.summary === "LGTM" && post.token === "tok1", JSON.stringify(post));
   check("the dialog closes after the send", $("#rfinish").hidden);
-  $(".thread[data-t='t1']").click();
-  await wait(50);
-  check("click a thread makes it active", $(".thread[data-t='t1']").classList.contains("active") && $("#ranchor").textContent === "");
   docKey("n");
   await wait(100);
   check("n marks the step", called("review_mark").some((c) => c[1].step === "s2" && c[1].checked));
