@@ -670,7 +670,7 @@ impl Hub {
             mcp: Some((&self.sb, id, &sock)),
         };
         let result = review::run(&run, |ev| {
-            if let Stream::Init { session } = ev {
+            if let Stream::Init { session, .. } = ev {
                 if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
                     r.row.guide_session = Some(session.clone());
                 }
@@ -1242,7 +1242,7 @@ impl Hub {
             mcp: Some((&self.sb, id, &sock)),
         };
         let result = review::run(&run, |ev| match ev {
-            Stream::Init { session } if fork => {
+            Stream::Init { session, .. } if fork => {
                 let store = self.store.lock().unwrap();
                 if let Ok(Some(mut t)) = store
                     .threads(id)

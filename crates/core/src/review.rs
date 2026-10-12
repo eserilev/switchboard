@@ -374,6 +374,8 @@ pub fn validate_step(
 pub enum Stream {
     Init {
         session: String,
+        /// MCP servers that failed to start.
+        failed: Vec<String>,
     },
     Delta(String),
     Result {
@@ -387,8 +389,19 @@ pub fn parse_stream(line: &str) -> Option<Stream> {
     let v: Value = serde_json::from_str(line).ok()?;
     match v.get("type")?.as_str()? {
         "system" if v.get("subtype").and_then(Value::as_str) == Some("init") => {
+            let failed = v
+                .get("mcp_servers")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter(|m| m.get("status").and_then(Value::as_str) == Some("failed"))
+                        .filter_map(|m| m.get("name").and_then(Value::as_str).map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
             Some(Stream::Init {
                 session: v.get("session_id")?.as_str()?.to_owned(),
+                failed,
             })
         }
         "stream_event" => {
@@ -477,6 +490,14 @@ pub fn args(run: &Run) -> Vec<String> {
 pub const RUN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
+    if let Some((sb, _, _)) = run.mcp {
+        if !exe_found(sb) {
+            return Err(format!(
+                "The sb helper is missing at {}. Rebuild Switchboard or run the install again.",
+                sb.display()
+            ));
+        }
+    }
     let mut child = Command::new("claude")
         .args(args(run))
         .current_dir(run.cwd)
@@ -515,11 +536,18 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
         false
     });
     let mut last = None;
+    let mut mcp_failed = None;
     for line in BufReader::new(out).lines().map_while(Result::ok) {
         if let Some(ev) = parse_stream(&line) {
             match &ev {
-                Stream::Init { session } => {
-                    tracing::info!(target: "sb::claude", pid, %session, ms = t0.elapsed().as_millis() as u64, "claude -p session")
+                Stream::Init { session, failed } => {
+                    tracing::info!(target: "sb::claude", pid, %session, ?failed, ms = t0.elapsed().as_millis() as u64, "claude -p session");
+                    // Without the sb tools the agent cannot write the guide: stop now.
+                    if !failed.is_empty() {
+                        let _ = child.kill();
+                        mcp_failed = Some(failed.join(", "));
+                        break;
+                    }
                 }
                 Stream::Result { error, .. } => {
                     tracing::info!(target: "sb::claude", pid, error, ms = t0.elapsed().as_millis() as u64, "claude -p result")
@@ -540,6 +568,12 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
     if !err.trim().is_empty() {
         tracing::debug!(target: "sb::claude", pid, stderr = %err.trim(), "claude -p stderr");
     }
+    if let Some(names) = mcp_failed {
+        let sb = run.mcp.map(|(sb, _, _)| sb.display().to_string()).unwrap_or_default();
+        return Err(format!(
+            "The MCP server {names} failed to start ({sb}). Rebuild Switchboard or run the install again."
+        ));
+    }
     if killed {
         return Err(format!(
             "claude took longer than {} minutes and was stopped.",
@@ -553,6 +587,16 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
             err.trim()
         )),
     }
+}
+
+/// True when `p` is a file, or a bare name found on `PATH`.
+fn exe_found(p: &Path) -> bool {
+    if p.components().count() > 1 {
+        return p.is_file();
+    }
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).any(|d| d.join(p).is_file()))
+        .unwrap_or(false)
 }
 
 /// Files changed between two heads, for stale steps.
@@ -926,7 +970,15 @@ mod tests {
         assert_eq!(
             parse_stream(r#"{"type":"system","subtype":"init","session_id":"s1"}"#),
             Some(Stream::Init {
-                session: "s1".into()
+                session: "s1".into(),
+                failed: vec![]
+            })
+        );
+        assert_eq!(
+            parse_stream(r#"{"type":"system","subtype":"init","session_id":"s1","mcp_servers":[{"name":"sb","status":"failed","source":"dynamic"},{"name":"x","status":"connected"}]}"#),
+            Some(Stream::Init {
+                session: "s1".into(),
+                failed: vec!["sb".into()]
             })
         );
         assert_eq!(
