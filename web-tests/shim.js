@@ -61,6 +61,7 @@ window.__TAURI__ = {
         }
         case "review_diff": return { head: d.diff.head, sections: d.diff.sections.map((x) => ({ ...x, other: { lines: 4, steps: ["s1"] } })) };
         case "review_term": {
+          if (args.id === "rL") return "p1";
           // The review's Claude pane starts on the first call with start.
           if (args.start && !d.panes.some((x) => x.id === "p8")) d.panes.push(pane({ id: "p8", title: "Ask #10071", tree: "/c/lighthouse-pr10071", lamp: "turn" }));
           return d.panes.some((x) => x.id === "p8") ? "p8" : null;
@@ -71,6 +72,14 @@ window.__TAURI__ = {
         case "nvim_open": case "review_nvim": return "p3";
         case "review_drafts_text": return "beacon_node/gloas.rs:11: nit: use safe_sub";
         case "review_open": return "r1";
+        // A review of the unpushed commits of pane p1.
+        case "review_open_local": {
+          if (!d.reviews.some((x) => x.id === "rL")) d.reviews.push(Object.assign(structuredClone(d.reviews[0]), {
+            id: "rL", kind: "local", pane: args.pane, url: "", number: 0, repo: "lighthouse", title: "2 commits on feat", base: "b0b0b0b0b0b0", head: "ac92ae9aaaa",
+            guide: null, steps: [], threads: [], pins: [], drafts: d.reviews[0].drafts, posted: [], scope_note: "Commits not on origin/unstable.", coverage: null }));
+          return "rL";
+        }
+        case "review_send_agent": return 1;
         // A closed round of PR 999 exists; PR 10071 has none.
         case "review_prior": return args.url.includes("/pull/999") ? { id: "r0", round: 1, head: "abc1234567890", sent: 2 } : null;
         // A first close finds changes; a close with a choice closes.

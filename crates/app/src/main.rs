@@ -131,6 +131,8 @@ commands! {
     reviews() -> Value => |h| Ok(json!(h.reviews()));
     review_open(url: String, round_of: Option<String>) -> String => |h| h.review_open(&url, round_of.as_deref());
     review_prior(url: String) -> Value => |h| h.review_prior(&url).map(|v| json!(v));
+    review_open_local(pane: String) -> String => |h| h.review_open_local(&pane);
+    review_send_agent(id: String, note: String) -> usize => |h| h.review_send_agent(&id, &note);
     review_view(id: String) -> Value => |h| h.review_view(&id).map(|v| json!(v));
     review_diff(id: String, step: String) -> Value => |h| h.review_diff(&id, &step).map(|v| json!(v));
     review_file_rows(id: String, path: String) -> Value => |h| h.review_file_rows(&id, &path).map(|v| json!(v));
@@ -297,6 +299,8 @@ fn main() {
             review_update,
             review_round,
             review_prior,
+            review_open_local,
+            review_send_agent,
             review_term,
             review_step_note,
             review_retry,

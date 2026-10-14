@@ -63,7 +63,8 @@ function drawTabs() {
   const tabs = [`<button class="tab" role="tab" data-tab="board" aria-selected="${S.tab === "board"}">Board</button>`];
   for (const r of S.reviews.values()) {
     const busy = ["fetching", "writing", "updating"].includes(r.status) ? '<i class="busy"></i>' : "";
-    tabs.push(`<button class="tab" role="tab" data-tab="${esc(r.id)}" aria-selected="${S.tab === r.id}">#${esc(r.number)}${r.round > 1 ? ` R${r.round}` : ""}${busy}</button>`);
+    const label = r.kind === "local" ? `${esc(r.repo)} commits` : `#${esc(r.number)}${r.round > 1 ? ` R${r.round}` : ""}`;
+    tabs.push(`<button class="tab" role="tab" data-tab="${esc(r.id)}" aria-selected="${S.tab === r.id}">${label}${busy}</button>`);
   }
   $("#tabs").innerHTML = tabs.join("");
 }
@@ -106,9 +107,10 @@ function meta(p) {
 function tile(p) {
   const nvimBtn = p.kind !== "nvim" && S.settings.nvim ? `<button class="tool" data-nvim>nvim</button>` : "";
   const state = p.lamp === "none" ? p.kind : LABEL[p.lamp] || p.lamp;
+  const reviewBtn = p.kind === "claude" ? `<button class="tool" data-lreview title="Review the commits that are not pushed">review</button>` : "";
   const cls = ["pane", p.unseen && "unseen", S.focus === p.id && "focused", p.id === S.live && "is-live"].filter(Boolean).join(" ");
   return `<div class="${cls}" data-id="${esc(p.id)}" data-lamp="${esc(p.lamp)}" tabindex="0">
-    <div class="ptitle"><span class="name">${esc(paneName(p))}</span><span class="state">${esc(state)}</span>${nvimBtn}<button class="tool x" data-close aria-label="Close">×</button></div>
+    <div class="ptitle"><span class="name">${esc(paneName(p))}</span><span class="state">${esc(state)}</span>${reviewBtn}${nvimBtn}<button class="tool x" data-close aria-label="Close">×</button></div>
     <div class="psum"><span class="meta">${esc(meta(p))}</span><span class="text">${esc(p.summary || "")}</span>${actions(p)}</div>
     <pre class="term-tail">${esc(p.tail.map(strip).join("\n"))}</pre>
   </div>`;
@@ -227,6 +229,7 @@ $("#board").addEventListener("click", (e) => {
   e.stopPropagation();
   if (b.dataset.close !== undefined) return call("pane_close", { id });
   if (b.dataset.nvim !== undefined) return openNvim(paneById(id).tree);
+  if (b.dataset.lreview !== undefined) return openLocalReview(id);
   if (b.dataset.allow) return call("permit_answer", { permit: b.dataset.allow, allow: true });
   if (b.dataset.deny) return call("permit_answer", { permit: b.dataset.deny, allow: false });
   if (b.dataset.trust) return call("trust_answer", { id, yes: b.dataset.trust === "1" });
@@ -393,9 +396,10 @@ function drawLiveTitle() {
   if (!p || renaming) return;
   const state = p.lamp === "none" ? p.kind : LABEL[p.lamp] || p.lamp;
   const nvimBtn = p.kind !== "nvim" && S.settings.nvim ? `<button class="tool" data-nvim>nvim</button>` : "";
+  const reviewBtn = p.kind === "claude" && !S.termHost ? `<button class="tool" data-lreview title="Review the commits that are not pushed">review</button>` : "";
   $("#livetitle").innerHTML = `<span class="name">${esc(paneName(p))}</span><span class="state" style="color:var(--muted)">${esc(state)}</span>
     <span class="psum meta" style="border:0;padding:0;font:500 11px/1 var(--mono);color:var(--muted)">${esc(meta(p))}</span>${actions(p).replace('class="tact"', 'class="tact" style="margin:0"')}
-    ${nvimBtn}<button class="tool" data-collapse aria-label="Collapse">⤡</button>`;
+    ${reviewBtn}${nvimBtn}<button class="tool" data-collapse aria-label="Collapse">⤡</button>`;
 }
 $("#livetitle").addEventListener("click", (e) => {
   const b = e.target.closest("button");
@@ -403,12 +407,24 @@ $("#livetitle").addEventListener("click", (e) => {
   if (!b || !p) return;
   if (b.dataset.collapse !== undefined) return collapse();
   if (b.dataset.nvim !== undefined) return openNvim(p.tree);
+  if (b.dataset.lreview !== undefined) return openLocalReview(p.id);
   if (b.dataset.allow) return call("permit_answer", { permit: b.dataset.allow, allow: true });
   if (b.dataset.deny) return call("permit_answer", { permit: b.dataset.deny, allow: false });
   if (b.dataset.trust) return call("trust_answer", { id: p.id, yes: b.dataset.trust === "1" });
   if (b.dataset.switch !== undefined) return call("connection_resume", { id: p.id });
   if (b.dataset.resume !== undefined) return call("pane_resume", { id: p.id });
 });
+
+// A review of the pane's unpushed commits, in its own tab (SPEC 11.11).
+async function openLocalReview(pane) {
+  try {
+    const id = await invoke("review_open_local", { pane });
+    await refreshReviews();
+    setTab(id);
+  } catch (e) {
+    toast(e);
+  }
+}
 
 async function openNvim(tree, file, line) {
   const id = await call("nvim_open", { tree, file: file ?? null, line: line ?? null });

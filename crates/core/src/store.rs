@@ -63,6 +63,10 @@ const SCHEMA: &[&str] = &[
      ALTER TABLE thread ADD COLUMN before TEXT;
      ALTER TABLE thread ADD COLUMN after TEXT;
      UPDATE draft SET stale = 1 WHERE line IS NOT NULL AND before IS NULL AND after IS NULL;",
+    // Version 8: a review of local commits (SPEC 11.11). `kind` is 'pr' or 'local';
+    // `pane` is the agent pane whose worktree a local review reads.
+    "ALTER TABLE review ADD COLUMN kind TEXT NOT NULL DEFAULT 'pr';
+     ALTER TABLE review ADD COLUMN pane TEXT;",
 ];
 
 pub struct Store {
@@ -107,6 +111,25 @@ pub struct ReviewRow {
     /// Why the scope of a round is not a plain diff, for example after a rebase.
     #[serde(default)]
     pub scope_note: Option<String>,
+    /// `pr`, or `local`: the unpushed commits of an agent's worktree (SPEC 11.11).
+    #[serde(default = "pr_kind")]
+    pub kind: String,
+    /// For `local`: the agent pane.
+    #[serde(default)]
+    pub pane: Option<String>,
+}
+
+pub const LOCAL: &str = "local";
+
+impl ReviewRow {
+    /// A review of local commits. Cleanup never touches its tree: it is the agent's.
+    pub fn is_local(&self) -> bool {
+        self.kind == LOCAL
+    }
+}
+
+fn pr_kind() -> String {
+    "pr".into()
 }
 
 fn first_round() -> u32 {
@@ -353,10 +376,10 @@ impl Store {
 
     pub fn save_review(&self, r: &ReviewRow, opened: u64) -> R<()> {
         self.db.execute(
-            "INSERT INTO review (id, url, repo, number, title, head, base, tree, connection, guide_session, guide, opened, round, since, scope_note)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
-             ON CONFLICT(id) DO UPDATE SET title=?5, head=?6, base=?7, tree=?8, connection=?9, guide_session=?10, guide=?11, round=?13, since=?14, scope_note=?15",
-            params![r.id, r.url, r.repo, r.number as i64, r.title, r.head, r.base, r.tree, r.connection, r.guide_session, r.guide, opened as i64, r.round, r.since, r.scope_note],
+            "INSERT INTO review (id, url, repo, number, title, head, base, tree, connection, guide_session, guide, opened, round, since, scope_note, kind, pane)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+             ON CONFLICT(id) DO UPDATE SET title=?5, head=?6, base=?7, tree=?8, connection=?9, guide_session=?10, guide=?11, round=?13, since=?14, scope_note=?15, pane=?17",
+            params![r.id, r.url, r.repo, r.number as i64, r.title, r.head, r.base, r.tree, r.connection, r.guide_session, r.guide, opened as i64, r.round, r.since, r.scope_note, r.kind, r.pane],
         )?;
         Ok(())
     }
@@ -365,9 +388,10 @@ impl Store {
         self.review_rows("closed IS NULL ORDER BY opened", params![])
     }
 
-    /// The closed reviews, oldest first.
+    /// The closed PR reviews, oldest first. A local review is never here: its tree
+    /// is the agent's, and cleanup reads this list.
     pub fn closed_reviews(&self) -> R<Vec<ReviewRow>> {
-        self.review_rows("closed IS NOT NULL ORDER BY opened", params![])
+        self.review_rows("closed IS NOT NULL AND kind = 'pr' ORDER BY opened", params![])
     }
 
     /// One review, open or closed.
@@ -379,7 +403,7 @@ impl Store {
     pub fn last_closed(&self, repo: &str, number: u64) -> R<Option<ReviewRow>> {
         Ok(self
             .review_rows(
-                "closed IS NOT NULL AND repo = ?1 AND number = ?2 AND guide IS NOT NULL AND head != ''
+                "closed IS NOT NULL AND kind = 'pr' AND repo = ?1 AND number = ?2 AND guide IS NOT NULL AND head != ''
                  ORDER BY round DESC, opened DESC LIMIT 1",
                 params![repo, number as i64],
             )?
@@ -388,7 +412,7 @@ impl Store {
 
     fn review_rows(&self, filter: &str, args: &[&dyn rusqlite::ToSql]) -> R<Vec<ReviewRow>> {
         let mut s = self.db.prepare(&format!(
-            "SELECT id, url, repo, number, title, head, base, tree, connection, guide_session, guide, round, since, scope_note
+            "SELECT id, url, repo, number, title, head, base, tree, connection, guide_session, guide, round, since, scope_note, kind, pane
              FROM review WHERE {filter}"
         ))?;
         let rows = s.query_map(args, |r| {
@@ -407,6 +431,8 @@ impl Store {
                 round: r.get(11)?,
                 since: r.get(12)?,
                 scope_note: r.get(13)?,
+                kind: r.get(14)?,
+                pane: r.get(15)?,
             })
         })?;
         rows.collect()
@@ -778,11 +804,12 @@ mod tests {
                 assert_eq!(s.open_panes().unwrap().len() as u64, panes);
                 let rs = s.open_reviews().unwrap();
                 assert_eq!(rs.len() as u64, reviews);
-                assert!(rs.iter().all(|r| r.round == 1 && r.since.is_none()));
+                assert!(rs.iter().all(|r| r.round == 1 && r.since.is_none() && r.kind == "pr" && r.pane.is_none()));
                 let ds = s.drafts("r0").unwrap();
                 assert_eq!(ds.len() as u64, drafts);
-                // Old drafts on a line have no stored code around them: stale once.
-                assert!(ds.iter().all(|d| d.agent && d.start_line.is_none() && d.stale && d.line_text.is_none()));
+                // Drafts from before version 7 have no stored code around them: stale
+                // once. Version 7 drafts already had the columns, so they stay as they are.
+                assert!(ds.iter().all(|d| d.agent && d.start_line.is_none() && d.stale == (from < 7) && d.line_text.is_none()));
             }
         }
     }
@@ -841,6 +868,8 @@ mod tests {
             round: 2,
             since: Some("abc0".into()),
             scope_note: None,
+            kind: "pr".into(),
+            pane: None,
         };
         s.save_review(&r, 1).unwrap();
         let t = ThreadRow {

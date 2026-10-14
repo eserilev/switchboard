@@ -484,6 +484,31 @@ Tests:
 - `crates/sb/tests/review_close.rs`: a real hub and tmux, and a local git remote that serves `pull/7/head`. The clone is reached through a symlink and your pane opens at the real path. Close with changes asks and changes nothing; Discard with a short list asks again; Discard closes the Claude pane, keeps your pane and the folder, and sends a note (with a text compare of paths, the folder went: the test fails); the sweep removes the folder after you close your pane; a review closed during its fetch gets no folder; a round starts from a closed round; 25 races of close against the checkout leave no folder, with both orders seen. Before the private fetch ref, this test found a fetch that read the PR branch while a cleanup deleted it.
 - `models/review_close.qnt` (26).
 
+### 11.11 Review local commits
+
+An agent commits its work in its own checkout. Before you push, you review those commits in the diff viewer of 11.1, and your comments go back to the agent.
+
+- **review** on a Claude tile, or on the live title, opens a tab named `<repo> commits`. A second click on the same folder opens the same tab.
+- The range is `base..HEAD` of the pane's folder (`review::local_range`). HEAD is frozen as a commit id when the review loads. The base is, in order:
+  1. the merge base with `@{push}`, else `@{upstream}`, when HEAD has one;
+  2. else, with a remote: the one commit where the history leaves every remote (a detached agent worktree), or, when the history leaves the remotes at more than one commit (a merge of remote work), the merge base with the default branch of a remote: `<remote>/HEAD`, `<remote>/main` or `<remote>/master`, with `origin` first;
+  3. else the merge base with a local `main` or `master` that HEAD is not on.
+  With no unpushed commit, the range is the last commit (the empty tree for a root commit), and the header says so. A shallow clone with no parent of HEAD is an error, so the whole repo never shows as new.
+- The tab has Files only: no guide, no agent of its own, no gh. The diff model, the drawn rows, expand, `+` comments and anchors are those of 11.1 and 11.6.
+- The right column shows the agent pane itself. A click on a line number types the line into its prompt, as in 11.5.
+- **Send to agent** puts every comment that is not stale into the agent's prompt as one bracketed paste, with no Enter: `Review comments on commit <head> (line numbers are at that commit):`, then one `- path:line: text` line for each comment. You read it and press Enter. Nothing is typed while the agent asks for a permission or has ended. The comments then move to a `posted` row with the event `AGENT`, so the tab lists what you sent.
+- Every 30 s the app reads HEAD in the folder and compares it with the review's head as it is at that moment. A new HEAD shows **New commits** with **Refresh**. Refresh reads the range again; drafts move with their code, or become stale, as in 11.7. One lock checks that no load runs and starts the load, so two quick clicks start one load. A new base alone (after a push) also loads a new file list.
+- **Close review** closes only the tab. A local review never asks about changes, never closes a pane, never pins a ref, and never removes its folder: the folder is the agent's. Three guards hold this: `clean_after` returns at once for a local row, before its pin; `closed_reviews` leaves out local rows, so the start sweep never sees them; and `review_close` skips the change check and the pane close. A fourth, `Facts.in_store` false for a local row, sits behind the first and only matters if it goes. The model of 26 checks this property.
+- A second **review** on the same folder opens the same tab, also with a new agent pane there; the check and the insert are one lock.
+- PR-only commands (rounds, threads, pins, the GitHub send, the Claude pane of 11.5) return an error for a local review.
+- Store version 8 adds `review.kind` (`pr` or `local`) and `review.pane`.
+
+Tests:
+- `crates/core/tests/local_range.rs`: real git for each rule: an upstream, a detached agent worktree, a merge of remote work (with `origin`, and with a remote named `sigp`), no remote, nothing unpushed, a root commit, a shallow clone, no commit.
+- `models/review_close.qnt` (26): `AgentFolderStays`.
+- `crates/sb/tests/local_review.rs`: a real hub and tmux, and an agent pane that writes what it gets to a file. Open, Files, a comment, Send to agent (the exact paste, no Enter, the posted row), Refresh after a new commit (the draft moves down one line), and close. After the close, with the pane closed and the folder clean and detached, the start sweep keeps the folder, and its commits still count as work. With the guards off, the test fails.
+- Window checks: the tile button, the tab, Files only, the header, the agent pane in the column, Send to agent, Refresh, a new agent pane, no file list while the commits load, and a new base alone.
+
 ## 12. Agents
 
 | Where | How |
@@ -946,15 +971,16 @@ P2 and P6 hold because each request has its own socket and channel, so a reply c
 
 ## 26. Model check of review close
 
-`models/review_close.qnt` models the review map, the folders on disk, the background jobs (fetch, then checkout), close with its three choices, the cleanup threads, the sweep at start, and your panes, locks and numbered changes. Two round-1 reviews of one PR share a folder; a round 2 has its own. Each action is one critical section of the code under the tree lock.
+`models/review_close.qnt` models the review map, the folders on disk, the background jobs (fetch, then checkout), close with its three choices, the cleanup threads, the sweep at start, and your panes, locks and numbered changes. It also has a review of local commits (11.11), "l1", whose folder "a1" is the agent's: it exists from the start, has the agent's pane, and holds unpushed commits. The agent commits and pushes at any time. A pin hides those commits from the work check, as `local_changes` does with `refs/switchboard/*`. Two round-1 reviews of one PR share a folder; a round 2 has its own. Each action is one critical section of the code under the tree lock.
 
 The invariant `Always`:
 - `OpenKeepsFolder`: an open review that has its folder keeps it.
 - `NoLostWork`: a removal never drops a change that you did not see and discard.
 - `NoCarry`: a checkout never runs over your work in a kept folder. An Update of a review in its own folder is not a carry: git moves your edits along, as you expect.
 - `LockHolds`: a removal never takes a locked worktree.
+- `AgentFolderStays`: no close, cleanup or sweep removes the agent's folder of a local review.
 - `NoSilentLeak`: when no job and no cleanup is left, each folder on disk is in use by an open review, has a pane of yours, or a note told you why it stays.
 
-A `Mode` turns one fix off at a time: the open check at the checkout, the Discard list, the checkout guard, and the lock rule. `scripts/check-models.sh` runs 10 fixed traces and 100,000 random runs of 50 steps of the code. Then it runs each mode with one fix off, and each must break `Always`; the script fails if one passes, so the model keeps the bugs it is for. Removing the open-review check from the cleanup rule also makes the random runs fail.
+A `Mode` turns one fix off at a time: the open check at the checkout, the Discard list, the checkout guard, the lock rule, and the local guards. With the local guards off, the model finds the real bug path at once: the close starts a cleanup, the pin hides the agent's commits, the folder looks clean, and it goes. `scripts/check-models.sh` runs 12 fixed traces and 100,000 random runs of 50 steps of the code. Then it runs each mode with one fix off, and each must break `Always`; the script fails if one passes, so the model keeps the bugs it is for. Removing the open-review check from the cleanup rule also makes the random runs fail.
 
 Not checked: the full state space, because Apalache needs Java, which is not installed here. The model is small (3 reviews, 2 folders), and the random runs reach the bugs above in under a second.

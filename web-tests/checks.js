@@ -6,6 +6,7 @@
   const results = [];
   const check = (name, ok, info) => results.push({ name, ok: !!ok, info: ok ? undefined : info });
   const called = (cmd) => window.__calls.filter((c) => c[0] === cmd);
+  const local_mode = () => $("#rsteps .fileitem, #rsteps [data-f]") ? "files" : "guide";
   const key = (k, o = {}) => window.dispatchEvent(new KeyboardEvent("keydown", { key: k, code: o.code || (k === " " ? "Space" : "Key" + k.toUpperCase()), ctrlKey: !!o.ctrl, shiftKey: !!o.shift, bubbles: true }));
   const screen = () => { const b = window.SB.term.buffer.active; let s = ""; for (let i = 0; i < b.length; i++) s += b.getLine(i).translateToString(true) + "\n"; return s; };
   const docKey = (k) => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
@@ -453,6 +454,45 @@
   window.__emit("review_cleanup", { review: "r1", note: "/c/lighthouse-pr10071 stays: in use by nvim." });
   await wait(50);
   check("a kept folder shows a note", $("#toast")?.textContent.includes("stays: in use by nvim"), $("#toast")?.textContent);
+
+  // A review of an agent's unpushed commits (SPEC 11.11).
+  window.SB.setTab("board");
+  await wait(100);
+  check("a Claude tile has a review button, nvim has none", !!$('.pane[data-id="p1"] [data-lreview]') && !$('.pane[data-id="p3"] [data-lreview]'));
+  window.__calls.length = 0;
+  $('.pane[data-id="p1"] [data-lreview]').click();
+  await wait(400);
+  check("review opens a local review of that pane", called("review_open_local")[0]?.[1].pane === "p1" && window.SB.S.tab === "rL", JSON.stringify(called("review_open_local")));
+  check("the tab says it is local commits", $('#tabs [data-tab="rL"]')?.textContent.includes("lighthouse commits"));
+  check("a local review shows Files only, with no Guide switch and no Send step", !$("#rmode") && !$("#rstep") && local_mode() === "files");
+  check("the header shows the range and what it compares with", $("#rhead").textContent.includes("2 commits on feat") && $("#rhead").textContent.includes("b0b0b0b0b..ac92ae9aa") && $("#rhead").textContent.includes("not on origin/unstable"), $("#rhead").textContent);
+  check("the agent pane is in the right column", window.SB.S.live === "p1" && !!$("#rterm #live"));
+  docKey("f");
+  await wait(50);
+  check("f does not switch a local review to Guide", local_mode() === "files" && !!$("#rsteps [data-f]"));
+  check("Send to agent replaces Finish review", !!$("#rdrafts [data-agent]") && !$("#rdrafts [data-finish]"));
+  $("#rdrafts [data-agent]").click();
+  await wait(100);
+  check("Send to agent sends the review's comments", called("review_send_agent")[0]?.[1].id === "rL" && $("#toast")?.textContent.includes("Press Enter"), $("#toast")?.textContent);
+  window.__emit("review", Object.assign({}, window.__data.reviews.find((x) => x.id === "rL"), { new_head: "fffeee0000" }));
+  await wait(100);
+  $('#rhead .newhead [data-act="update"]').click();
+  await wait(50);
+  check("new commits offer Refresh, which reads the commits again", called("review_update").some((c) => c[1].id === "rL"));
+  {
+    const rL = window.__data.reviews.find((x) => x.id === "rL");
+    const terms = called("review_term").filter((c) => c[1].id === "rL").length;
+    window.__emit("review", Object.assign({}, rL, { pane: "p2", new_head: null }));
+    await wait(150);
+    check("a new agent pane for the folder is found again", called("review_term").filter((c) => c[1].id === "rL").length > terms);
+    const files = called("review_files").filter((c) => c[1].id === "rL").length;
+    window.__emit("review", Object.assign({}, rL, { pane: "p2", base: "c1c1c1c1c1c1", status: "fetching" }));
+    await wait(100);
+    check("no file list loads while the commits load", called("review_files").filter((c) => c[1].id === "rL").length === files);
+    window.__emit("review", Object.assign({}, rL, { pane: "p2", base: "c1c1c1c1c1c1", status: "ready" }));
+    await wait(150);
+    check("a new base alone loads the file list again", called("review_files").filter((c) => c[1].id === "rL").length > files);
+  }
 
   // Back to the board with the leader.
   key(" ", { ctrl: true, code: "Space" });

@@ -6,6 +6,7 @@ module review_close_test {
   pure val OLD_GATE: Mode = { ...FIXED, gate: false }
   pure val OLD_DISCARD: Mode = { ...FIXED, exact: false }
   pure val OLD_GUARD: Mode = { ...FIXED, guard: false }
+  pure val NO_LOCAL: Mode = { ...FIXED, local: false }
 
   // A close during the network fetch: the checkout then makes no folder.
   run closeDuringFetchMakesNoFolderTest =
@@ -103,4 +104,22 @@ module review_close_test {
       .then(CloseAsk("r3"))
       .then(Clean({ r: "r3", seen: Set(), every: false }))
       .expect(and { Always, s.disk.get("p2"), s.told.get("p2") })
+
+  // A local review: close it, close the agent pane, run the sweep. The agent's
+  // folder and its commits stay.
+  run localCloseKeepsTheAgentFolderTest =
+    init.then(OpenLocal)
+      .then(CloseAsk("l1"))
+      .expect(and { Always, s.cleanups == Set() })
+      .then(PaneClose("a1"))
+      .expect(and { Always, s.disk.get("a1"), s.commits, not(s.pinned) })
+
+  // With the local guards off: the cleanup pins first, the pin hides the agent's
+  // commits, the folder looks clean, and it goes with the commits.
+  run withoutTheGuardsTheAgentFolderGoesTest =
+    init.then(OpenLocal)
+      .then(PaneClose("a1"))
+      .then(closeAsk("l1", NO_LOCAL))
+      .then(clean1({ r: "l1", seen: Set(), every: false }, NO_LOCAL))
+      .expect(and { not(AgentFolderStays), not(NoLostWork) })
 }

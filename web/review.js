@@ -52,13 +52,13 @@
         <div class="col"><ol class="steps" id="rsteps"></ol></div>
         <div class="col center" id="rcenter"><div class="guide" id="rguide"></div><div id="rdiff"></div></div>
         <div class="col">
-          <div class="tbar"><span class="tlabel">Claude</span><button class="btn small" type="button" id="rstep" title="Type the current step into Claude's prompt">Send step</button></div>
+          <div class="tbar"><span class="tlabel">${r.kind === "local" ? "Agent" : "Claude"}</span>${r.kind === "local" ? "" : `<button class="btn small" type="button" id="rstep" title="Type the current step into Claude's prompt">Send step</button>`}</div>
           <div class="askhost" id="rterm"><div class="askwait" id="raskwait"></div></div>
           <div class="drafts" id="rdrafts"></div>
         </div>
       </div>
       <div class="finish" id="rfinish" hidden></div>`;
-    $("#rstep").onclick = () => sendStep(id);
+    if ($("#rstep")) $("#rstep").onclick = () => sendStep(id);
     $("#raskwait").onclick = (e) => { if (e.target.closest("[data-show]")) showTerm(id); };
     l.term = null;
     update(r, true);
@@ -69,19 +69,24 @@
     if (S.tab !== r.id) return;
     if (!fresh && !$("#rsteps")) return draw(r.id);
     const l = local(r.id);
+    // A review of local commits has no guide: only Files (SPEC 11.11).
+    if (r.kind === "local") l.mode = "files";
+    // A new agent pane for the folder: ask for it again.
+    if (r.kind === "local" && l.pane !== r.pane) { l.pane = r.pane; l.noTerm = false; if (l.term !== r.pane) l.term = null; }
     l.cur = Math.min(l.cur, Math.max(0, steps(r).length - 1));
     // Viewed marks belong to one head. New commits clear them, as on GitHub.
     if (l.vhead !== r.head) { l.viewed = new Set(); l.vhead = r.head; }
     drawHead(r);
     if (l.mode === "files") {
-      if (!l.files) loadFiles(r.id);
+      // Not while the commits load: the old model would answer.
+      if (!l.files && r.head && r.status === "ready") loadFiles(r.id);
       drawFiles(r);
       drawFileHead(r);
     } else {
       drawSteps(r);
       drawGuide(r);
     }
-    if (!l.term && !l.opening && r.status === "ready") openTerm(r.id);
+    if (!l.term && !l.opening && !l.noTerm && r.status === "ready") openTerm(r.id);
     drawTermWait(r);
     drawDrafts(r);
     const key = diffKey(r);
@@ -116,7 +121,7 @@
 
   function setMode(id, mode) {
     const l = local(id);
-    if (l.mode === mode) return;
+    if (l.mode === mode || S.reviews.get(id)?.kind === "local") return;
     l.mode = mode;
     l.anchor = null;
     l.compose = null;
@@ -218,6 +223,7 @@
   }
 
   function drawHead(r) {
+    if (r.kind === "local") return drawLocalHead(r);
     const status = { fetching: "Fetching the PR", writing: "Writing the guide", updating: "Updating the guide", error: "Error", ready: "" }[r.status] ?? r.status;
     const next = (r.round || 1) + 1;
     const newHead = r.new_head ? `<span class="newhead">New commits: ${esc(short(r.head))} → ${esc(short(r.new_head))}<button class="btn small primary" data-act="round" title="A new review of only the changes since ${esc(short(r.head))}">Start round ${next}</button><button class="btn small" data-act="update" title="Write this guide again for the new head">Update guide</button></span>` : "";
@@ -242,6 +248,25 @@
           window.SB.setTab(nid);
         } catch (err) { toast(err); }
       }
+      if (act === "close") closeReview(r.id);
+    };
+  }
+
+  // The header of a review of local commits: the range, what it compares with, and a
+  // Refresh when the agent made new commits.
+  function drawLocalHead(r) {
+    const status = { fetching: "Reading the commits", error: "Error", ready: "" }[r.status] ?? r.status;
+    const range = r.head ? `${esc(short(r.base))}..${esc(short(r.head))}` : "";
+    const newHead = r.new_head ? `<span class="newhead">New commits: ${esc(short(r.head))} → ${esc(short(r.new_head))}<button class="btn small primary" data-act="update" title="Read the commits again; your comments move with their code">Refresh</button></span>` : "";
+    const retry = r.status === "error" ? `<button class="btn small" data-act="retry">Retry</button>` : "";
+    $("#rhead").innerHTML = `<div><div class="t">${esc(r.title || "Local commits")}</div><div class="m">${esc(r.repo)} · ${range}${r.tree ? " · " + esc(r.tree) : ""}</div></div>
+      ${status ? `<span class="status${r.status === "error" ? " error" : ""}">${esc(status)}</span>` : ""}${newHead}
+      <div class="right">${r.new_head ? "" : `<button class="btn small" data-act="update" title="Read the commits again">Refresh</button>`}${retry}<button class="btn small" data-act="close">Close review</button></div>
+      ${r.error ? `<div class="rerror" style="flex-basis:100%;padding:0">${esc(r.error)}</div>` : ""}
+      ${r.scope_note ? `<div class="scopenote">${esc(r.scope_note)}</div>` : ""}`;
+    $("#rhead").onclick = (e) => {
+      const act = e.target.closest("[data-act]")?.dataset.act;
+      if (act === "update" || act === "retry") { local(r.id).diff.clear(); local(r.id).files = null; call(act === "update" ? "review_update" : "review_retry", { id: r.id }); }
       if (act === "close") closeReview(r.id);
     };
   }
@@ -576,8 +601,14 @@
 
   function drawDrafts(r) {
     const n = r.drafts.length;
-    const sent = (r.posted || []).map((p) => `<div class="sent">Sent: ${esc(EVENT_NAME[p.event] || p.event)}, ${p.comments} line comment${p.comments === 1 ? "" : "s"} <a href="${esc(p.url)}">open on GitHub</a></div>`).join("");
-    $("#rdrafts").innerHTML = `<div class="rvhead"><span class="badge">${n ? `${n} pending comment${n > 1 ? "s" : ""}` : "No pending comments"}</span><span class="rvbtns">${n ? `<button class="btn small" data-copy>Copy all</button>` : ""}<button class="btn small primary" data-finish>Finish review</button></span></div>` + sent +
+    const isLocal = r.kind === "local";
+    const sent = (r.posted || []).map((p) => p.event === "AGENT"
+      ? `<div class="sent">Sent to the agent: ${p.comments} comment${p.comments === 1 ? "" : "s"} on ${esc(short(p.head))}</div>`
+      : `<div class="sent">Sent: ${esc(EVENT_NAME[p.event] || p.event)}, ${p.comments} line comment${p.comments === 1 ? "" : "s"} <a href="${esc(p.url)}">open on GitHub</a></div>`).join("");
+    const main = isLocal
+      ? `<button class="btn small primary" data-agent ${n ? "" : "disabled"} title="Type the comments into the agent's prompt; you press Enter">Send to agent</button>`
+      : `<button class="btn small primary" data-finish>Finish review</button>`;
+    $("#rdrafts").innerHTML = `<div class="rvhead"><span class="badge">${n ? `${n} pending comment${n > 1 ? "s" : ""}` : "No pending comments"}</span><span class="rvbtns">${n ? `<button class="btn small" data-copy>Copy all</button>` : ""}${main}</span></div>` + sent +
       r.drafts.map((d) => {
         const lines = d.start_line ? `${d.start_line}-${d.line}` : d.line;
         const loc = d.path ? `${d.path}${d.line ? ":" + lines : ""}${d.side === "old" ? " (old)" : ""}` : "";
@@ -585,7 +616,16 @@
         const stale = d.stale ? `<em class="stalenote">The code changed after you wrote this. Place it again or delete it.</em><span class="stalebtns"><button class="btn small" data-place="${d.id}">Place again</button><button class="btn small" data-drop="${d.id}">Delete</button></span>` : "";
         return `<div class="draft${long ? " long" : ""}${d.agent ? " agent" : ""}${d.stale ? " stale" : ""}" data-d="${d.id}"><b>${esc(loc)}${d.agent ? ' <i>agent</i>' : ""}</b>${stale}<span contenteditable="true">${esc(d.text)}</span></div>`;
       }).join("");
-    $("#rdrafts [data-finish]").onclick = () => openFinish(r.id);
+    if ($("#rdrafts [data-finish]")) $("#rdrafts [data-finish]").onclick = () => openFinish(r.id);
+    if ($("#rdrafts [data-agent]")) $("#rdrafts [data-agent]").onclick = async () => {
+      try {
+        const n = await invoke("review_send_agent", { id: r.id, note: "" });
+        toast(`${n} comment${n === 1 ? "" : "s"} in the agent's prompt. Press Enter there to send.`);
+        if (local(r.id).term) window.SB.term.focus();
+      } catch (e) {
+        toast(e);
+      }
+    };
     // Place again: the next + opens the form with this text; the add removes the old draft.
     $("#rdrafts").querySelectorAll("[data-place]").forEach((b) => (b.onclick = () => {
       const d = r.drafts.find((x) => x.id === +b.dataset.place);
@@ -759,6 +799,8 @@
     const ready = r.status === "ready" && steps(r).length > 0;
     try {
       const pane = await invoke("review_term", { id, step: curStep(r, l)?.id ?? null, start: ready });
+      // A local review with its agent pane closed: ask once, not on every draw.
+      if (!pane && r.kind === "local") l.noTerm = true;
       if (pane) {
         l.term = pane;
         if (S.tab === id) await showTerm(id);
@@ -789,8 +831,9 @@
     const l = local(r.id);
     const shown = l.term && S.live === l.term && S.termHost === r.id;
     el.hidden = !!shown;
-    el.innerHTML = l.term ? `<button class="btn small" data-show>Show Claude</button>`
+    el.innerHTML = l.term ? `<button class="btn small" data-show>Show ${r.kind === "local" ? "the agent" : "Claude"}</button>`
       : l.termError ? esc(l.termError)
+      : r.kind === "local" ? "The agent pane is closed. Copy all still works."
       : r.status === "ready" ? "Starting Claude…" : "Claude opens here when the guide is ready.";
   }
 
@@ -845,7 +888,7 @@
     const id = S.tab;
     const l = local(id);
     const files = l.mode === "files";
-    if (e.key === "f") setMode(id, files ? "guide" : "files");
+    if (e.key === "f" && S.reviews.get(id)?.kind !== "local") setMode(id, files ? "guide" : "files");
     else if (e.key === "j") files ? goFile(id, fileIndex(l) + 1) : go(id, l.cur + 1);
     else if (e.key === "k") files ? goFile(id, fileIndex(l) - 1) : go(id, l.cur - 1);
     else if (e.key === "n") files ? nextFile(id) : next(id);
@@ -857,12 +900,14 @@
     draw,
     update: (r) => {
       const l = local(r.id);
-      if (l.head !== r.head || l.guideLen !== JSON.stringify(r.guide || "").length) {
+      // A Refresh can move only the base (after a push): that is a new diff too.
+      if (l.head !== r.head || l.base !== r.base || l.guideLen !== JSON.stringify(r.guide || "").length) {
         l.diff.clear();
         l.files = null;
         l.full.clear();
         l.shown.clear();
         l.head = r.head;
+        l.base = r.base;
         l.guideLen = JSON.stringify(r.guide || "").length;
       }
       update(r);

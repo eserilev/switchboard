@@ -48,9 +48,10 @@ echo "== review_close step: $samples runs of $steps steps"
 quint run review_close.qnt --step=step --invariants Always \
     --max-samples="$samples" --max-steps="$steps" --verbosity=1
 # The code before each fix must fail: no open check at the checkout, a bool
-# Discard, a checkout over kept work, a forced removal of a locked worktree. If
-# one passes, the model lost the bug it is for.
-for old in stepNoGate stepBoolDiscard stepNoGuard stepForceLock; do
+# Discard, a checkout over kept work, a forced removal of a locked worktree, a
+# local review cleaned like a PR review. If one passes, the model lost the bug
+# it is for.
+for old in stepNoGate stepBoolDiscard stepNoGuard stepForceLock stepNoLocalGuard; do
     if quint run review_close.qnt --step="$old" --invariants Always \
         --max-samples="$samples" --max-steps="$steps" --verbosity=0 > /dev/null 2>&1; then
         echo "error: $old passed: the model no longer sees that bug" >&2

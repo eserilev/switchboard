@@ -572,6 +572,102 @@ pub fn parse_stream(line: &str) -> Option<Stream> {
     }
 }
 
+/// The git empty tree: the base of a root commit.
+pub const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// The commits of a local review (SPEC 11.11): `base..head`, where `head` is HEAD.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalRange {
+    pub head: String,
+    pub base: String,
+    /// The commits in the range.
+    pub count: u32,
+    /// What the base is, for the header: "unpushed to origin/x", or why it is not.
+    pub note: String,
+}
+
+/// The unpushed commits of the checkout at `tree`. The base is, in order:
+/// 1. the merge base with the push or upstream branch, when HEAD has one;
+/// 2. else, with a remote, the one commit where the history leaves every remote
+///    (a detached agent worktree), or the merge base with the remote's default
+///    branch when there are more;
+/// 3. else the merge base with a local `main` or `master` that HEAD is not on.
+///
+/// With no unpushed commit, the range is the last commit, and the note says so.
+pub fn local_range(tree: &Path) -> Result<LocalRange, String> {
+    let head = git(tree, &["rev-parse", "--verify", "HEAD^{commit}"]).map_err(|_| "this checkout has no commit yet".to_owned())?;
+    let ok = |args: &[&str]| git(tree, args).ok().filter(|s| !s.is_empty());
+    let merge_base = |other: &str| ok(&["merge-base", &head, other]);
+    let mut found: Option<(String, String)> = None;
+    for up in ["@{push}", "@{upstream}"] {
+        if let Some(name) = ok(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", up]) {
+            if let Some(b) = merge_base(&name) {
+                found = Some((b, format!("Commits not on {name}.")));
+                break;
+            }
+        }
+    }
+    let has_remote = ok(&["remote"]).is_some();
+    if found.is_none() && has_remote {
+        let walk = git(tree, &["rev-list", "--boundary", &head, "--not", "--remotes"])?;
+        let ours = walk.lines().filter(|l| !l.starts_with('-')).count();
+        let edges: Vec<&str> = walk.lines().filter_map(|l| l.strip_prefix('-')).collect();
+        if ours == 0 {
+            found = Some((head.clone(), "Every commit is on a remote.".into()));
+        } else if edges.len() == 1 {
+            found = Some((edges[0].to_owned(), "Commits that no remote has.".into()));
+        } else {
+            // The default branch of a remote: `origin` first, then the others.
+            let mut remotes: Vec<String> = ok(&["remote"]).unwrap_or_default().lines().map(str::to_owned).collect();
+            remotes.sort_by_key(|r| r != "origin");
+            let default = remotes.iter().find_map(|r| {
+                ok(&["symbolic-ref", "--short", &format!("refs/remotes/{r}/HEAD")]).or_else(|| {
+                    ["main", "master"]
+                        .into_iter()
+                        .map(|b| format!("{r}/{b}"))
+                        .find(|b| ok(&["rev-parse", "--verify", "-q", &format!("refs/remotes/{b}")]).is_some())
+                })
+            });
+            if let Some(d) = default {
+                if let Some(b) = merge_base(&d) {
+                    found = Some((b, format!("Commits not on {d}.")));
+                }
+            }
+        }
+    }
+    if found.is_none() {
+        let branch = ok(&["symbolic-ref", "--short", "-q", "HEAD"]);
+        for main in ["main", "master"] {
+            if branch.as_deref() != Some(main) && ok(&["rev-parse", "--verify", "-q", &format!("refs/heads/{main}")]).is_some() {
+                if let Some(b) = merge_base(main) {
+                    found = Some((b, format!("Commits not on {main}.")));
+                    break;
+                }
+            }
+        }
+    }
+    let (mut base, mut note) = found.unwrap_or_else(|| (head.clone(), "No branch to compare with.".into()));
+    if base == head {
+        // Nothing unpushed: show the last commit, so the tab is still useful. Only a
+        // true root commit compares with the empty tree: in a shallow clone the parent
+        // is missing, and the whole repo would show as new.
+        base = match ok(&["rev-parse", "--verify", "-q", &format!("{head}~1")]) {
+            Some(p) => p,
+            None if ok(&["rev-parse", "--is-shallow-repository"]).as_deref() == Some("true") => {
+                return Err("No unpushed commits, and this shallow clone does not have the commit before HEAD.".into());
+            }
+            None => EMPTY_TREE.to_owned(),
+        };
+        note = format!("No unpushed commits. {note} This shows the last commit.");
+    }
+    let count = if base == EMPTY_TREE {
+        1
+    } else {
+        git(tree, &["rev-list", "--count", &format!("{base}..{head}")])?.parse().unwrap_or(0)
+    };
+    Ok(LocalRange { head, base, count, note })
+}
+
 /// Stops a `claude -p` run and every process of its group: its tools and its MCP
 /// server. `pid` is the group id from `Stream::Started`.
 pub fn stop_run(pid: u32) {

@@ -61,6 +61,8 @@ fn row(id: &str, head: &str) -> ReviewRow {
         round: 1,
         since: None,
         scope_note: None,
+        kind: "pr".into(),
+        pane: None,
     }
 }
 

@@ -111,6 +111,10 @@ pub struct ReviewView {
     /// The reviews sent to GitHub, oldest first.
     pub posted: Vec<crate::store::PostedRow>,
     pub coverage: Option<CoverageView>,
+    /// `pr` or `local` (SPEC 11.11).
+    pub kind: String,
+    /// For `local`: the agent pane.
+    pub pane: Option<String>,
 }
 
 /// What the window shows before a send: the GitHub account, the head, and where
@@ -295,15 +299,12 @@ impl Hub {
             .unwrap_or_default();
         let mut reviews = self.reviews.lock().unwrap();
         for row in rows {
-            let status = if row.guide.is_some() {
-                "ready"
-            } else {
-                "error"
-            };
-            let error = row
-                .guide
-                .is_none()
-                .then(|| "The guide was not finished. Use Retry.".to_owned());
+            // A local review has no guide: it is ready once it has its commits.
+            let done = if row.is_local() { !row.head.is_empty() } else { row.guide.is_some() };
+            let status = if done { "ready" } else { "error" };
+            let error = (!done).then(|| {
+                if row.is_local() { "The commits did not load. Use Retry." } else { "The guide was not finished. Use Retry." }.to_owned()
+            });
             let mut st = ReviewState::new(row, status, error);
             st.last_poll = 0;
             reviews.insert(st.row.id.clone(), st);
@@ -382,6 +383,8 @@ impl Hub {
             summary: store.summary(id).map_err(e)?,
             posted: store.posted(id).map_err(e)?,
             coverage: r.coverage.clone(),
+            kind: r.row.kind.clone(),
+            pane: r.row.pane.clone(),
         })
     }
 
@@ -411,6 +414,161 @@ impl Hub {
     }
 
     /// Opens a review from a PR URL. The work runs in the background; `review` events report it.
+    /// An error for a local review: the command needs a PR, a guide or GitHub.
+    fn pr_only(&self, id: &str) -> Res<()> {
+        let local = self.reviews.lock().unwrap().get(id).map(|r| r.row.is_local()).unwrap_or(false);
+        if local {
+            return Err("This is a review of local commits: it has no PR and no guide.".into());
+        }
+        Ok(())
+    }
+
+    /// Opens a review of the unpushed commits of an agent pane's worktree (SPEC 11.11).
+    /// An open local review of the same folder wins. The commits load in the background.
+    pub fn review_open_local(&self, pane: &str) -> Res<String> {
+        let (tree, repo) = self
+            .panes
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|p| p.row.id == pane)
+            .map(|p| (p.row.tree.clone(), p.row.repo.clone()))
+            .ok_or(format!("no pane {pane}"))?;
+        let id = self.store.lock().unwrap().next_id("r").map_err(e)?;
+        // The check and the insert in one lock: a double click opens one review.
+        let mut reviews = self.reviews.lock().unwrap();
+        let existing = reviews
+            .values_mut()
+            .find(|r| r.row.is_local() && review::same_path(Path::new(&r.row.tree), Path::new(&tree)));
+        if let Some(r) = existing {
+            // The folder can have a new agent pane since the review opened.
+            r.row.pane = Some(pane.to_owned());
+            let id = r.row.id.clone();
+            drop(reviews);
+            self.save_row(&id);
+            self.emit_review(&id);
+            return Ok(id);
+        }
+        let row = ReviewRow {
+            id: id.clone(),
+            url: String::new(),
+            repo,
+            number: 0,
+            title: String::new(),
+            head: String::new(),
+            base: String::new(),
+            tree,
+            connection: None,
+            guide_session: None,
+            guide: None,
+            round: 1,
+            since: None,
+            scope_note: None,
+            kind: crate::store::LOCAL.into(),
+            pane: Some(pane.to_owned()),
+        };
+        reviews.insert(id.clone(), ReviewState::new(row, "fetching", None));
+        drop(reviews);
+        self.save_row(&id);
+        self.local_refresh_bg(&id)?;
+        Ok(id)
+    }
+
+    /// Reads the range again in the background: a new HEAD, or the first load. The
+    /// check that no load runs and the switch to "fetching" are one lock, so two
+    /// quick clicks start one load.
+    fn local_refresh_bg(&self, id: &str) -> Res<()> {
+        {
+            let mut reviews = self.reviews.lock().unwrap();
+            let r = reviews.get_mut(id).ok_or("gone")?;
+            if r.status == "fetching" && !r.row.head.is_empty() {
+                return Err("the commits are still loading".into());
+            }
+            r.status = "fetching".into();
+            r.error = None;
+        }
+        self.emit_review(id);
+        let hub = self.arc();
+        let rid = id.to_owned();
+        std::thread::spawn(move || {
+            if let Err(err) = hub.local_refresh(&rid) {
+                hub.set_status(&rid, "error", Some(err));
+            }
+        });
+        Ok(())
+    }
+
+    /// The commits of a local review: the range rule, then the diff model. The
+    /// drafts move to the new head as after a PR update (`load_model`).
+    fn local_refresh(&self, id: &str) -> Res<()> {
+        let tree = self.reviews.lock().unwrap().get(id).map(|r| r.row.tree.clone()).ok_or("gone")?;
+        let range = review::local_range(Path::new(&tree))?;
+        let branch = repos::git(Path::new(&tree), &["symbolic-ref", "--short", "-q", "HEAD"]).unwrap_or_default();
+        let title = format!(
+            "{} commit{} on {}",
+            range.count,
+            if range.count == 1 { "" } else { "s" },
+            if branch.is_empty() { "a detached HEAD".to_owned() } else { branch }
+        );
+        match self.reviews.lock().unwrap().get_mut(id) {
+            Some(r) => {
+                r.row.head = range.head;
+                r.row.base = range.base;
+                r.row.scope_note = Some(range.note);
+                r.row.title = title;
+                r.new_head = None;
+            }
+            None => return Err(CLOSED.into()),
+        }
+        self.save_row(id);
+        self.load_model(id, None)?;
+        self.set_status(id, "ready", None);
+        Ok(())
+    }
+
+    /// Puts the comments of a local review into its agent's prompt, as one paste with
+    /// no Enter, and keeps them as sent. A stale draft stays: place it again first.
+    pub fn review_send_agent(&self, id: &str, note: &str) -> Res<usize> {
+        let row = self.reviews.lock().unwrap().get(id).map(|r| r.row.clone()).ok_or("gone")?;
+        let pane = row.pane.clone().filter(|_| row.is_local()).ok_or("Send to agent is for a review of local commits.")?;
+        let view = self
+            .views()
+            .into_iter()
+            .find(|v| v.id == pane)
+            .ok_or("The agent pane is closed. Use Copy all.")?;
+        if view.permit.is_some() || view.trust || matches!(view.lamp, crate::lamp::Lamp::Needs | crate::lamp::Lamp::Ended) {
+            return Err("The agent is asking you something, or it has ended. Answer it first.".into());
+        }
+        let drafts: Vec<DraftRow> = self.store.lock().unwrap().drafts(id).map_err(e)?.into_iter().filter(|d| !d.stale).collect();
+        let note = note.trim();
+        if drafts.is_empty() && note.is_empty() {
+            return Err("No comments to send.".into());
+        }
+        let text = agent_text(&row.head, note, &drafts);
+        let paste = format!("\x1b[200~{text}\x1b[201~");
+        self.input(&pane, paste.as_bytes())?;
+        let ids: Vec<i64> = drafts.iter().map(|d| d.id).collect();
+        self.store
+            .lock()
+            .unwrap()
+            .record_posted(
+                id,
+                &crate::store::PostedRow {
+                    event: "AGENT".into(),
+                    url: String::new(),
+                    comments: drafts.len() as u32,
+                    time: now(),
+                    head: Some(row.head.clone()),
+                    body: (!note.is_empty()).then(|| note.to_owned()),
+                    lines: Some(text),
+                },
+                &ids,
+            )
+            .map_err(e)?;
+        self.emit_review(id);
+        Ok(drafts.len())
+    }
+
     /// The last closed round of the PR at `url`, when no review of it is open.
     pub fn review_prior(&self, url: &str) -> Res<Option<Prior>> {
         let pr = review::parse_url(url).ok_or("not a GitHub PR URL")?;
@@ -445,7 +603,7 @@ impl Hub {
             .lock()
             .unwrap()
             .values()
-            .filter(|r| r.row.repo == pr.repo && r.row.number == pr.number)
+            .filter(|r| !r.row.is_local() && r.row.repo == pr.repo && r.row.number == pr.number)
             .max_by_key(|r| r.row.round)
             .map(|r| r.row.id.clone());
         if let Some(id) = existing {
@@ -480,6 +638,8 @@ impl Hub {
             round: 1,
             since: None,
             scope_note: None,
+            kind: "pr".into(),
+            pane: None,
         };
         self.reviews
             .lock()
@@ -770,6 +930,7 @@ impl Hub {
     /// only the changes since the head that this review covered. The verified checker
     /// then proves that the new guide covers every line changed since then.
     pub fn review_round(&self, id: &str) -> Res<String> {
+        self.pr_only(id)?;
         let prev = self
             .reviews
             .lock()
@@ -782,6 +943,9 @@ impl Hub {
 
     /// A new round after `prev`, an open or a closed round of the same PR.
     fn start_round(&self, prev: &ReviewRow) -> Res<String> {
+        if prev.is_local() {
+            return Err("A review of local commits has no rounds. Use Refresh.".into());
+        }
         if prev.head.is_empty() || prev.guide.is_none() {
             return Err("Finish this round first: it has no guide yet.".into());
         }
@@ -811,6 +975,8 @@ impl Hub {
             round: prev.round + 1,
             since: Some(prev.head.clone()),
             scope_note: None,
+            kind: "pr".into(),
+            pane: None,
         };
         self.reviews
             .lock()
@@ -901,6 +1067,9 @@ impl Hub {
             .unwrap_or(false);
         if running {
             return Err("the review is still running".into());
+        }
+        if self.pr_only(id).is_err() {
+            return self.local_refresh_bg(id);
         }
         self.set_status(id, "fetching", None);
         let hub = self.arc();
@@ -1149,7 +1318,7 @@ impl Hub {
             .files
             .iter()
             .find(|f| f.path() == path)
-            .ok_or(format!("The PR does not change {path}."))?;
+            .ok_or(format!("This review does not change {path}."))?;
         Ok(DiffView {
             head: model.head.clone(),
             sections: vec![section(f)],
@@ -1163,7 +1332,7 @@ impl Hub {
             .files
             .iter()
             .find(|f| f.path() == path)
-            .ok_or(format!("The PR does not change {path}."))?;
+            .ok_or(format!("This review does not change {path}."))?;
         Ok(FileRows {
             head: model.head.clone(),
             rows: coverage::all_rows(f),
@@ -1191,6 +1360,7 @@ impl Hub {
         thread: Option<String>,
         text: &str,
     ) -> Res<String> {
+        self.pr_only(id)?;
         let guide_session = self
             .reviews
             .lock()
@@ -1389,6 +1559,7 @@ impl Hub {
     }
 
     pub fn review_pin(&self, id: &str, thread: &str) -> Res<()> {
+        self.pr_only(id)?;
         let (t, line) = self.summarize(id, thread, "Summarize your last answer as one line of at most 20 words, in simple English. Reply with the line only.")?;
         self.store
             .lock()
@@ -1400,6 +1571,7 @@ impl Hub {
     }
 
     pub fn review_draft(&self, id: &str, thread: &str) -> Res<()> {
+        self.pr_only(id)?;
         let (t, line) = self.summarize(
             id,
             thread,
@@ -1506,7 +1678,7 @@ impl Hub {
         let start = start_line.unwrap_or(line);
         let model = self.model(id)?;
         let f = crate::post::model_file(&model, path, side == "old")
-            .ok_or(format!("The PR does not change {path}."))?;
+            .ok_or(format!("This review does not change {path}."))?;
         if start == 0 || start > line || crate::post::line_text(f, side == "old", line).is_none() {
             return Err(format!("{path} has no lines {start} to {line}."));
         }
@@ -1551,6 +1723,7 @@ impl Hub {
     /// Builds the plan for a send. The PR head on GitHub must still be the head
     /// that you reviewed, and every line must match GitHub's diff.
     fn post_plan(&self, id: &str) -> Res<(ReviewRow, crate::post::Plan)> {
+        self.pr_only(id)?;
         let row = self
             .reviews
             .lock()
@@ -1698,7 +1871,9 @@ impl Hub {
             .map(|r| r.row.clone())
             .ok_or(format!("no review {id}"))?;
         let tree = PathBuf::from(&row.tree);
-        let main = (!row.tree.is_empty()).then(|| repos::main_checkout(&tree)).flatten();
+        // A local review reads the agent's own worktree: its changes, its panes and the
+        // folder are not the review's, so the close leaves them all.
+        let main = (!row.tree.is_empty() && !row.is_local()).then(|| repos::main_checkout(&tree)).flatten();
         if !keep {
             if let Some(main) = &main {
                 let st = review::tree_state(main, &tree)?;
@@ -1728,7 +1903,7 @@ impl Hub {
         if let Some(pid) = pid {
             review::stop_run(pid);
         }
-        if !row.tree.is_empty() {
+        if !row.tree.is_empty() && !row.is_local() {
             for pane in self.review_panes(&row) {
                 let _ = self.close(&pane);
             }
@@ -1775,7 +1950,9 @@ impl Hub {
     /// branch when no open review of the PR is left. Pins the head first. Returns a
     /// note for the window when the worktree stays.
     fn clean_after(&self, row: &ReviewRow, discard: Vec<String>) -> Option<String> {
-        if row.tree.is_empty() {
+        // Never for a local review: its tree is the agent's. A pin there would also
+        // hide the agent's unpushed commits from `local_changes`.
+        if row.tree.is_empty() || row.is_local() {
             return None;
         }
         let tree = PathBuf::from(&row.tree);
@@ -1807,7 +1984,7 @@ impl Hub {
         };
         let facts = crate::cleanup::Facts {
             tree: state,
-            in_store: true,
+            in_store: !row.is_local(),
             open_review,
             panes,
             discard,
@@ -1854,12 +2031,40 @@ impl Hub {
         if !n.is_multiple_of(30) {
             return;
         }
+        // A local review: a new HEAD in its tree is a new head (SPEC 11.11). One
+        // `rev-parse` for each local review every 30 s.
+        let locals: Vec<(String, String, String)> = self
+            .reviews
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|r| r.row.is_local() && r.status == "ready")
+            .map(|r| (r.row.id.clone(), r.row.tree.clone(), r.row.head.clone()))
+            .collect();
+        for (id, tree, _) in locals {
+            if let Ok(now_head) = repos::git(Path::new(&tree), &["rev-parse", "HEAD"]) {
+                let changed = {
+                    let mut reviews = self.reviews.lock().unwrap();
+                    // Compare with the row as it is now: a Refresh can have run since.
+                    match reviews.get_mut(&id) {
+                        Some(r) if r.status == "ready" && now_head != r.row.head && r.new_head.as_deref() != Some(now_head.as_str()) => {
+                            r.new_head = Some(now_head);
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                if changed {
+                    self.emit_review(&id);
+                }
+            }
+        }
         let due: Vec<(String, String, String)> = self
             .reviews
             .lock()
             .unwrap()
             .values()
-            .filter(|r| r.status == "ready" && now().saturating_sub(r.last_poll) >= every)
+            .filter(|r| !r.row.is_local() && r.status == "ready" && now().saturating_sub(r.last_poll) >= every)
             .map(|r| (r.row.id.clone(), r.row.url.clone(), r.row.head.clone()))
             .collect();
         for (id, url, head) in due {
@@ -1891,6 +2096,9 @@ impl Hub {
             .unwrap_or(false);
         if running {
             return Err("the review is still running".into());
+        }
+        if self.pr_only(id).is_err() {
+            return self.local_refresh_bg(id);
         }
         let hub = self.arc();
         let rid = id.to_owned();
@@ -2058,6 +2266,12 @@ impl Hub {
     /// worktree, so it knows the review. With no pane and `start`, it starts one that
     /// opens on `step`. Returns the pane id.
     pub fn review_term(&self, id: &str, step: Option<&str>, start: bool) -> Res<Option<String>> {
+        // A local review shows its agent pane itself, while that pane is open.
+        let local = self.reviews.lock().unwrap().get(id).filter(|r| r.row.is_local()).map(|r| r.row.pane.clone());
+        if let Some(pane) = local {
+            let open = pane.filter(|p| self.panes.lock().unwrap().iter().any(|x| &x.row.id == p));
+            return Ok(open);
+        }
         let (tree, number, repo, session, connection) = {
             let r = self.reviews.lock().unwrap();
             let r = r.get(id).ok_or("gone")?;
@@ -2116,6 +2330,7 @@ impl Hub {
 
     /// One line that tells the review's Claude Code pane the current step.
     pub fn review_step_note(&self, id: &str, step: &str) -> Res<String> {
+        self.pr_only(id)?;
         Ok(step_note(&self.step(id, step)?))
     }
 
@@ -2212,6 +2427,38 @@ impl Drop for Sending {
     fn drop(&mut self) {
         SENDING.lock().unwrap().retain(|x| x != &self.0);
     }
+}
+
+/// The paste that sends a local review's comments to its agent. Line numbers are at
+/// `head`; the agent can have moved on since then.
+fn agent_text(head: &str, note: &str, drafts: &[DraftRow]) -> String {
+    let mut t = format!(
+        "Review comments on commit {} (line numbers are at that commit):\n",
+        &head[..head.len().min(12)]
+    );
+    if !note.is_empty() {
+        t += &format!("{note}\n");
+    }
+    for d in drafts {
+        let at = match (d.path.as_deref(), d.line) {
+            (Some(p), Some(l)) => {
+                let range = match d.start_line {
+                    Some(s) if s != l => format!("{s}-{l}"),
+                    _ => l.to_string(),
+                };
+                let old = if d.side.as_deref() == Some("old") { " (old side)" } else { "" };
+                format!("{p}:{range}{old}")
+            }
+            (Some(p), None) => p.to_owned(),
+            _ => "general".into(),
+        };
+        t += &format!("- {at}: {}\n", d.text.trim());
+    }
+    // One paste: no control character but the line breaks.
+    t.trim_end()
+        .chars()
+        .map(|c| if c.is_control() && c != '\n' { ' ' } else { c })
+        .collect()
 }
 
 /// True when the nvim at `sock` has no unsaved file. An nvim that does not answer
