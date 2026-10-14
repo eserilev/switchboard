@@ -133,6 +133,7 @@ function drawBoardNow() {
   const shown = S.panes.filter((p) => p.id !== S.live);
   $("#board").innerHTML = shown.map(tile).join("");
   $("#view-board").classList.toggle("has-live", !!S.live);
+  $("#bgutter").hidden = !S.live || S.termHost !== null;
   drawTally();
   drawLiveTitle();
 }
@@ -331,7 +332,33 @@ function fitLive() {
   invoke("pane_resize", { cols: term.cols, rows: term.rows }).catch(() => {});
 }
 let fitTimer;
-new ResizeObserver(() => { clearTimeout(fitTimer); fitTimer = setTimeout(fitLive, 60); }).observe($("#live"));
+const fitSoon = () => { clearTimeout(fitTimer); fitTimer = setTimeout(fitLive, 60); };
+new ResizeObserver(fitSoon).observe($("#live"));
+// Full screen and back also fires a window resize: fit then too.
+window.addEventListener("resize", fitSoon);
+
+// The board handle: the height of the tile strip under the live terminal. The
+// terminal keeps at least LIVE_MIN px; the strip at least STRIP_MIN.
+const STRIP_MIN = 60, LIVE_MIN = 240, STRIP_KEY = "sb.split.board";
+function setStrip(h) {
+  const wrap = $("#view-board");
+  if (h === null) { wrap.classList.remove("sized"); wrap.style.removeProperty("--strip"); return null; }
+  wrap.classList.add("sized");
+  wrap.style.setProperty("--strip", `${h}px`);
+  return h;
+}
+const stripRoom = () => $("#view-board").getBoundingClientRect().height - 24;
+const stripNow = () => $("#board").getBoundingClientRect().height;
+{
+  const saved = SBSplit.load(STRIP_KEY);
+  if (typeof saved === "number") setStrip(saved);
+  SBSplit.bind($("#bgutter"), {
+    axis: "y", dir: -1, size: stripNow,
+    apply: (v) => setStrip(SBSplit.side(stripRoom(), v, 0, STRIP_MIN, LIVE_MIN)),
+    reset: () => { try { localStorage.removeItem(STRIP_KEY); } catch (_) {} setStrip(null); },
+    done: (reset) => { if (!reset && $("#view-board").classList.contains("sized")) SBSplit.save(STRIP_KEY, stripNow()); fitSoon(); },
+  });
+}
 
 // Puts the live section back on the board.
 function parkLive() {

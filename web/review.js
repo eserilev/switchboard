@@ -48,9 +48,11 @@
     window.SB.parkLive();
     view().innerHTML = `
       <div class="rhead" id="rhead"></div>
-      <div class="rcols">
+      <div class="rcols" id="rcols">
         <div class="col"><ol class="steps" id="rsteps"></ol></div>
+        <div class="gutter gx" id="rgutl" title="Drag to size. Double-click to reset."></div>
         <div class="col center" id="rcenter"><div class="guide" id="rguide"></div><div id="rdiff"></div></div>
+        <div class="gutter gx" id="rgutr" title="Drag to size. Double-click to reset."></div>
         <div class="col">
           <div class="tbar"><span class="tlabel">${r.kind === "local" ? "Agent" : "Claude"}</span>${r.kind === "local" ? "" : `<button class="btn small" type="button" id="rstep" title="Type the current step into Claude's prompt">Send step</button>`}</div>
           <div class="askhost" id="rterm"><div class="askwait" id="raskwait"></div></div>
@@ -59,6 +61,7 @@
       </div>
       <div class="finish" id="rfinish" hidden></div>`;
     if ($("#rstep")) $("#rstep").onclick = () => sendStep(id);
+    bindColumns();
     $("#raskwait").onclick = (e) => { if (e.target.closest("[data-show]")) showTerm(id); };
     l.term = null;
     update(r, true);
@@ -251,6 +254,36 @@
       if (act === "close") closeReview(r.id);
     };
   }
+
+  // The side columns of a review: drag the handles, or use the arrow keys on them.
+  // One size for every review tab; the middle column keeps at least MID px.
+  const SIDE_MIN = 160, MID = 320, COLS_KEY = "sb.split.review";
+  const colDefaults = () => (window.innerWidth <= 1100 ? [240, 300] : [280, 520]);
+  function colSizes() {
+    const row = $("#rcols");
+    const saved = SBSplit.load(COLS_KEY) || colDefaults();
+    return SBSplit.fit(row.getBoundingClientRect().width - 12, saved[0], saved[1], SIDE_MIN, MID);
+  }
+  function setCols([l, r]) {
+    const row = $("#rcols");
+    if (!row) return;
+    row.style.setProperty("--rl", `${l}px`);
+    row.style.setProperty("--rr", `${r}px`);
+  }
+  function bindColumns() {
+    const row = $("#rcols");
+    setCols(colSizes());
+    const total = () => row.getBoundingClientRect().width - 12;
+    const cur = () => [parseFloat(row.style.getPropertyValue("--rl")), parseFloat(row.style.getPropertyValue("--rr"))];
+    const done = (reset) => { if (!reset) SBSplit.save(COLS_KEY, cur()); window.dispatchEvent(new Event("resize")); };
+    const reset = () => { try { localStorage.removeItem(COLS_KEY); } catch (_) {} setCols(colSizes()); };
+    SBSplit.bind($("#rgutl"), { axis: "x", dir: 1, size: () => cur()[0], reset, done,
+      apply: (v) => { const [, r] = cur(); const l = SBSplit.side(total(), v, r, SIDE_MIN, MID); setCols([l, r]); return l; } });
+    SBSplit.bind($("#rgutr"), { axis: "x", dir: -1, size: () => cur()[1], reset, done,
+      apply: (v) => { const [l] = cur(); const r = SBSplit.side(total(), v, l, SIDE_MIN, MID); setCols([l, r]); return r; } });
+  }
+  // A smaller window shrinks the saved sizes so the middle keeps its room.
+  window.addEventListener("resize", () => { if ($("#rcols")) setCols(colSizes()); });
 
   // The header of a review of local commits: the range, what it compares with, and a
   // Refresh when the agent made new commits.

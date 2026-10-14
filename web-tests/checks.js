@@ -211,6 +211,24 @@
     window.SB.setTab("r1");
     await wait(300);
   }
+  // A smaller window shrinks the terminal to its box, at once and not one column
+  // at a time (full screen to a window). Else the program draws too wide.
+  {
+    const fits = () => {
+      const t = window.SB.term;
+      const col = $("#rterm").getBoundingClientRect();
+      const screen = $("#term .xterm-screen").getBoundingClientRect();
+      return { ok: screen.right <= col.right + 1, cols: t.cols, screen: Math.round(screen.width), col: Math.round(col.width) };
+    };
+    const shrink = async (px) => { if (px) SBSplit.save("sb.split.review", [280, px]); else localStorage.removeItem("sb.split.review"); window.dispatchEvent(new Event("resize")); await wait(400); };
+    await shrink(800);
+    const wide = window.SB.term.cols;
+    await shrink(400);
+    const f = fits();
+    const sent = called("pane_resize").at(-1)?.[1];
+    check("after a smaller window the review terminal fits its box", f.ok && f.cols < wide - 10 && sent?.cols === f.cols, JSON.stringify({ ...f, wide, sent }));
+    await shrink("");
+  }
   window.SB.setTab("board");
   await wait(100);
   check("the board takes the terminal back", $("#live").parentElement === $("#view-board") && $("#live").hidden && window.SB.S.live === null && window.SB.S.termHost === null);
@@ -492,6 +510,126 @@
     window.__emit("review", Object.assign({}, rL, { pane: "p2", base: "c1c1c1c1c1c1", status: "ready" }));
     await wait(150);
     check("a new base alone loads the file list again", called("review_files").filter((c) => c[1].id === "rL").length > files);
+  }
+
+  // The same on the board: full width, then a smaller window.
+  {
+    window.SB.setTab("board");
+    await wait(100);
+    await window.SB.expand("p1");
+    await wait(200);
+    const shrink = async (px) => { $("#view-board").style.width = px; window.dispatchEvent(new Event("resize")); await wait(400); };
+    await shrink("2400px");
+    const wide = window.SB.term.cols;
+    await shrink("500px");
+    const area = $("#view-board").getBoundingClientRect();
+    const screen = $("#term .xterm-screen").getBoundingClientRect();
+    check("after a smaller window the board terminal fits its box", screen.right <= area.right + 1 && window.SB.term.cols < wide - 10, JSON.stringify({ cols: window.SB.term.cols, wide, screen: Math.round(screen.width), area: Math.round(area.width), live: Math.round($("#live").getBoundingClientRect().width), hidden: $("#live").hidden, S: window.SB.S.live, parent: $("#live").parentElement.id, tab: window.SB.S.tab }));
+    await shrink("");
+  }
+
+  // Draggable sizes (SPEC 6.6). The rules first: random cases against their spec.
+  {
+    let seed = 12345;
+    const rnd = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+    let bad = null;
+    for (let i = 0; i < 5000 && !bad; i++) {
+      const min = 40 + rnd(200), mid = 100 + rnd(400), total = rnd(3000);
+      const want = rnd(4000) - 500, other = min + rnd(1500);
+      const v = SBSplit.side(total, want, other, min, mid);
+      const room = total - other - mid;
+      // A side keeps its minimum; the middle keeps its own when there is room; a
+      // value inside the range stays as asked.
+      if (v < min) bad = ["side below min", { total, want, other, min, mid, v }];
+      else if (room >= min && v > room) bad = ["side takes the middle's room", { total, want, other, min, mid, v }];
+      else if (want >= min && want <= room && v !== Math.round(want)) bad = ["side moved a fitting value", { total, want, v }];
+      const [l, r] = SBSplit.fit(total, min + rnd(1500), min + rnd(1500), min, mid);
+      const [l2, r2] = SBSplit.fit(total, l, r, min, mid);
+      if (!bad && (l < min || r < min)) bad = ["fit below min", { total, l, r, min }];
+      else if (!bad && total >= 2 * min + mid && l + r + mid > total) bad = ["fit leaves the middle short", { total, l, r, min, mid }];
+      else if (!bad && (l2 !== l || r2 !== r)) bad = ["fit is not stable", { total, l, r, l2, r2 }];
+      const [a1, b1] = [min + rnd(300), min + rnd(300)];
+      if (!bad && a1 + b1 + mid <= total) { const [fa, fb] = SBSplit.fit(total, a1, b1, min, mid); if (fa !== a1 || fb !== b1) bad = ["fit changed sizes that fit", { total, a1, b1, fa, fb }]; }
+    }
+    check("the size rules hold on 5000 random cases", !bad, JSON.stringify(bad));
+  }
+  // The review handles: drag, keys, limits, double-click, and the other side stays.
+  {
+    window.SB.setTab("r1");
+    await wait(300);
+    localStorage.removeItem("sb.split.review");
+    window.dispatchEvent(new Event("resize"));
+    await wait(100);
+    const widths = () => [...$("#rcols").children].filter((c) => c.classList.contains("col")).map((c) => Math.round(c.getBoundingClientRect().width));
+    const drag = async (el, dx) => {
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + 50;
+      el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: x, clientY: y, button: 0 }));
+      window.dispatchEvent(new PointerEvent("pointermove", { clientX: x + dx / 2, clientY: y }));
+      window.dispatchEvent(new PointerEvent("pointermove", { clientX: x + dx, clientY: y }));
+      window.dispatchEvent(new PointerEvent("pointerup", { clientX: x + dx, clientY: y }));
+      await wait(100);
+    };
+    const [l0, , r0] = widths();
+    await drag($("#rgutl"), 60);
+    const [l1, , r1] = widths();
+    check("dragging the left handle widens the steps and leaves the right column", l1 === l0 + 60 && r1 === r0, JSON.stringify({ l0, l1, r0, r1 }));
+    check("the size is saved", JSON.stringify(SBSplit.load("sb.split.review")) === JSON.stringify([l1, r1]), localStorage.getItem("sb.split.review"));
+    await drag($("#rgutr"), -40);
+    const [l2, m2, r2] = widths();
+    check("dragging the right handle to the left widens the Claude column", r2 === r1 + 40 && l2 === l1, JSON.stringify({ l1, l2, r1, r2 }));
+    await drag($("#rgutl"), 5000);
+    const [, m3] = widths();
+    check("a drag past the limit stops at the middle column's minimum", Math.abs(m3 - 320) <= 1, JSON.stringify(widths()));
+    await drag($("#rgutl"), -5000);
+    check("a drag past the other end stops at the side minimum", widths()[0] === 160, JSON.stringify(widths()));
+    const before = widths()[0];
+    $("#rgutl").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    await wait(50);
+    $("#rgutl").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true }));
+    await wait(50);
+    check("arrow keys move a handle by 16 and Shift by 64", widths()[0] === before + 80, JSON.stringify({ before, now: widths()[0] }));
+    check("a handle is a focusable separator", $("#rgutl").getAttribute("role") === "separator" && $("#rgutl").tabIndex === 0);
+    $("#rgutl").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await wait(50);
+    check("double-click resets both sides", widths()[0] === 280 && widths()[2] === 520 && !localStorage.getItem("sb.split.review"), JSON.stringify(widths()));
+    // A new review tab takes the saved size.
+    await drag($("#rgutl"), 30);
+    window.SB.setTab("board");
+    window.SB.setTab("r1");
+    await wait(200);
+    check("a redrawn review keeps the dragged size", widths()[0] === 310, JSON.stringify(widths()));
+    $("#rgutl").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await wait(50);
+  }
+  // The board handle: the tile strip under the live terminal.
+  {
+    window.SB.setTab("board");
+    await wait(100);
+    await window.SB.expand("p1");
+    await wait(200);
+    const g = $("#bgutter");
+    check("the board handle shows with a live terminal", !g.hidden);
+    const strip = () => Math.round($("#board").getBoundingClientRect().height);
+    const r = g.getBoundingClientRect();
+    const y = r.top + r.height / 2;
+    const s0 = strip();
+    g.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: r.left + 40, clientY: y, button: 0 }));
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: r.left + 40, clientY: y - 120 }));
+    window.dispatchEvent(new PointerEvent("pointerup", { clientX: r.left + 40, clientY: y - 120 }));
+    await wait(150);
+    check("dragging the board handle up makes the tiles taller", Math.abs(strip() - (s0 + 120)) <= 2, JSON.stringify({ s0, now: strip() }));
+    g.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: r.left + 40, clientY: y, button: 0 }));
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: r.left + 40, clientY: y - 5000 }));
+    window.dispatchEvent(new PointerEvent("pointerup", { clientX: r.left + 40, clientY: y - 5000 }));
+    await wait(150);
+    check("the terminal keeps its minimum height", Math.round($("#live").getBoundingClientRect().height) >= 238, JSON.stringify({ live: $("#live").getBoundingClientRect().height }));
+    g.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await wait(100);
+    check("double-click resets the board", !$("#view-board").classList.contains("sized") && !localStorage.getItem("sb.split.board"));
+    window.SB.collapse();
+    await wait(100);
+    check("the board handle hides with no live terminal", g.hidden);
   }
 
   // Back to the board with the leader.

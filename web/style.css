@@ -67,7 +67,9 @@ button { font: inherit; }
 .board-wrap { min-height: 0; min-width: 0; display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); overflow: hidden; }
 .board { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); grid-auto-rows: min-content; gap: 10px; padding: 12px; overflow-y: auto; overflow-x: hidden; min-height: 0; min-width: 0; align-content: start; }
 /* With a live pane: the live pane takes the space, and the other tiles wrap in rows under it. Two rows show; more rows scroll. */
-.board-wrap.has-live { grid-template-rows: minmax(240px, 1fr) auto; }
+.board-wrap.has-live { grid-template-rows: minmax(240px, 1fr) auto auto; }
+/* After a drag of the board handle, the tiles take that height. */
+.board-wrap.has-live.sized .board { height: var(--strip); max-height: none; }
 .board-wrap.has-live .board { --tile-h: 136px; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); grid-auto-rows: var(--tile-h); max-height: calc(2 * var(--tile-h) + 10px + 24px); scroll-snap-type: y mandatory; scroll-padding: 12px; }
 .board-wrap.has-live .pane { scroll-snap-align: start; }
 .board-wrap.has-live .pane .term-tail { display: none; }
@@ -108,8 +110,12 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .term-tail { margin: 0; padding: 8px 12px; font: 12px/1.5 var(--mono); color: var(--muted); white-space: pre; overflow: hidden; }
 
 /* ---------- live pane ---------- */
-.live { display: grid; grid-template-rows: auto 1fr; min-height: 0; min-width: 0; margin: 12px 12px 0; border: 1px solid var(--accent); border-radius: 8px; overflow: hidden; }
-.live .term { min-height: 0; padding: 6px 0 0 8px; background: var(--bg); }
+/* The column may shrink below the terminal's content, and the terminal box clips
+   it. Else the box keeps its old width, the fit reads that width again, and after
+   full screen the terminal shrinks one column at a time while the program in the
+   pane draws for the old width. */
+.live { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; margin: 12px 12px 0; border: 1px solid var(--accent); border-radius: 8px; overflow: hidden; }
+.live .term { min-height: 0; min-width: 0; overflow: hidden; padding: 6px 0 0 8px; background: var(--bg); }
 
 /* ---------- launcher ---------- */
 .launcher { position: fixed; inset: 0; z-index: 30; display: grid; place-items: start center; padding: 70px 16px 16px; background: color-mix(in srgb, var(--bg) 70%, transparent); }
@@ -153,10 +159,17 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .rhead .newhead { font: 12px/1.4 var(--mono); color: var(--needs); display: flex; gap: 8px; align-items: center; }
 .rhead .right { margin-left: auto; display: flex; gap: 8px; }
 .rerror { padding: 14px; color: var(--error); font: 13px/1.5 var(--mono); white-space: pre-wrap; }
-.rcols { display: grid; grid-template-columns: minmax(0, 280px) minmax(0, 1fr) minmax(0, 520px); min-height: 0; }
+/* The side columns take their width from the handles (split.js). */
+.rcols { display: grid; grid-template-columns: var(--rl, 280px) 6px minmax(0, 1fr) 6px var(--rr, 520px); min-height: 0; }
 .rcols > * { min-width: 0; min-height: 0; }
 .col { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.col + .col { border-left: 1px solid var(--line); }
+.gutter { background: var(--line); background-clip: content-box; touch-action: none; }
+.gutter.gx { cursor: col-resize; padding: 0 2.5px; }
+.gutter.gy { cursor: row-resize; padding: 2.5px 0; height: 6px; margin: 6px 12px 0; }
+.gutter:hover, .gutter:focus-visible { background-color: var(--accent); outline: none; }
+body.is-sizing, body.is-sizing * { user-select: none; }
+body.size-x, body.size-x * { cursor: col-resize !important; }
+body.size-y, body.size-y * { cursor: row-resize !important; }
 .steps { list-style: none; margin: 0; padding: 6px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; flex: 1 1 0; min-height: 0; }
 .steps > * { flex: none; }
 .step { display: grid; grid-template-columns: 22px 1fr; gap: 8px; padding: 8px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
@@ -295,7 +308,7 @@ tr.anchored td.ln::after { content: "●"; color: var(--accent); margin-left: 4p
 .check li + li { margin-top: 3px; }
 
 @media (max-width: 1100px) {
-  .rcols { grid-template-columns: minmax(0, 240px) minmax(0, 1fr) minmax(0, 300px); }
+  .rcols { grid-template-columns: var(--rl, 240px) 6px minmax(0, 1fr) 6px var(--rr, 300px); }
 }
 
 /* ---------- Files view ---------- */

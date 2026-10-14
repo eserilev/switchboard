@@ -13,11 +13,11 @@ python3 - "$here/../web/index.html" "$here/harness.html" "$work/page.html" "$her
 import re, sys
 index, harness, out, here = sys.argv[1:]
 body = open(index).read().split("<body>")[1].split("</body>")[0]
-body = body.replace('src="vendor/', 'src="../web/vendor/').replace('src="app.js"', 'src="../web/app.js"').replace('src="review.js"', 'src="../web/review.js"')
+body = body.replace('src="vendor/', 'src="../web/vendor/').replace('src="split.js"', 'src="../web/split.js"').replace('src="app.js"', 'src="../web/app.js"').replace('src="review.js"', 'src="../web/review.js"')
 page = open(harness).read().replace("@@BODY@@", body)
 open(out, "w").write(page.replace('src="shim.js"', f'src="{here}/shim.js"').replace('src="checks.js"', f'src="{here}/checks.js"').replace('"../web/', f'"{here}/../web/'))
 PY
-"$browser" --headless --disable-gpu --no-sandbox --allow-file-access-from-files --virtual-time-budget=15000 --dump-dom "file://$work/page.html" 2>/dev/null >"$work/dom.html"
+"$browser" --headless --disable-gpu --no-sandbox --allow-file-access-from-files --window-size=1600,1000 --virtual-time-budget=30000 --dump-dom "file://$work/page.html" 2>/dev/null >"$work/dom.html"
 python3 - "$work/dom.html" <<'PY'
 import html, json, re, sys
 dom = open(sys.argv[1]).read()
