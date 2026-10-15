@@ -103,6 +103,10 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .tool:hover { color: var(--fg); border-color: var(--muted); }
 .tool.x { width: 26px; padding: 0; font-size: 14px; }
 .psum { padding: 8px 12px; font-size: 13px; line-height: 1.45; border-bottom: 1px dashed var(--line); min-width: 0; }
+/* The tool buttons sit at the end of the info line, so the title row keeps its room. */
+.pmeta { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pmeta .meta { flex: 1; min-width: 0; }
+.ptools { display: flex; gap: 4px; flex: none; }
 .psum .meta { display: block; font: 500 11px/1.4 var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .psum .text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tact { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
@@ -514,9 +518,6 @@ tr.noted-nit td.ln::after { color: var(--muted); }
 .ltaskhead { font-size: 13px; color: var(--muted); }
 .ltaskhead b { color: var(--fg); }
 #lfirst { width: 100%; resize: vertical; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: 13px/1.4 var(--mono); padding: 8px; }
-/* The task button of a tile shows on hover or focus, so the title keeps its room. */
-.pane .tool[data-ptaskmenu] { display: none; }
-.pane.hover .tool[data-ptaskmenu], .pane:focus-within .tool[data-ptaskmenu], .pane.focused .tool[data-ptaskmenu] { display: inline-block; }
 .thint { white-space: nowrap; }
 
 /* planning (SPEC 27, phase 3) */

@@ -23,15 +23,14 @@
   check("nvim tile has no nvim button", !$('.pane[data-id="p3"] [data-nvim]'));
   check("connection button shows a", $("#conn").textContent === "a");
   {
-    // The mouse is on a tile and a pane event redraws the board: the tile keeps its
-    // hover look, so the task button does not blink and the title does not jump.
-    $('.pane[data-id="p1"] .ptitle').dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-    window.__emit("pane", structuredClone(window.__data.panes.find((x) => x.id === "p2")));
-    await wait(80);
-    const btn = $('.pane[data-id="p1"] [data-ptaskmenu]');
-    check("a redraw keeps the hover look of the tile under the mouse", $('.pane[data-id="p1"]').classList.contains("hover") && getComputedStyle(btn).display !== "none" && getComputedStyle($('.pane[data-id="p2"] [data-ptaskmenu]')).display === "none");
-    $("#board").dispatchEvent(new MouseEvent("mouseleave"));
-    check("the hover look ends when the mouse leaves the board", !$("#board .pane.hover"));
+    // The title row has only the name, the state and Close: the tool buttons sit on
+    // the info line, so a long name keeps its room.
+    const row = $('.pane[data-id="p1"] .ptitle');
+    check("the title row holds only the name, the state and Close", [...row.querySelectorAll("button")].map((b) => b.getAttribute("aria-label")).join() === "Close"
+      && $$('.pane[data-id="p1"] .pmeta .ptools [data-ptaskmenu], .pane[data-id="p1"] .pmeta .ptools [data-lreview], .pane[data-id="p1"] .pmeta .ptools [data-nvim]').length === 3);
+    const name = $('.pane[data-id="p1"] .name');
+    check("the name takes most of the title row", name.getBoundingClientRect().width > row.getBoundingClientRect().width * 0.6, `${name.getBoundingClientRect().width} of ${row.getBoundingClientRect().width}`);
+    check("the task button shows with no hover", getComputedStyle($('.pane[data-id="p2"] [data-ptaskmenu]')).display !== "none");
   }
   check("worktree tile is named by branch", $('.pane[data-id="p2"] .name').textContent === "il", $('.pane[data-id="p2"] .name').textContent);
 

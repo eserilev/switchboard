@@ -17,8 +17,6 @@ const S = {
   panes: [],
   live: null,
   focus: null,
-  // The tile under the mouse.
-  hover: null,
   tab: "board",
   // The review tab whose Claude column holds the live terminal.
   termHost: null,
@@ -115,10 +113,10 @@ function tile(p) {
   const state = p.lamp === "none" ? p.kind : LABEL[p.lamp] || p.lamp;
   const reviewBtn = p.kind === "claude" ? `<button class="tool" data-lreview title="Review the commits that are not pushed">review</button>` : "";
   const taskBtn = p.kind !== "nvim" ? `<button class="tool" data-ptaskmenu title="Link this pane to a task">task</button>` : "";
-  const cls = ["pane", p.unseen && "unseen", S.focus === p.id && "focused", p.id === S.live && "is-live", S.hover === p.id && "hover"].filter(Boolean).join(" ");
+  const cls = ["pane", p.unseen && "unseen", S.focus === p.id && "focused", p.id === S.live && "is-live"].filter(Boolean).join(" ");
   return `<div class="${cls}" data-id="${esc(p.id)}" data-lamp="${esc(p.lamp)}" tabindex="0">
-    <div class="ptitle"><span class="name">${esc(paneName(p))}</span><span class="state">${esc(state)}</span>${taskBtn}${reviewBtn}${nvimBtn}<button class="tool x" data-close aria-label="Close">×</button></div>
-    <div class="psum">${taskLine(p)}<span class="meta">${esc(meta(p))}</span><span class="text">${esc(p.summary || "")}</span>${actions(p)}</div>
+    <div class="ptitle"><span class="name" title="${esc(paneName(p))}">${esc(paneName(p))}</span><span class="state">${esc(state)}</span><button class="tool x" data-close aria-label="Close">×</button></div>
+    <div class="psum">${taskLine(p)}<div class="pmeta"><span class="meta">${esc(meta(p))}</span><span class="ptools">${taskBtn}${reviewBtn}${nvimBtn}</span></div><span class="text">${esc(p.summary || "")}</span>${actions(p)}</div>
     <pre class="term-tail">${esc(p.tail.map(strip).join("\n"))}</pre>
   </div>`;
 }
@@ -150,20 +148,6 @@ function drawBoardNow() {
   drawTally();
   drawLiveTitle();
 }
-
-// The tile under the mouse. A redraw makes new tiles, and a new tile gets no :hover
-// until the mouse moves. So the class keeps the hover look over a redraw, and the
-// title does not jump.
-$("#board").addEventListener("mouseover", (e) => {
-  const id = e.target.closest?.(".pane")?.dataset.id || null;
-  if (id === S.hover) return;
-  S.hover = id;
-  document.querySelectorAll("#board .pane").forEach((x) => x.classList.toggle("hover", x.dataset.id === id));
-});
-$("#board").addEventListener("mouseleave", () => {
-  S.hover = null;
-  document.querySelectorAll("#board .pane.hover").forEach((x) => x.classList.remove("hover"));
-});
 
 function drawTally() {
   const n = {};

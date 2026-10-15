@@ -1136,7 +1136,7 @@ An agent can write task notes (27.7), so a note from one agent can become the pr
 
 Start links the new pane to the task. When the task is `todo`, Start sets it to `doing`.
 
-**Link pane** links a pane that already runs. A pane links to at most one task. A link to a second task moves it. A tile has a task menu too: "Link to task…", "Unlink", and "New task from this pane". The **task** button of a tile shows on hover or focus, so the title keeps its room. A task from a pane takes the pane name as its title, the pane's repo, the open sprint, and In progress.
+**Link pane** links a pane that already runs. A pane links to at most one task. A link to a second task moves it. A tile has a task menu too: "Link to task…", "Unlink", and "New task from this pane". The **task**, **review** and **nvim** buttons of a tile sit at the end of its info line, under the title, so the title keeps its room. A task from a pane takes the pane name as its title, the pane's repo, the open sprint, and In progress.
 
 A linked pane shows the task title on its tile, under the title. A click on it opens the task.
 
