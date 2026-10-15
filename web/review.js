@@ -55,6 +55,7 @@
         <div class="gutter gx" id="rgutr" title="Drag to size. Double-click to reset."></div>
         <div class="col">
           <div class="tbar"><span class="tlabel">${r.kind === "local" ? "Agent" : "Claude"}</span>${r.kind === "local" ? "" : `<button class="btn small" type="button" id="rstep" title="Type the current step into Claude's prompt">Send step</button>`}</div>
+          <div class="chatlog" id="rchat" hidden></div>
           <div class="askhost" id="rterm"><div class="askwait" id="raskwait"></div></div>
           <div class="drafts" id="rdrafts"></div>
         </div>
@@ -66,6 +67,8 @@
     l.term = null;
     update(r, true);
     openTerm(id);
+    seen(id);
+    loadChat(id);
   }
 
   function update(r, fresh) {
@@ -234,7 +237,7 @@
     const round = r.round > 1 ? `<span class="roundtag" title="${esc(r.scope_note || "A plain diff from the commit that the round before reviewed.")}">Round ${r.round} · changes since ${esc(short(r.since))}${r.scope_note ? " ⚠" : ""}</span>` : "";
     const retry = r.status === "error" ? `<button class="btn small" data-act="retry">Retry</button>` : "";
     $("#rhead").innerHTML = `<div><div class="t">${esc(r.title)}</div><div class="m">${esc(r.repo)} #${esc(r.number)} · ${esc(short(r.head))}${r.tree ? " · " + esc(r.tree) : ""}</div></div>
-      ${round}${status ? `<span class="status${r.status === "error" ? " error" : ""}">${esc(status)}</span>` : ""}${coverageLine(r)}${newHead}
+      ${round}${status ? `<span class="status${r.status === "error" ? " error" : ""}">${esc(status)}</span>` : ""}${coverageLine(r)}${prTake(r)}${newHead}
       <div class="right"><div class="seg" id="rmode" title="Switch with f"><button type="button" data-mode="guide" aria-pressed="${local(r.id).mode === "guide"}">Guide</button><button type="button" data-mode="files" aria-pressed="${local(r.id).mode === "files"}">Files</button></div>${retry}<button class="btn small" data-act="close">Close review</button></div>
       ${r.error ? `<div class="rerror" style="flex-basis:100%;padding:0">${esc(r.error)}</div>` : ""}
       ${r.round > 1 && r.scope_note ? `<div class="scopenote">${esc(r.scope_note)}</div>` : ""}`;
@@ -255,6 +258,15 @@
     };
   }
 
+  // The PR take in the header: the verdict, the open notes, and the summary.
+  function prTake(r) {
+    const t = r.guide?.take;
+    if (!t) return "";
+    const live = takeNotes(r, "pr", t).filter((n) => !n.dismissed);
+    const text = [`Claude on the PR: ${VERDICT[t.verdict] || t.verdict}`, live.length ? `${live.length} note${live.length > 1 ? "s" : ""}` : "", t.summary || ""].filter(Boolean).join(" · ");
+    return `<button class="prtake" data-act="prtake" title="${esc(live.map((n) => `${SEV[n.severity] || n.severity}: ${n.text}`).join("\n"))}">${esc(text)}</button>`;
+  }
+
   // The side columns of a review: drag the handles, or use the arrow keys on them.
   // One size for every review tab; the middle column keeps at least MID px.
   const SIDE_MIN = 160, MID = 320, COLS_KEY = "sb.split.review";
@@ -262,7 +274,7 @@
   function colSizes() {
     const row = $("#rcols");
     const saved = SBSplit.load(COLS_KEY) || colDefaults();
-    return SBSplit.fit(row.getBoundingClientRect().width - 12, saved[0], saved[1], SIDE_MIN, MID);
+    return SBSplit.fit(row.getBoundingClientRect().width - 20, saved[0], saved[1], SIDE_MIN, MID);
   }
   function setCols([l, r]) {
     const row = $("#rcols");
@@ -273,14 +285,18 @@
   function bindColumns() {
     const row = $("#rcols");
     setCols(colSizes());
-    const total = () => row.getBoundingClientRect().width - 12;
+    const total = () => row.getBoundingClientRect().width - 20;
     const cur = () => [parseFloat(row.style.getPropertyValue("--rl")), parseFloat(row.style.getPropertyValue("--rr"))];
-    const done = (reset) => { if (!reset) SBSplit.save(COLS_KEY, cur()); window.dispatchEvent(new Event("resize")); };
-    const reset = () => { try { localStorage.removeItem(COLS_KEY); } catch (_) {} setCols(colSizes()); };
-    SBSplit.bind($("#rgutl"), { axis: "x", dir: 1, size: () => cur()[0], reset, done,
-      apply: (v) => { const [, r] = cur(); const l = SBSplit.side(total(), v, r, SIDE_MIN, MID); setCols([l, r]); return l; } });
-    SBSplit.bind($("#rgutr"), { axis: "x", dir: -1, size: () => cur()[1], reset, done,
-      apply: (v) => { const [l] = cur(); const r = SBSplit.side(total(), v, l, SIDE_MIN, MID); setCols([l, r]); return r; } });
+    const done = (reset) => { SBSplit.save(COLS_KEY, cur()); window.dispatchEvent(new Event("resize")); };
+    // A reset puts back only the column of that handle.
+    const resetSide = (i) => () => { const d = colDefaults(); const c = cur(); c[i] = d[i]; setCols(SBSplit.fit(total(), c[0], c[1], SIDE_MIN, MID)); };
+    const max = (other) => total() - other - MID;
+    SBSplit.bind($("#rgutl"), { axis: "x", dir: 1, size: () => cur()[0], reset: resetSide(0), done, controls: "rsteps",
+      limits: () => [SIDE_MIN, max(cur()[1])],
+      apply: (v) => { const [, r] = cur(); setCols([SBSplit.side(total(), v, r, SIDE_MIN, MID), r]); } });
+    SBSplit.bind($("#rgutr"), { axis: "x", dir: -1, size: () => cur()[1], reset: resetSide(1), done, controls: "rterm",
+      limits: () => [SIDE_MIN, max(cur()[0])],
+      apply: (v) => { const [l] = cur(); setCols([l, SBSplit.side(total(), v, l, SIDE_MIN, MID)]); } });
   }
   // A smaller window shrinks the saved sizes so the middle keeps its room.
   window.addEventListener("resize", () => { if ($("#rcols")) setCols(colSizes()); });
@@ -301,7 +317,20 @@
       const act = e.target.closest("[data-act]")?.dataset.act;
       if (act === "update" || act === "retry") { local(r.id).diff.clear(); local(r.id).files = null; call(act === "update" ? "review_update" : "review_retry", { id: r.id }); }
       if (act === "close") closeReview(r.id);
+      if (act === "prtake") { const l = local(r.id); l.prOpen = !l.prOpen; drawPrNotes(r); }
     };
+    drawPrNotes(r);
+  }
+
+  // The PR notes, under the header when you open them.
+  function drawPrNotes(r) {
+    let el = $("#rprnotes");
+    const l = local(r.id);
+    const notes = takeNotes(r, "pr", r.guide?.take);
+    if (!l.prOpen || !notes.length) { el?.remove(); return; }
+    if (!el) { el = document.createElement("div"); el.id = "rprnotes"; el.className = "prnotes"; $("#rhead").after(el); }
+    el.innerHTML = notes.map((n) => noteCard(n, { at: true, show: l.shownNotes?.has?.(n.key) })).join("");
+    el.onclick = (e) => noteAction(r, e);
   }
 
   function drawSteps(r) {
@@ -311,12 +340,98 @@
       const n = r.threads.filter((t) => t.step === s.id).length;
       const rs = s.ranges || [];
       const loc = rs.length ? `${rs[0].file}:${rs[0].from}-${rs[0].to}${rs.length > 1 ? ` +${rs.length - 1}` : ""}` : (s.files || []).join(", ");
-      const badges = [n ? `<span class="badge th">${n} thread${n > 1 ? "s" : ""}</span>` : "", st.stale ? `<span class="badge stale">stale</span>` : "", s.auto ? `<span class="badge stale">added by the app</span>` : ""].join("");
+      const live = takeNotes(r, s.id, s.take).filter((x) => !x.dismissed);
+      const w = worst(live);
+      const take = w ? `<span class="badge sev-${w}">${SEV[w]} · ${live.filter((x) => x.severity === w).length}</span>`
+        : s.take?.verdict === "good" ? `<span class="tk-good" title="${esc(s.take.checked || "")}">● Claude: no notes</span>` : "";
+      const badges = [take, n ? `<span class="badge th">${n} thread${n > 1 ? "s" : ""}</span>` : "", st.stale ? `<span class="badge stale">stale</span>` : "", s.auto ? `<span class="badge stale">added by the app</span>` : ""].join("");
       return `<li class="step${st.checked ? " checked" : ""}" tabindex="0" data-i="${i}" ${i === l.cur ? 'aria-current="step"' : ""}>
         <span class="n">${st.checked && i !== l.cur ? "✓" : i + 1}</span>
         <div><div class="st">${mdi(s.title)}</div>${loc ? `<div class="loc" title="${esc(loc)}">${esc(loc)}</div>` : ""}${badges ? `<div class="badges">${badges}</div>` : ""}</div></li>`;
     }).join("") || `<li class="empty-review">${r.status === "error" ? "" : "The guide shows here when the agent is done."}</li>`;
     $("#rsteps").onclick = (e) => { const s = e.target.closest(".step"); if (s) go(r.id, +s.dataset.i); };
+  }
+
+  // ---------- Claude's take (SPEC 11.12) ----------
+  const SEV = { must: "must fix", should: "should fix", nit: "nit" };
+  const VERDICT = { good: "looks good", change: "needs a change", question: "has a question" };
+  // A note's key names it for Dismiss: the step, the severity, the line and the text.
+  const noteKey = (sid, n) => `${sid}|${n.severity}|${n.file || ""}:${n.line || ""}|${n.text}`;
+  function takeNotes(r, sid, take) {
+    const gone = new Set(r.dismissed || []);
+    return (take?.notes || []).map((n) => ({ ...n, side: n.side || "new", key: noteKey(sid, n), dismissed: gone.has(noteKey(sid, n)) }));
+  }
+  const worst = (notes) => ["must", "should", "nit"].find((v) => notes.some((n) => n.severity === v));
+  const sevBadge = (v) => `<span class="badge sev-${esc(v)}">${esc((SEV[v] || v).toUpperCase())}</span>`;
+  function noteCard(n, extra) {
+    if (n.dismissed && !extra?.show) return `<div class="tdismissed" data-tn="${esc(n.key)}">A dismissed note${n.line ? ` on line ${esc(n.line)}` : ""} <button data-tshow>Show</button><button data-tundo>Undo</button></div>`;
+    const at = extra?.at && n.file ? `<span class="tat">${esc(n.file.split("/").pop())}${n.line ? `:${esc(n.line)}` : ""}</span>` : "";
+    const added = extra?.added ? `<span class="tadded">✓ Added</span>` : "";
+    return `<div class="dcard agent tnote" data-tn="${esc(n.key)}"><div class="dmeta">${sevBadge(n.severity)}<span class="who">Claude</span>${at}${added}</div>
+      <div class="dtext md">${mdi(n.text)}</div>
+      <div class="macts">${n.line ? `<button data-tadd>Add as comment</button>` : ""}<button data-task>Ask</button>${n.dismissed ? `<button data-tundo>Undo</button>` : `<button data-tdis class="dim">Dismiss</button>`}</div></div>`;
+  }
+
+  // The take bar above the diff: the verdict, the counts, the head it is for, and the
+  // list of notes that have no line on screen.
+  function drawTake(r) {
+    const el = $("#rtake");
+    if (!el) return;
+    const l = local(r.id);
+    const s = steps(r)[l.cur];
+    const take = s?.take;
+    const label = `<span class="tk-label">Claude's opinion · not verified</span>`;
+    const rerun = `<button data-tk="rerun">Re-run</button>`;
+    if (r.status === "updating") { el.innerHTML = `${label}<span class="tk-dim">Claude is reading this step…</span>`; return; }
+    if (!take) { el.innerHTML = `${label}<span class="tk-dim">No take for this step.</span><span class="tk-acts">${rerun}</span>`; el.onclick = (e) => { if (e.target.closest("[data-tk=rerun]")) call("review_retake", { id: r.id, step: s?.id ?? null }).catch(() => {}); }; return; }
+    const notes = takeNotes(r, s.id, take);
+    const live = notes.filter((n) => !n.dismissed);
+    const counts = ["must", "should", "nit"].map((v) => [v, live.filter((n) => n.severity === v).length]).filter(([, c]) => c).map(([v, c]) => `${c} ${SEV[v]}`).join(" · ");
+    const stale = r.new_head ? `<span class="badge stale" title="The take is from ${esc(short(r.head))}; the head is now ${esc(short(r.new_head))}.">stale</span>` : "";
+    const rest = notes.filter((n) => !(l.placed || new Set()).has(n.key));
+    const gone = notes.filter((n) => n.dismissed).length;
+    const list = l.takeOpen && rest.length ? `<div class="tk-list">${rest.map((n) => noteCard(n, { at: true, show: l.shownNotes?.has?.(n.key) })).join("")}</div>` : "";
+    el.innerHTML = `${label}<span class="badge verdict v-${esc(take.verdict)}">${esc(VERDICT[take.verdict] || take.verdict)}</span>${stale}
+      <span class="tk-dim">${[counts, gone ? `${gone} dismissed` : "", `on ${esc(short(r.head))}`].filter(Boolean).join(" · ")}</span>
+      <span class="tk-acts">${rest.length ? `<button data-tk="list">${l.takeOpen ? "Hide list" : `Show list (${rest.length})`}</button>` : ""}${rerun}</span>
+      ${take.verdict === "good" && take.checked ? `<div class="tk-checked">Checked: ${mdi(take.checked)}</div>` : ""}${list}`;
+    el.onclick = (e) => {
+      const tk = e.target.closest("[data-tk]")?.dataset.tk;
+      if (tk === "list") { l.takeOpen = !l.takeOpen; drawTake(r); return; }
+      if (tk === "rerun") { call("review_retake", { id: r.id, step: s.id }).catch(() => {}); return; }
+      noteAction(r, e);
+    };
+  }
+
+  // The actions of a note, in the diff or in the take list.
+  function noteAction(r, e) {
+    const card = e.target.closest("[data-tn]");
+    const b = e.target.closest("button");
+    if (!card || !b) return false;
+    const l = local(r.id);
+    const key = card.dataset.tn;
+    const all = [...steps(r).flatMap((s) => takeNotes(r, s.id, s.take)), ...takeNotes(r, "pr", r.guide?.take)];
+    const n = all.find((x) => x.key === key);
+    if (!n) return true;
+    if (b.dataset.tdis !== undefined) call("review_dismiss", { id: r.id, note: key, on: true }).catch(() => {});
+    else if (b.dataset.tundo !== undefined) call("review_dismiss", { id: r.id, note: key, on: false }).catch(() => {});
+    else if (b.dataset.tshow !== undefined) { (l.shownNotes ||= new Set()).add(key); drawDiff(r); drawTake(r); drawPrNotes(r); }
+    else if (b.dataset.task !== undefined) typeInto(r.id, `${n.file ? `${n.file}${n.line ? `:${n.line}` : ""} ` : ""}Your note: "${n.text}" `);
+    else if (b.dataset.tadd !== undefined) addNote(r, n);
+    return true;
+  }
+
+  // Add as comment: the comment form on the note's line, with its text, so you edit
+  // it first. It saves as an agent draft.
+  function addNote(r, n) {
+    const l = local(r.id);
+    const d = l.diff.get(diffKey(r));
+    const sec = d?.sections?.find((x) => (n.side === "old" ? x.old_path || x.path : x.path) === n.file);
+    const drawn = sec && $(`#rdiff [data-cm][data-sec="${d.sections.indexOf(sec)}"][data-side="${n.side}"][data-n="${n.line}"]`);
+    if (!drawn) { toast("This line is not on screen. Open its file or show the hidden lines, then add the comment."); return; }
+    l.compose = { sec: sec.path, path: n.file, side: n.side, start: n.line, line: n.line, text: n.text, fromTake: n.key };
+    drawDiff(r);
+    $("#rctext")?.focus();
   }
 
   function drawGuide(r) {
@@ -330,14 +445,18 @@
       <div class="eyebrow">Step ${l.cur + 1} of ${steps(r).length}</div>
       <h4>${mdi(s.title)}</h4>
       ${s.what ? `<div class="what md">${md(s.what)}</div>` : ""}
-      ${s.check?.length ? `<div class="check md"><ul>${s.check.map((c) => `<li>${mdi(c)}</li>`).join("")}</ul></div>` : ""}
+      ${s.why || s.why_split ? `<div class="why">${s.why ? `<span class="wk">Why it matters</span><span class="md">${mdi(s.why)}</span>` : ""}${s.why_split ? `<span class="wk dim">Why a separate step</span><span class="md dim">${mdi(s.why_split)}</span>` : ""}</div>` : ""}
+      ${s.check?.length ? `<div class="check md"><ul>${s.check.map((c, i) => `<li>${mdi(c)}${s.check_answers?.[i] ? ` <span class="ans">Claude: ${mdi(s.check_answers[i])}</span>` : ""}</li>`).join("")}</ul></div>` : ""}
+      <div class="take" id="rtake"></div>
       ${pins.map((p) => `<div class="pinned" data-pin="${p.id}"><span class="md" contenteditable="true" data-raw="${esc(p.text)}">${mdi(p.text)}</span><button class="tool x" data-unpin="${p.id}" aria-label="Remove">×</button></div>`).join("")}
       ${ctx.length ? `<div class="ctx">${ctx.map((c) => `<span class="chip">${esc(typeof c === "string" ? c : c.label || c.ref || "")}</span>`).join("")}</div>` : ""}
       <div class="gactions">
         <button class="btn" data-act="mark">${st.checked ? "Unmark" : "Mark reviewed"}</button>
         ${l.cur < steps(r).length - 1 ? `<button class="btn primary" data-act="next">Next step</button>` : ""}
       </div>`;
+    drawTake(r);
     $("#rguide").onclick = (e) => {
+      if (e.target.closest("#rtake")) return;
       const b = e.target.closest("button");
       if (!b) return;
       if (b.dataset.act === "mark") call("review_mark", { id: r.id, step: s.id, checked: !st.checked });
@@ -386,10 +505,14 @@
       return;
     }
     if (!d || !d.sections?.length) { $("#rdiff").innerHTML = d?.error ? `<div class="rerror">${esc(d.error)}</div>` : ""; return; }
+    // The notes placed under a line; the take bar lists the others.
+    const placed = new Set();
     const html = d.sections.map((sec, si) => {
       const inRange = (side, num) => sec.ranges.some((g) => g.side === side && num >= g.from && num <= g.to);
       const anchored = new Set(r.threads.filter((t) => (!s || t.step === s.id) && t.line && t.path === sec.path).map((t) => `${t.side || "new"}:${t.line}`));
       const pathOf = (side) => (side === "old" ? sec.old_path || sec.path : sec.path);
+      // Take notes on this file: the step's in Guide, every step's in Files.
+      const noted = (l.mode === "files" ? steps(r) : s ? [s] : []).flatMap((x) => takeNotes(r, x.id, x.take)).filter((n) => n.line && n.file === pathOf(n.side));
       const c = l.compose && l.compose.sec === sec.path ? l.compose : null;
       const rows = items(l, key, sec).map((it) => {
         if (it.gap) return gapRow(si, it);
@@ -402,7 +525,11 @@
         const isAnchor = l.anchor && l.anchor.path === sec.path && l.anchor.side === rowSide && l.anchor.line === num;
         const sel = c && c.side === rowSide && num >= c.start && num <= c.line;
         // The color comes only from the row kind: "-" removed, "+" added, " " context.
-        const cls = [KIND_CLASS[row.kind], focus ? "focus" : "", isAnchor ? "anchor" : "", anchored.has(`${rowSide}:${num}`) ? "anchored" : "", sel ? "sel" : ""].join(" ");
+        const here = noted.filter((n) => n.side === rowSide && n.line === num);
+        here.forEach((n) => placed.add(n.key));
+        const dot = worst(here.filter((n) => !n.dismissed));
+        const cls = [KIND_CLASS[row.kind], focus ? "focus" : "", isAnchor ? "anchor" : "", anchored.has(`${rowSide}:${num}`) ? "anchored" : "", sel ? "sel" : "", dot ? `noted-${dot}` : ""].join(" ");
+        const notes = here.map((n) => `<tr class="drow"><td colspan="3">${noteCard(n, { show: l.shownNotes?.has?.(n.key), added: l.added?.has?.(n.key) })}</td></tr>`).join("");
         const sign = row.kind === " " ? " " : row.kind;
         // A stale draft has no line at this head: it shows only in the list.
         const mine = r.drafts.filter((x) => !x.stale && x.path === pathOf(rowSide) && (x.side || "new") === rowSide && x.line === num);
@@ -414,7 +541,7 @@
           <textarea id="rctext" placeholder="Leave a comment">${esc(c.text || "")}</textarea>
           <div class="cbtns"><button type="button" class="btn small" data-ccancel>Cancel</button><button type="submit" class="btn small primary">Add to review</button></div>
         </form></td></tr>` : "";
-        return `<tr class="${cls}"><td class="cm"><button type="button" class="cmb" data-cm data-sec="${si}" data-side="${rowSide}" data-n="${num}" aria-label="Comment on line ${num}">+</button></td><td class="ln" data-sec="${si}" data-side="${rowSide}" data-ln="${num}">${num}</td><td class="src"><span class="sg">${sign}</span>${esc(row.text)}</td></tr>${cards}${form}`;
+        return `<tr class="${cls}"><td class="cm"><button type="button" class="cmb" data-cm data-sec="${si}" data-side="${rowSide}" data-n="${num}" aria-label="Comment on line ${num}">+</button></td><td class="ln" data-sec="${si}" data-side="${rowSide}" data-ln="${num}">${num}</td><td class="src"><span class="sg">${sign}</span>${esc(row.text)}</td></tr>${notes}${cards}${form}`;
       }).join("");
       const moved = sec.old_path && sec.old_path !== sec.path ? ` <span class="ctxnote">from ${esc(sec.old_path)}</span>` : "";
       const note = sec.note ? ` <span class="ctxnote">${esc(sec.note)}</span>` : "";
@@ -427,8 +554,11 @@
         ${bar}<div class="codewrap"><table class="code">${rows}</table></div>`;
     }).join("");
     $("#rdiff").innerHTML = html;
+    l.placed = placed;
+    drawTake(r);
     wireComments(r, d);
     $("#rdiff").onclick = async (e) => {
+      if (e.target.closest(".tnote, .tdismissed")) { noteAction(r, e); return; }
       if (e.target.closest(".drow, .crow")) return;
       const os = e.target.closest("[data-ostep]");
       if (os) { go(r.id, +os.dataset.ostep); return; }
@@ -612,7 +742,8 @@
         const text = ta.value.trim();
         if (!c || !text) return;
         try {
-          await call("review_comment", { id: r.id, comment: { path: c.path, side: c.side, line: c.line, start_line: c.start < c.line ? c.start : null, text, head: d.head || "", line_text: lineText(l, d, c) } });
+          await call("review_comment", { id: r.id, comment: { path: c.path, side: c.side, line: c.line, start_line: c.start < c.line ? c.start : null, text, head: d.head || "", line_text: lineText(l, d, c), agent: !!c.fromTake } });
+          if (c.fromTake) (l.added ||= new Set()).add(c.fromTake);
           // Place again: the old draft goes only when this is the same comment.
           if (l.placing && text === l.placing.text.trim()) await call("review_draft_edit", { id: r.id, draft: l.placing.id, text: null }).catch(() => {});
           l.placing = null;
@@ -621,7 +752,7 @@
         } catch (_) {}
       });
     }
-    $("#rdiff").querySelectorAll(".dcard").forEach((card) => {
+    $("#rdiff").querySelectorAll(".dcard[data-d]").forEach((card) => {
       const id = +card.dataset.d;
       const t = card.querySelector(".dtext");
       t.addEventListener("keydown", (e) => e.stopPropagation());
@@ -897,13 +1028,55 @@
     }
   }
 
+  // ---------- the chat of each step (SPEC 11.5) ----------
+  // The review's Claude pane is a full-screen app: its history is not in the terminal
+  // scrollback. The app reads it from Claude's session file, by step.
+  function seen(id) {
+    const r = S.reviews.get(id);
+    const s = r && steps(r)[local(id).cur];
+    if (s && r.kind !== "local") invoke("review_step_seen", { id, step: s.id }).catch(() => {});
+  }
+  async function loadChat(id) {
+    const r = S.reviews.get(id);
+    if (!r || r.kind === "local") return;
+    let chat;
+    try { chat = await invoke("review_chat", { id }); } catch (_) { return; }
+    const l = local(id);
+    // The same chat draws nothing: an open answer stays open and in place.
+    if (JSON.stringify(chat) === JSON.stringify(l.chat || [])) return;
+    l.chat = chat;
+    if (S.tab === id) drawChat(S.reviews.get(id));
+  }
+  function drawChat(r) {
+    const el = $("#rchat");
+    if (!el || !r) return;
+    const l = local(r.id);
+    const s = steps(r)[l.cur];
+    const all = l.chat || [];
+    const mine = l.chatAll ? all : all.filter((t) => s && t.step === s.id);
+    el.hidden = !all.length;
+    if (!all.length) return;
+    // Keep the answers you opened or closed, and the scroll place.
+    const opened = new Map([...el.querySelectorAll("details")].map((x) => [x.dataset.k, x.open]));
+    const top = el.querySelector(".clist")?.scrollTop || 0;
+    const keyOf = (t) => `${t.at}|${t.question}`;
+    const name = (sid) => { const i = steps(r).findIndex((x) => x.id === sid); return i >= 0 ? `Step ${i + 1}` : "Before the steps"; };
+    el.innerHTML = `<div class="chead"><span>${l.chatAll ? "All steps" : "On this step"} · ${mine.length}</span><button data-chall>${l.chatAll ? "This step" : "All steps"}</button></div>
+      <div class="clist">${mine.map((t, i) => `<details data-k="${esc(keyOf(t))}"${(opened.has(keyOf(t)) ? opened.get(keyOf(t)) : i === mine.length - 1) ? " open" : ""}><summary>${l.chatAll ? `<span class="cstep">${esc(name(t.step))}</span>` : ""}${esc(t.question)}</summary><div class="md">${md(t.answer || "…")}</div></details>`).join("") || `<div class="cempty">No questions on this step yet.</div>`}</div>`;
+    el.querySelector(".clist").scrollTop = top;
+    el.querySelector("[data-chall]").onclick = () => { l.chatAll = !l.chatAll; drawChat(r); };
+  }
+
   function go(id, i) {
     const r = S.reviews.get(id);
     const l = local(id);
     l.cur = Math.max(0, Math.min(steps(r).length - 1, i));
     l.anchor = null;
+    l.takeOpen = false;
     savePlace(id);
     update(r);
+    seen(id);
+    drawChat(r);
     $(`#rsteps [data-i="${l.cur}"]`)?.scrollIntoView({ block: "nearest" });
   }
 
@@ -946,6 +1119,19 @@
       update(r);
     },
     termWait: (id) => drawTermWait(S.reviews.get(id)),
+    // A pane changed. Only a new state of the review's Claude pane (it asked, it
+    // answered) reads its chat again; other panes print often and change nothing here.
+    panes: () => {
+      const id = S.tab;
+      const r = S.reviews.get(id);
+      const l = r && local(id);
+      if (!r || r.kind === "local" || !l.term) return;
+      const lamp = window.SB.paneById(l.term)?.lamp;
+      if (lamp === l.termLamp) return;
+      l.termLamp = lamp;
+      clearTimeout(l.chatTimer);
+      l.chatTimer = setTimeout(() => loadChat(id), 600);
+    },
     // For the window checks only.
     _test: { items, reveal, STEP },
   };

@@ -160,13 +160,21 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .rhead .right { margin-left: auto; display: flex; gap: 8px; }
 .rerror { padding: 14px; color: var(--error); font: 13px/1.5 var(--mono); white-space: pre-wrap; }
 /* The side columns take their width from the handles (split.js). */
-.rcols { display: grid; grid-template-columns: var(--rl, 280px) 6px minmax(0, 1fr) 6px var(--rr, 520px); min-height: 0; }
+.rcols { display: grid; grid-template-columns: var(--rl, 280px) 10px minmax(0, 1fr) 10px var(--rr, 520px); min-height: 0; }
 .rcols > * { min-width: 0; min-height: 0; }
 .col { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.gutter { background: var(--line); background-clip: content-box; touch-action: none; }
-.gutter.gx { cursor: col-resize; padding: 0 2.5px; }
-.gutter.gy { cursor: row-resize; padding: 2.5px 0; height: 6px; margin: 6px 12px 0; }
-.gutter:hover, .gutter:focus-visible { background-color: var(--accent); outline: none; }
+/* A handle: a 10 px area to grab, a 1 px line to see, and a three-dot grip so you
+   find it (the line alone is 1.45:1 on the ground). Gold on hover and focus. */
+.gutter { --gl: var(--line); --gd: color-mix(in srgb, var(--muted) 45%, var(--bg)); position: relative; touch-action: none; }
+.gutter.gx { cursor: col-resize; background: linear-gradient(var(--gl), var(--gl)) center / 1px 100% no-repeat; }
+.gutter.gy { cursor: row-resize; height: 10px; margin: 2px 12px 0; background: linear-gradient(var(--gl), var(--gl)) center / 100% 1px no-repeat; }
+.gutter::after { content: ""; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: radial-gradient(circle, var(--gd) 1.5px, transparent 1.7px) center / 5px 5px repeat; }
+.gutter.gx::after { width: 5px; height: 15px; }
+.gutter.gy::after { width: 15px; height: 5px; background-color: var(--bg); }
+.gutter:hover, .gutter:focus-visible { --gl: var(--accent); --gd: var(--accent); outline: none; }
+.gutter.gx:hover, .gutter.gx:focus-visible { background-size: 2px 100%; }
+.gutter.gy:hover, .gutter.gy:focus-visible { background-size: 100% 2px; }
+.gutter:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 2px; }
 body.is-sizing, body.is-sizing * { user-select: none; }
 body.size-x, body.size-x * { cursor: col-resize !important; }
 body.size-y, body.size-y * { cursor: row-resize !important; }
@@ -308,7 +316,7 @@ tr.anchored td.ln::after { content: "●"; color: var(--accent); margin-left: 4p
 .check li + li { margin-top: 3px; }
 
 @media (max-width: 1100px) {
-  .rcols { grid-template-columns: var(--rl, 240px) 6px minmax(0, 1fr) 6px var(--rr, 300px); }
+  .rcols { grid-template-columns: var(--rl, 240px) 10px minmax(0, 1fr) 10px var(--rr, 300px); }
 }
 
 /* ---------- Files view ---------- */
@@ -345,3 +353,48 @@ tr.gap .hidden { color: var(--muted); font-size: 11px; }
 .draft .stalenote { font: 12px/1.4 var(--body); font-style: normal; color: var(--error); }
 .draft .stalebtns { display: flex; gap: 6px; }
 .rnote { padding: 16px 18px; color: var(--muted); font-size: 13px; }
+
+/* ---------- Why and Claude's take (SPEC 11.12) ----------
+   Purple (--limit) marks Claude's opinion. Green stays for checked steps and the
+   proved coverage line; gold stays for your own actions. */
+.why { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; padding: 9px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; font-size: 13.5px; }
+.why .wk { font: 600 11px/20px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+.why .dim, .why .wk.dim { color: var(--muted); }
+.check .ans { font: 600 11px/1.5 var(--mono); color: var(--limit); }
+.take { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--limit); border-radius: 6px; font-size: 13px; }
+.take:empty { display: none; }
+.tk-label { font: 600 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--limit); }
+.tk-dim { font: 12px/1.4 var(--mono); color: var(--muted); }
+.tk-acts { margin-left: auto; display: flex; gap: 12px; }
+.tk-acts button, .tdismissed button, .chead button, .prtake { font: 600 11px/1 var(--mono); background: none; border: 0; color: var(--accent); padding: 4px 0; cursor: pointer; }
+.tk-checked { flex-basis: 100%; font-size: 13px; }
+.tk-list { flex-basis: 100%; display: grid; gap: 6px; }
+.badge.sev-must { background: color-mix(in srgb, var(--error) 22%, var(--panel-2)); color: var(--del-fg); }
+.badge.sev-should { background: color-mix(in srgb, var(--needs) 18%, var(--panel-2)); color: var(--needs); }
+.badge.sev-nit { background: var(--line); color: var(--muted); }
+.badge.verdict { background: color-mix(in srgb, var(--limit) 20%, var(--panel-2)); color: var(--limit); }
+.badge.verdict.v-change { background: color-mix(in srgb, var(--error) 22%, var(--panel-2)); color: var(--del-fg); }
+.tk-good { font: 600 10px/1 var(--mono); color: var(--limit); }
+.tnote .dmeta { display: flex; align-items: center; gap: 8px; }
+.tnote .who { color: var(--limit); }
+.tnote .tat { font: 600 11px/1 var(--mono); color: var(--accent); }
+.tnote .tadded { margin-left: auto; font: 600 11px/1 var(--mono); color: var(--done); }
+.macts button.dim { color: var(--muted); }
+.tdismissed { display: flex; align-items: center; gap: 12px; padding: 6px 10px; border: 1px dashed var(--line); border-radius: 6px; font: 12px/1 var(--mono); color: var(--muted); max-width: 720px; }
+tr.noted-must td.ln::after, tr.noted-should td.ln::after, tr.noted-nit td.ln::after { content: "●"; margin-left: 4px; font-size: 9px; }
+tr.noted-must td.ln::after { color: var(--del-fg); }
+tr.noted-should td.ln::after { color: var(--needs); }
+tr.noted-nit td.ln::after { color: var(--muted); }
+.prtake { padding: 6px 9px; border: 1px solid color-mix(in srgb, var(--limit) 45%, var(--line)); border-radius: 4px; color: var(--limit); max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prnotes { display: grid; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--line); max-height: 40vh; overflow-y: auto; }
+
+/* The chat of each step, above the review's Claude pane (SPEC 11.5). */
+.chatlog { margin: 8px 8px 0; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); display: flex; flex-direction: column; max-height: 38%; min-height: 0; flex: none; }
+.chead { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); font: 600 11px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.clist { overflow-y: auto; padding: 4px 10px 8px; display: grid; gap: 4px; }
+.clist details { border-bottom: 1px solid var(--line); padding: 4px 0; }
+.clist details:last-child { border-bottom: 0; }
+.clist summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.clist .md { font-size: 13px; padding: 4px 0 2px 14px; }
+.cstep { font: 600 10px/1 var(--mono); color: var(--accent); margin-right: 6px; }
+.cempty { color: var(--muted); font-size: 12px; padding: 6px 0; }

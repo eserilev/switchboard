@@ -21,8 +21,15 @@ window.__data = {
     status: "ready", error: null, new_head: null,
     guide: { steps: [
       { id: "s1", title: "Read the PR description", file: null, what: "The PR adds ILs.", check: ["slot - 1"] },
-      { id: "s2", title: "Proposal path passes slot - 1", ranges: [{ file: "beacon_node/gloas.rs", side: "new", from: 11, to: 12 }, { file: "beacon_node/gloas.rs", side: "old", from: 11, to: 11 }], what: "Block production asks for the ILs of the slot **before** the proposal slot.", check: ["The spec uses `slot - 1`. Does this match?", "What happens at slot 0?"] },
-    ] },
+      { id: "s2", title: "Proposal path passes slot - 1", ranges: [{ file: "beacon_node/gloas.rs", side: "new", from: 11, to: 12 }, { file: "beacon_node/gloas.rs", side: "old", from: 11, to: 11 }], what: "Block production asks for the ILs of the slot **before** the proposal slot.", check: ["The spec uses `slot - 1`. Does this match?", "What happens at slot 0?"],
+        why: "A wrong slot builds a block with the wrong inclusion list.", why_split: "The only change on the proposal path.", check_answers: ["matches the spec", "see the note on line 11"],
+        take: { verdict: "change", notes: [
+          { severity: "must", text: "`slot - 1` saturates at slot 0. Use `safe_sub`.", file: "beacon_node/gloas.rs", side: "new", line: 11 },
+          { severity: "should", text: "No test covers slot 0." },
+          { severity: "nit", text: "A name far below.", file: "beacon_node/gloas.rs", side: "new", line: 40 },
+        ] } },
+    ], take: { verdict: "change", summary: "no test for slot 0", notes: [{ severity: "should", text: "No test covers slot 0." }] } },
+    dismissed: [],
     steps: [{ id: "s1", checked: true, stale: false }],
     threads: [{ id: "t1", step: "s2", path: "beacon_node/gloas.rs", side: "new", line: 11, removed: false, busy: false, messages: [{ id: 1, me: true, text: "safe sub?" }, { id: 2, me: false, text: "Use **safe_sub**. The `-` on `Slot` saturates, so slot 0 gives 0:\n\n```rust\nlet il_slot = builder_params.slot.safe_sub(1)?;\n```\n\n- `slot_epoch_macros.rs:119` marks `-` as deprecated.\n- Small nit, not a bug.\n\n<script>window.__xss = 1</script>" }] }],
     pins: [{ id: 1, step: "s2", text: "Use safe_sub, not -." }],
@@ -80,6 +87,11 @@ window.__TAURI__ = {
           return "rL";
         }
         case "review_send_agent": return 1;
+        case "review_chat": return [
+          { step: "s1", question: "what does the PR add?", answer: "ILs for **gloas**.", at: 1 },
+          { step: "s2", question: "is slot 0 real?", answer: "Yes: it saturates.", at: 2 },
+        ];
+        case "review_step_seen": case "review_dismiss": case "review_retake": return null;
         // A closed round of PR 999 exists; PR 10071 has none.
         case "review_prior": return args.url.includes("/pull/999") ? { id: "r0", round: 1, head: "abc1234567890", sent: 2 } : null;
         // A first close finds changes; a close with a choice closes.

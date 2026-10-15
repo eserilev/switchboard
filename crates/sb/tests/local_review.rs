@@ -130,6 +130,7 @@ fn review_local_commits_send_to_the_agent_and_keep_its_worktree() {
             text: "Name this better.".into(),
             head: head1.clone(),
             line_text: "    let x = 1;".into(),
+            agent: false,
         },
     )
     .unwrap();
@@ -156,6 +157,7 @@ fn review_local_commits_send_to_the_agent_and_keep_its_worktree() {
             text: "Still here?".into(),
             head: head1.clone(),
             line_text: "    let x = 1;".into(),
+            agent: false,
         },
     )
     .unwrap();

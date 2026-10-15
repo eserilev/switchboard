@@ -67,6 +67,12 @@ const SCHEMA: &[&str] = &[
     // `pane` is the agent pane whose worktree a local review reads.
     "ALTER TABLE review ADD COLUMN kind TEXT NOT NULL DEFAULT 'pr';
      ALTER TABLE review ADD COLUMN pane TEXT;",
+    // Version 9: the steps you viewed, with the time, so each question in the review's
+    // Claude pane belongs to a step (SPEC 11.5); and the take notes you dismissed
+    // (SPEC 11.12).
+    "CREATE TABLE step_seen (review TEXT NOT NULL, step TEXT NOT NULL, at INTEGER NOT NULL);
+     CREATE INDEX step_seen_review ON step_seen (review, at);
+     CREATE TABLE dismissed (review TEXT NOT NULL, note TEXT NOT NULL, PRIMARY KEY (review, note));",
 ];
 
 pub struct Store {
@@ -652,6 +658,49 @@ impl Store {
         }
         tx.execute("UPDATE review SET summary = NULL WHERE id = ?1", [review])?;
         tx.commit()
+    }
+
+    /// You view `step` of `review` from `at` on. A view of the same step as the last
+    /// one adds nothing.
+    pub fn step_seen(&self, review: &str, step: &str, at: u64) -> R<()> {
+        let last: Option<String> = self
+            .db
+            .query_row(
+                "SELECT step FROM step_seen WHERE review = ?1 ORDER BY at DESC, rowid DESC LIMIT 1",
+                [review],
+                |r| r.get(0),
+            )
+            .ok();
+        if last.as_deref() != Some(step) {
+            self.db.execute(
+                "INSERT INTO step_seen (review, step, at) VALUES (?1, ?2, ?3)",
+                params![review, step, at as i64],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The steps you viewed, oldest first, as (step, time).
+    pub fn steps_seen(&self, review: &str) -> R<Vec<(String, u64)>> {
+        let mut s = self.db.prepare("SELECT step, at FROM step_seen WHERE review = ?1 ORDER BY at, rowid")?;
+        let rows = s.query_map([review], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u64)))?;
+        rows.collect()
+    }
+
+    /// Dismisses a take note, or brings it back.
+    pub fn dismiss(&self, review: &str, note: &str, on: bool) -> R<()> {
+        if on {
+            self.db.execute("INSERT OR IGNORE INTO dismissed (review, note) VALUES (?1, ?2)", params![review, note])?;
+        } else {
+            self.db.execute("DELETE FROM dismissed WHERE review = ?1 AND note = ?2", params![review, note])?;
+        }
+        Ok(())
+    }
+
+    pub fn dismissed(&self, review: &str) -> R<Vec<String>> {
+        let mut s = self.db.prepare("SELECT note FROM dismissed WHERE review = ?1 ORDER BY note")?;
+        let rows = s.query_map([review], |r| r.get(0))?;
+        rows.collect()
     }
 
     /// The reviews sent in one round of a PR, also from a closed round.

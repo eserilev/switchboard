@@ -157,6 +157,17 @@ No hook fires for this dialog, and a plain Enter picks "No, exit".
 - Trust sends `Down Enter`. Exit closes the pane.
 - This is the one place where the core reads the screen. A test pins the dialog text, so a CLI change fails the test, not the user.
 
+### 6.7 Sizes you drag
+
+Handles size the parts of the window (`web/split.js`):
+- In a review, one handle between the steps and the middle column, and one between the middle column and the Claude column. Each side column keeps at least 160 px; the middle keeps at least 320 px.
+- On the board, one handle between the live terminal and the tiles. The terminal keeps at least 240 px; the tiles keep one row (160 px). A pointer drag ends on whole rows of tiles, unless that takes the terminal's room; the keys move by pixels.
+- A handle is a 10 px area with a 1 px line and a three-dot grip, gold on hover and focus. It is a WAI-ARIA separator, with its size, its limits and the element it controls.
+- Keys on a handle: the arrows move it 16 px, Shift 64 px; Home and End go to the smallest and the largest size; Enter goes to the smallest size and back. A double-click resets the column of that handle only.
+- Sizes are kept in the window's local storage, one set for every review tab. A smaller window shrinks both side columns in proportion, never below their minimum (`fit`).
+- The rules are two pure functions, `side` and `fit`. A property test runs 5000 random cases against their rules: a side keeps its minimum, the middle keeps its minimum when there is room, a size that fits stays as asked, and `fit` is stable.
+- The live terminal refits on every size change and on every window resize (full screen and back). Its box shrinks with its column: before, the box kept the terminal's old width, the fit read that width again, and after full screen the terminal shrank one column at a time while the program in the pane drew for the old width.
+
 ## 7. Key map
 
 A live pane gets every key you type. Esc in Claude Code stops the agent. So app keys need a leader.
@@ -367,8 +378,9 @@ The question column is a real Claude Code pane, as on the board. It replaces the
 5. One pane for each review worktree and PR number, titled `Ask #<number>`. It shows as a tile on the board too. The app finds it again by its title and worktree. After a rename, the app starts a new one. An ended pane with no session id is not used again.
 6. With `--fork-session`, the hooks report the new session id (checked on 2026-10-11). A later resume of the pane uses that id, so it never writes into the guide session. A resume does not pass `--add-dir` again.
 7. The live terminal moves into the column while the review tab shows. Another tab takes it back.
-8. "Send step" types one line with the current step into the prompt, without Enter. A click on a line number types the path, the line and its text. The text goes in as one bracketed paste, with control characters changed to spaces. While the pane asks for a permission or trust, nothing is typed: a "1" in the text would pick an answer.
-9. The guide agent writes the step fields, and the first message goes into a tmux command. tmux reads one command per line, and its quotes do not hide a line break. So the step line has no control characters, and the tmux client refuses any command with a line break.
+8. The chat of each step. Claude Code runs on the alternate screen, so its history is not in tmux and not in the terminal's scrollback. The app reads the pane's session file (`<claude dir>/projects/*/<session>.jsonl`, the session id from the SessionStart hook) from the review's first message on, and splits it into questions and answers (`chat::turns`). A question belongs to the step in its own step line (Send step), else to the step you viewed when you asked: the window records each step you view (`step_seen`, store version 9). The newer of the two wins. Above the terminal, "On this step" lists the questions of the step, the last one open; "All steps" lists every question with its step. The list loads again when the state of the review's Claude pane changes (it asked, it answered), not on the output of other panes; a chat that did not change draws nothing, so an answer you opened stays open. Claude Code's own lines (commands, reminders, a compact summary, a sub-agent's lines) are not questions. After `/clear`, Claude starts a new session file with no review start, so the list shows nothing new. Tests: `chat::tests` (500 random chats keep every question once, in order, with its step and its answer), and `crates/sb/tests/review_chat.rs` (a real hub, a hook session, a session file, step views).
+9. "Send step" types one line with the current step into the prompt, without Enter. A click on a line number types the path, the line and its text. The text goes in as one bracketed paste, with control characters changed to spaces. While the pane asks for a permission or trust, nothing is typed: a "1" in the text would pick an answer.
+10. The guide agent writes the step fields, and the first message goes into a tmux command. tmux reads one command per line, and its quotes do not hide a line break. So the step line has no control characters, and the tmux client refuses any command with a line break.
 
 The threads below still exist in the store and the backend. The window no longer starts them.
 
@@ -502,12 +514,34 @@ An agent commits its work in its own checkout. Before you push, you review those
 - A second **review** on the same folder opens the same tab, also with a new agent pane there; the check and the insert are one lock.
 - PR-only commands (rounds, threads, pins, the GitHub send, the Claude pane of 11.5) return an error for a local review.
 - Store version 8 adds `review.kind` (`pr` or `local`) and `review.pane`.
+- A local review has no guide, so it has no why, no take and no chat of each step.
 
 Tests:
 - `crates/core/tests/local_range.rs`: real git for each rule: an upstream, a detached agent worktree, a merge of remote work (with `origin`, and with a remote named `sigp`), no remote, nothing unpushed, a root commit, a shallow clone, no commit.
 - `models/review_close.qnt` (26): `AgentFolderStays`.
 - `crates/sb/tests/local_review.rs`: a real hub and tmux, and an agent pane that writes what it gets to a file. Open, Files, a comment, Send to agent (the exact paste, no Enter, the posted row), Refresh after a new commit (the draft moves down one line), and close. After the close, with the pane closed and the folder clean and detached, the start sweep keeps the folder, and its commits still count as work. With the guards off, the test fails.
 - Window checks: the tile button, the tab, Files only, the header, the agent pane in the column, Send to agent, Refresh, a new agent pane, no file list while the commits load, and a new base alone.
+
+### 11.12 Why, and Claude's take
+
+The guide agent writes, for each step:
+- `why`: why the step matters. `why_split`: why it is a step of its own. The step shows both in one block: "Why it matters", and a muted "Why a separate step".
+- `check_answers`: a short answer to each `check` item, shown after the item as "Claude: …".
+- `take`: `{verdict, checked, notes}`. `verdict` is `good`, `change` or `question`; `good` needs `checked`, what Claude checked. Each note is `{severity, text, file, side, line}`, with `severity` `must`, `should` or `nit`, and an optional line.
+
+And for the whole PR, `take`: `{verdict, summary, notes}`, for problems that span steps and for missing things.
+
+`take::check` refuses a wrong shape and a note on a line that is not on that side of a changed file. The answer lists every problem of the takes, and the coverage problems of the same guide. A refusal counts as a try, and the guide with the bad parts taken out (`take::strip_bad`) becomes the proposal: if the agent stops, the app completes that. On the last try the app accepts it. A note line of `null` counts as no line. When an update ends with no new guide, the notes on lines that are gone go too. The verified coverage check (24) runs as before; it ignores these fields.
+
+In the window:
+- A take bar above the diff, in purple (`--limit`), the color of agent drafts: "Claude's opinion · not verified", the verdict, the counts by severity, the head it is for, Show list and Re-run. Green stays for checked steps and the proved coverage line.
+- Each note with a line shows under its line, as an agent card with its severity, and a dot in the line number. Notes with no line, or with a line that is not on screen, are in the take bar's list.
+- Note actions: Add as comment opens the comment form on the line with the note's text, and the comment saves as an agent draft. Ask types the note into the Claude pane's prompt. Dismiss folds the note to "A dismissed note", with Show and Undo; the store keeps the dismissed keys (store version 9).
+- Re-run asks the guide session for the take again, with the notes you dismissed, so it does not write them again (`review_retake`). For a step it uses `guide_update_step`, and only that step must pass the take check; for the PR it uses `guide_set_steps`. The check of "running" and the switch to "updating" are one lock, so a double click starts one run. A dismissal names the note by its text: a note that a Re-run rewords shows again.
+- The steps list shows the worst severity and a count, or "Claude: no notes" for a good step. The header shows the PR verdict; a click opens its notes.
+- While the head has new commits that the guide does not cover, the take shows "stale".
+
+Tests: `take::tests` (a full take, every problem listed, 5000 random note lines against the model, `strip_bad`), and window checks for the why block, the answers, the take bar, the notes under their lines, Show list, the steps badge, the PR verdict, Ask, Re-run, Dismiss and Undo, and Add as comment as an agent draft.
 
 ## 12. Agents
 

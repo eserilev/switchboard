@@ -36,6 +36,8 @@ fn live_review_of_a_tiny_pr() {
     .unwrap();
     std::env::set_var("SB_HOME", &root);
     std::env::set_var("SB_TMUX_SOCKET", format!("sb-live-{}", std::process::id()));
+    // A run inside a Switchboard pane has the app's socket here: use our own.
+    std::env::remove_var("SB_SOCK");
     let hub = Hub::start(
         switchboard_core::paths::Paths::from_env(),
         PathBuf::from(env!("CARGO_BIN_EXE_sb")),
@@ -72,7 +74,18 @@ fn live_review_of_a_tiny_pr() {
     let steps = guide["steps"].as_array().unwrap();
     for s in steps {
         println!("step {} {} {}", s["id"], s["title"], s["ranges"]);
+        println!("  why: {} | split: {}", s["why"], s["why_split"]);
+        println!("  answers: {}", s["check_answers"]);
+        println!("  take: {}", s["take"]);
     }
+    println!("PR take: {}", guide["take"]);
+    // The prompt asks for these (SPEC 11.12); the checker already proved their shape.
+    let real: Vec<&Value> = steps.iter().filter(|s| s["auto"].as_bool() != Some(true)).collect();
+    assert!(real.iter().all(|s| s["why"].is_string()), "every step has a why");
+    assert!(guide["take"]["verdict"].is_string(), "the PR has a take");
+    let with_code: Vec<&&Value> = real.iter().filter(|s| s["ranges"].as_array().is_some_and(|r| !r.is_empty())).collect();
+    let taken = with_code.iter().filter(|s| s["take"]["verdict"].is_string()).count();
+    assert!(taken * 2 >= with_code.len(), "most steps with code have a take: {taken} of {}", with_code.len());
     let step = steps
         .iter()
         .find(|s| s["ranges"].as_array().is_some_and(|r| !r.is_empty()))

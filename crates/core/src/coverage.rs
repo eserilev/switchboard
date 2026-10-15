@@ -21,7 +21,7 @@ pub const PAD: usize = 20;
 /// The title of the step the app adds for missed changes.
 pub const MISSED: &str = "Not in the guide";
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct ChangedFile {
     /// The path at the base, or `None` for a new file.
     pub old_path: Option<String>,

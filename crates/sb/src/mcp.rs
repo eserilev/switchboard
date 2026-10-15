@@ -19,13 +19,39 @@ pub fn tools() -> Value {
         },
         "required": ["file", "side", "from", "to"]
     });
+    let note = json!({
+        "type": "object",
+        "properties": {
+            "severity": { "type": "string", "enum": ["must", "should", "nit"] },
+            "text": { "type": "string" },
+            "file": { "type": "string" },
+            "side": { "type": "string", "enum": ["new", "old"] },
+            "line": { "type": "integer", "description": "A line of a changed file on that side. Leave out for a note with no line." }
+        },
+        "required": ["severity", "text"]
+    });
+    let take = json!({
+        "type": "object",
+        "description": "Your opinion. The reviewer sees it marked as not verified.",
+        "properties": {
+            "verdict": { "type": "string", "enum": ["good", "change", "question"] },
+            "checked": { "type": "string", "description": "What you checked. Required for good." },
+            "summary": { "type": "string" },
+            "notes": { "type": "array", "items": note }
+        },
+        "required": ["verdict"]
+    });
     let step = json!({
         "type": "object",
         "properties": {
             "id": { "type": "string" },
             "title": { "type": "string" },
             "what": { "type": "string" },
+            "why": { "type": "string", "description": "Why this step matters." },
+            "why_split": { "type": "string", "description": "Why it is a step of its own." },
             "check": { "type": "array", "items": { "type": "string" } },
+            "check_answers": { "type": "array", "items": { "type": "string" }, "description": "Your short answer to each check item, in order." },
+            "take": take.clone(),
             "ranges": { "type": "array", "items": range, "description": "Every changed line of the PR must be in some range." },
             "files": { "type": "array", "items": { "type": "string" }, "description": "Binary files this step covers." },
             "context": { "type": "array", "items": { "type": "string" } }
@@ -41,6 +67,7 @@ pub fn tools() -> Value {
                 "properties": {
                     "pr": { "type": "object" },
                     "context": { "type": "array", "items": { "type": "object" } },
+                    "take": take,
                     "steps": { "type": "array", "items": step }
                 },
                 "required": ["steps"]

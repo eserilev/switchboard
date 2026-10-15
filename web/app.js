@@ -338,8 +338,12 @@ new ResizeObserver(fitSoon).observe($("#live"));
 window.addEventListener("resize", fitSoon);
 
 // The board handle: the height of the tile strip under the live terminal. The
-// terminal keeps at least LIVE_MIN px; the strip at least STRIP_MIN.
-const STRIP_MIN = 60, LIVE_MIN = 240, STRIP_KEY = "sb.split.board";
+// terminal keeps at least LIVE_MIN px; the strip at least one row of tiles, and a
+// drag ends on whole rows.
+const ROW_H = 136, ROW_GAP = 10, STRIP_PAD = 24;
+const STRIP_MIN = ROW_H + STRIP_PAD, LIVE_MIN = 240, STRIP_KEY = "sb.split.board";
+// The strip height of whole rows nearest to `h`.
+const snapRows = (h) => { const rows = Math.max(1, Math.round((h - STRIP_PAD + ROW_GAP) / (ROW_H + ROW_GAP))); return rows * ROW_H + (rows - 1) * ROW_GAP + STRIP_PAD; };
 function setStrip(h) {
   const wrap = $("#view-board");
   if (h === null) { wrap.classList.remove("sized"); wrap.style.removeProperty("--strip"); return null; }
@@ -352,11 +356,22 @@ const stripNow = () => $("#board").getBoundingClientRect().height;
 {
   const saved = SBSplit.load(STRIP_KEY);
   if (typeof saved === "number") setStrip(saved);
+  const clamp = (v) => SBSplit.side(stripRoom(), v, 0, STRIP_MIN, LIVE_MIN);
   SBSplit.bind($("#bgutter"), {
-    axis: "y", dir: -1, size: stripNow,
-    apply: (v) => setStrip(SBSplit.side(stripRoom(), v, 0, STRIP_MIN, LIVE_MIN)),
+    axis: "y", dir: -1, size: stripNow, controls: "board",
+    limits: () => [STRIP_MIN, Math.max(STRIP_MIN, stripRoom() - LIVE_MIN)],
+    apply: (v) => setStrip(clamp(v)),
     reset: () => { try { localStorage.removeItem(STRIP_KEY); } catch (_) {} setStrip(null); },
-    done: (reset) => { if (!reset && $("#view-board").classList.contains("sized")) SBSplit.save(STRIP_KEY, stripNow()); fitSoon(); },
+    done: (reset, drag) => {
+      if (!reset && drag && $("#view-board").classList.contains("sized")) {
+        // A drag ends on whole rows, unless that takes the terminal's room. Keys
+        // move by pixels.
+        const h = snapRows(stripNow());
+        setStrip(h === clamp(h) ? h : clamp(stripNow()));
+      }
+      if (!reset && $("#view-board").classList.contains("sized")) SBSplit.save(STRIP_KEY, stripNow());
+      fitSoon();
+    },
   });
 }
 
@@ -720,10 +735,12 @@ listen("panes", (e) => {
   S.panes = e.payload;
   if (S.live && !paneById(S.live)) collapse();
   else drawBoard();
+  window.SBReview?.panes?.();
 });
 listen("pane", (e) => {
   upsert(e.payload);
   drawBoard();
+  window.SBReview?.panes?.();
 });
 listen("connections", (e) => { S.conn = e.payload; drawConn(); drawBoard(); });
 listen("focus", (e) => refreshPanes().then(() => expand(e.payload)));

@@ -1,6 +1,7 @@
 //! Switchboard core: everything below the window.
 
 pub mod cleanup;
+pub mod chat;
 pub mod config;
 pub mod connections;
 pub mod control;
@@ -18,6 +19,7 @@ pub mod proto;
 pub mod repos;
 pub mod review;
 pub mod store;
+pub mod take;
 pub mod tmux;
 
 /// Seconds since the Unix epoch.

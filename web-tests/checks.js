@@ -165,6 +165,63 @@
     check("the place is saved for a restart", JSON.parse(localStorage.getItem("sb.review.place.r1") || "{}").cur === 1);
   }
   check("guide text renders markdown", !!$("#rguide .what strong") && !!$("#rguide .check code"));
+  // Why, Claude's answers to the checks, and Claude's take (SPEC 11.12).
+  check("the step shows why it matters and why it is a step", $("#rguide .why").textContent.includes("Why it matters") && $("#rguide .why").textContent.includes("wrong inclusion list") && $("#rguide .why").textContent.includes("Why a separate step"));
+  check("each check item shows Claude's answer", [...$$("#rguide .check .ans")].map((x) => x.textContent).join("|") === "Claude: matches the spec|Claude: see the note on line 11");
+  check("the take bar shows the opinion, the verdict and the counts", $("#rtake .tk-label")?.textContent.includes("not verified") && $("#rtake .verdict")?.textContent === "needs a change" && $("#rtake").textContent.includes("1 must fix · 1 should fix · 1 nit"), $("#rtake")?.textContent);
+  check("a note with a line shows under its line, with a dot", !!$('#rdiff tr.noted-must td.ln[data-ln="11"]') && $("#rdiff .tnote")?.textContent.includes("saturates") && !!$("#rdiff .tnote .sev-must"));
+  check("notes with no line on screen wait in the take list", $("#rtake [data-tk=list]")?.textContent === "Show list (2)");
+  $("#rtake [data-tk=list]").click();
+  await wait(50);
+  check("Show list shows the note with no line", $("#rtake .tk-list").textContent.includes("No test covers slot 0") && $("#rtake .tk-list").textContent.includes("A name far below"));
+  window.__calls.length = 0;
+  [...$$("#rtake .tk-list .tnote")].find((x) => x.textContent.includes("far below")).querySelector("[data-tadd]").click();
+  await wait(100);
+  check("Add as comment on a line that is not on screen says so and opens no form", !$("#rcform") && $("#toast")?.textContent.includes("not on screen"), $("#toast")?.textContent);
+  check("the steps list shows the worst severity and a count", $('#rsteps [data-i="1"] .badge.sev-must')?.textContent === "must fix · 1");
+  check("the header shows Claude's take on the PR", $("#rhead .prtake")?.textContent.includes("Claude on the PR: needs a change") && $("#rhead .prtake").textContent.includes("no test for slot 0"));
+  window.__calls.length = 0;
+  $("#rdiff .tnote [data-task]").click();
+  await wait(100);
+  check("Ask types the note into Claude's prompt", called("pane_input").some((c) => c[1].data.includes("beacon_node/gloas.rs:11 Your note")), JSON.stringify(called("pane_input")));
+  $("#rtake [data-tk=rerun]").click();
+  await wait(50);
+  check("Re-run asks for the take of this step again", called("review_retake")[0]?.[1].step === "s2");
+  $("#rdiff .tnote [data-tdis]").click();
+  await wait(50);
+  const dkey = called("review_dismiss")[0]?.[1];
+  check("Dismiss sends the note's key", dkey?.on === true && dkey.note.startsWith("s2|must|beacon_node/gloas.rs:11|"), JSON.stringify(dkey));
+  window.__emit("review", Object.assign({}, window.__data.reviews[0], { dismissed: [dkey.note] }));
+  await wait(150);
+  check("a dismissed note folds, with Undo, and leaves the counts", !$("#rdiff .tnote .sev-must") && !!$("#rdiff .tdismissed [data-tundo]") && $("#rtake").textContent.includes("1 dismissed") && !$('#rdiff tr.noted-must'), $("#rtake").textContent);
+  window.__errors.length = 0;
+  $("#rdiff .tdismissed [data-tshow]").click();
+  await wait(100);
+  check("Show opens a dismissed note again, with Undo", !!$("#rdiff .tnote .sev-must") && !!$("#rdiff .tnote [data-tundo]") && !window.__errors.length, JSON.stringify(window.__errors));
+  window.__emit("review", window.__data.reviews[0]);
+  await wait(150);
+  $("#rdiff .tnote [data-tadd]").click();
+  await wait(100);
+  check("Add as comment opens the form on the line with the note's text", $("#rcform .cat")?.textContent.includes("gloas.rs:11") && $("#rctext").value.includes("saturates"));
+  window.__calls.length = 0;
+  $("#rcform").requestSubmit();
+  await wait(150);
+  check("the comment from a note saves as an agent draft", called("review_comment")[0]?.[1].comment.agent === true, JSON.stringify(called("review_comment")[0]?.[1]));
+  // The chat of each step, above the Claude pane.
+  check("the chat shows the questions of this step", $("#rchat")?.hidden === false && $("#rchat .chead").textContent.includes("On this step · 1") && $("#rchat summary").textContent.includes("is slot 0 real?"), $("#rchat")?.textContent);
+  {
+    // An answer you closed stays closed when the chat draws again.
+    $("#rchat details").open = false;
+    window.__emit("review", window.__data.reviews[0]);
+    await wait(150);
+    check("a closed answer stays closed after a redraw", $("#rchat details") && !$("#rchat details").open);
+    $("#rchat details").open = true;
+  }
+  $("#rchat [data-chall]").click();
+  await wait(50);
+  check("All steps shows every question with its step", $$("#rchat summary").length === 2 && $("#rchat .cstep").textContent === "Step 1");
+  $("#rchat [data-chall]").click();
+  await wait(50);
   check("pin shows in the guide", $("#rguide").textContent.includes("Use safe_sub, not -."));
   check("diff renders with focus lines", $$("#rdiff tr.focus").length === 3, $$("#rdiff tr.focus").length);
   check("coverage shows in the header", $("#rhead .cov.ok")?.textContent.includes("All 3 changed lines in 1 files covered"), $("#rhead").textContent);
@@ -211,6 +268,19 @@
     window.SB.setTab("r1");
     await wait(300);
   }
+  // The chat history stays when you move between steps: one conversation for the review.
+  {
+    const lines = Array.from({ length: 100 }, (_, i) => `history line ${i}\r\n`).join("");
+    window.__emit("pane_output", { pane: "p8", data: btoa(lines) });
+    await wait(100);
+    const has = (t) => { const b = window.SB.term.buffer.active; for (let i = 0; i < b.length; i++) if (b.getLine(i)?.translateToString(true).includes(t)) return true; return false; };
+    const expands = called("pane_expand").length;
+    docKey("k");
+    await wait(300);
+    docKey("j");
+    await wait(300);
+    check("moving between steps keeps the chat history", has("history line 0") && has("history line 99") && called("pane_expand").length === expands, JSON.stringify({ first: has("history line 0"), last: has("history line 99"), expands: called("pane_expand").length - expands }));
+  }
   // A smaller window shrinks the terminal to its box, at once and not one column
   // at a time (full screen to a window). Else the program draws too wide.
   {
@@ -224,6 +294,8 @@
     await shrink(800);
     const wide = window.SB.term.cols;
     await shrink(400);
+    // xterm repaints a moment after the fit: wait for it, up to a second.
+    for (let i = 0; i < 20 && !fits().ok; i++) await wait(50);
     const f = fits();
     const sent = called("pane_resize").at(-1)?.[1];
     check("after a smaller window the review terminal fits its box", f.ok && f.cols < wide - 10 && sent?.cols === f.cols, JSON.stringify({ ...f, wide, sent }));
@@ -521,14 +593,17 @@
     const shrink = async (px) => { $("#view-board").style.width = px; window.dispatchEvent(new Event("resize")); await wait(400); };
     await shrink("2400px");
     const wide = window.SB.term.cols;
+    // The cell width, from the wide screen. The check is on columns: the test browser
+    // can skip the frame in which xterm repaints its screen.
+    const cell = $("#term .xterm-screen").getBoundingClientRect().width / wide;
     await shrink("500px");
     const area = $("#view-board").getBoundingClientRect();
-    const screen = $("#term .xterm-screen").getBoundingClientRect();
-    check("after a smaller window the board terminal fits its box", screen.right <= area.right + 1 && window.SB.term.cols < wide - 10, JSON.stringify({ cols: window.SB.term.cols, wide, screen: Math.round(screen.width), area: Math.round(area.width), live: Math.round($("#live").getBoundingClientRect().width), hidden: $("#live").hidden, S: window.SB.S.live, parent: $("#live").parentElement.id, tab: window.SB.S.tab }));
+    const screen = { width: window.SB.term.cols * cell };
+    check("after a smaller window the board terminal fits its box", screen.width <= area.width + 1 && window.SB.term.cols < wide - 10, JSON.stringify({ cols: window.SB.term.cols, wide, screen: Math.round(screen.width), area: Math.round(area.width), live: Math.round($("#live").getBoundingClientRect().width), hidden: $("#live").hidden, S: window.SB.S.live, parent: $("#live").parentElement.id, tab: window.SB.S.tab }));
     await shrink("");
   }
 
-  // Draggable sizes (SPEC 6.6). The rules first: random cases against their spec.
+  // Draggable sizes (SPEC 6.7). The rules first: random cases against their spec.
   {
     let seed = 12345;
     const rnd = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
@@ -590,9 +665,24 @@
     await wait(50);
     check("arrow keys move a handle by 16 and Shift by 64", widths()[0] === before + 80, JSON.stringify({ before, now: widths()[0] }));
     check("a handle is a focusable separator", $("#rgutl").getAttribute("role") === "separator" && $("#rgutl").tabIndex === 0);
+    check("a handle tells screen readers its value and limits", $("#rgutl").getAttribute("aria-valuenow") === String(widths()[0]) && $("#rgutl").getAttribute("aria-valuemin") === "160" && $("#rgutl").getAttribute("aria-controls") === "rsteps");
+    const key = (k) => { $("#rgutl").dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })); return wait(50); };
+    await key("Home");
+    check("Home goes to the smallest size", widths()[0] === 160, JSON.stringify(widths()));
+    await key("End");
+    check("End goes to the largest size, and the middle keeps its minimum", Math.abs(widths()[1] - 320) <= 1, JSON.stringify(widths()));
+    await key("Home");
+    $("#rgutl").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true }));
+    await wait(50);
+    const mid = widths()[0];
+    await key("Enter");
+    const small = widths()[0];
+    await key("Enter");
+    check("Enter goes to the smallest size and back", small === 160 && widths()[0] === mid, JSON.stringify({ mid, small, now: widths()[0] }));
+    const right = widths()[2];
     $("#rgutl").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     await wait(50);
-    check("double-click resets both sides", widths()[0] === 280 && widths()[2] === 520 && !localStorage.getItem("sb.split.review"), JSON.stringify(widths()));
+    check("double-click resets only the column of that handle", widths()[0] === 280 && widths()[2] === right, JSON.stringify({ right, now: widths() }));
     // A new review tab takes the saved size.
     await drag($("#rgutl"), 30);
     window.SB.setTab("board");
@@ -600,7 +690,9 @@
     await wait(200);
     check("a redrawn review keeps the dragged size", widths()[0] === 310, JSON.stringify(widths()));
     $("#rgutl").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    $("#rgutr").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     await wait(50);
+    localStorage.removeItem("sb.split.review");
   }
   // The board handle: the tile strip under the live terminal.
   {
@@ -618,7 +710,16 @@
     window.dispatchEvent(new PointerEvent("pointermove", { clientX: r.left + 40, clientY: y - 120 }));
     window.dispatchEvent(new PointerEvent("pointerup", { clientX: r.left + 40, clientY: y - 120 }));
     await wait(150);
-    check("dragging the board handle up makes the tiles taller", Math.abs(strip() - (s0 + 120)) <= 2, JSON.stringify({ s0, now: strip() }));
+    const rows = (h) => (h - 24 + 10) / 146;
+    check("dragging the board handle up makes the tiles taller, in whole rows", strip() > s0 && Number.isInteger(rows(strip())), JSON.stringify({ s0, now: strip(), rows: rows(strip()) }));
+    g.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: r.left + 40, clientY: y, button: 0 }));
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: r.left + 40, clientY: y + 5000 }));
+    window.dispatchEvent(new PointerEvent("pointerup", { clientX: r.left + 40, clientY: y + 5000 }));
+    await wait(150);
+    check("the tiles keep one row at least", strip() === 160, JSON.stringify({ now: strip() }));
+    g.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    await wait(100);
+    check("an arrow key moves the board handle 16 px, with no snap", strip() === 176, JSON.stringify({ now: strip() }));
     g.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: r.left + 40, clientY: y, button: 0 }));
     window.dispatchEvent(new PointerEvent("pointermove", { clientX: r.left + 40, clientY: y - 5000 }));
     window.dispatchEvent(new PointerEvent("pointerup", { clientX: r.left + 40, clientY: y - 5000 }));

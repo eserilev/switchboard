@@ -115,6 +115,8 @@ pub struct ReviewView {
     pub kind: String,
     /// For `local`: the agent pane.
     pub pane: Option<String>,
+    /// The take notes you dismissed, by their key (`take_key` in review.js).
+    pub dismissed: Vec<String>,
 }
 
 /// What the window shows before a send: the GitHub account, the head, and where
@@ -221,6 +223,9 @@ pub struct NewComment {
     /// The head of the diff on screen, and the text of `line` there.
     pub head: String,
     pub line_text: String,
+    /// The text came from Claude's take: the draft shows as an agent draft.
+    #[serde(default)]
+    pub agent: bool,
 }
 
 /// One changed file in the Files view.
@@ -385,6 +390,7 @@ impl Hub {
             coverage: r.coverage.clone(),
             kind: r.row.kind.clone(),
             pane: r.row.pane.clone(),
+            dismissed: store.dismissed(id).map_err(e)?,
         })
     }
 
@@ -824,13 +830,19 @@ impl Hub {
         };
         if let Some(g) = &stored {
             if coverage::check_guide(&model, g).is_ok() {
+                // After an update with no new guide, an old note can name a line that
+                // is gone: that note goes, the rest stays.
+                if crate::take::check(&model, g).is_err() {
+                    let missed = r_missed(self, id);
+                    self.accept_guide(id, crate::take::strip_bad(&model, g), missed);
+                }
                 return Ok(true);
             }
         }
         let Some(base) = proposal.or(stored) else {
             return Ok(false);
         };
-        let (guide, missed) = coverage::complete(&model, &base)?;
+        let (guide, missed) = coverage::complete(&model, &crate::take::strip_bad(&model, &base))?;
         tracing::warn!(target: "sb::review", review = id, missed, "the app completed the guide");
         self.accept_guide(id, guide, missed);
         Ok(true)
@@ -1087,6 +1099,30 @@ impl Hub {
     pub(crate) fn guide_set(&self, id: &str, guide: Value) -> Res<()> {
         let guide = normalize(guide)?;
         let model = self.model(id)?;
+        // The takes and whys first. A wrong one counts as a try; on the last try the
+        // bad parts go and the rest of the guide stays.
+        let guide = match crate::take::check(&model, &guide) {
+            Ok(()) => guide,
+            Err(msg) => {
+                // The good parts are the proposal: if the agent stops now, the app
+                // completes that, as for a coverage refusal.
+                let stripped = crate::take::strip_bad(&model, &guide);
+                let attempts = {
+                    let mut r = self.reviews.lock().unwrap();
+                    let r = r.get_mut(id).ok_or("gone")?;
+                    r.attempts += 1;
+                    r.proposal = Some(stripped.clone());
+                    r.attempts
+                };
+                if attempts < MAX_ATTEMPTS {
+                    // Every problem in one answer: the coverage ones too.
+                    let cov = coverage::check_guide(&model, &stripped).err().map(|r| r.text()).unwrap_or_default();
+                    return Err(format!("{msg}{cov}This was try {attempts} of {MAX_ATTEMPTS}."));
+                }
+                tracing::info!(target: "sb::review", review = id, "bad takes dropped on the last try");
+                crate::take::strip_bad(&model, &guide)
+            }
+        };
         match coverage::check_guide(&model, &guide) {
             Ok(()) => {
                 tracing::info!(target: "sb::review", review = id, "guide accepted by the checker");
@@ -1143,6 +1179,11 @@ impl Hub {
         }
         let guide = normalize(guide)?;
         let model = self.model(id)?;
+        // Only the changed step must pass; a bad take elsewhere (from a guide that an
+        // update completed) goes, so it never blocks this step.
+        let changed: Value = json!({ "steps": guide["steps"].as_array().map(|a| a.iter().filter(|s| s["id"] == step).cloned().collect::<Vec<_>>()).unwrap_or_default() });
+        crate::take::check(&model, &changed)?;
+        let guide = crate::take::strip_bad(&model, &guide);
         coverage::check_guide(&model, &guide).map_err(|r| r.text())?;
         let _ = self
             .store
@@ -1666,6 +1707,7 @@ impl Hub {
             text,
             head,
             line_text,
+            agent,
         } = c;
         let (path, side, head, line_text) = (path.as_str(), side.as_str(), head.as_str(), line_text.as_str());
         let text = text.trim();
@@ -1695,7 +1737,7 @@ impl Hub {
             line: Some(line),
             start_line: (start < line).then_some(start),
             text: text.to_owned(),
-            agent: false,
+            agent,
             head: Some(model.head.clone()),
             line_text: None,
             stale: false,
@@ -2166,7 +2208,8 @@ impl Hub {
         }
         let prompt = format!(
             "The PR has new commits. The head is now {}. The worktree is checked out at it. Changed files since {old}: {}. \
-             Read the new code. Call guide_set_steps with the full guide for the new head. Keep the id of each step \
+             Read the new code. Call guide_set_steps with the full guide for the new head, with the whys, the check answers \
+             and the takes for the new code. Keep the id of each step \
              that still applies, so the reviewer keeps its notes. Every changed line of the new diff must be in a range. \
              Reply with one line when done.",
             f.head,
@@ -2341,6 +2384,116 @@ impl Hub {
         }
     }
 
+    /// The Claude pane of a PR review (`review_term`): its id, its session id once the
+    /// hooks report it, and its connection.
+    fn ask_pane(&self, tree: &str, number: u64) -> Option<(String, Option<String>, Option<String>)> {
+        let title = format!("Ask #{number}");
+        self.panes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.row.kind == "claude" && p.row.tree == tree && p.row.title.as_deref() == Some(title.as_str()))
+            .max_by_key(|p| p.row.session.is_some())
+            .map(|p| (p.row.id.clone(), p.row.session.clone(), p.row.connection.clone()))
+    }
+
+    /// The questions and answers in the review's Claude pane, each with its step
+    /// (SPEC 11.5). Read from Claude's session file, so it works for a full-screen
+    /// Claude and after a restart. Empty when the pane or its file is not there yet.
+    pub fn review_chat(&self, id: &str) -> Res<Vec<crate::chat::Turn>> {
+        let (tree, number) = {
+            let r = self.reviews.lock().unwrap();
+            let r = r.get(id).ok_or("gone")?;
+            if r.row.is_local() {
+                return Ok(vec![]);
+            }
+            (r.row.tree.clone(), r.row.number)
+        };
+        let Some((_, Some(session), connection)) = self.ask_pane(&tree, number) else {
+            return Ok(vec![]);
+        };
+        let config = self.config();
+        let mut dirs = vec![];
+        if let Some(dir) = connection.as_deref().and_then(|c| config.connections.get(c)).and_then(|c| c.dir.as_deref()) {
+            dirs.push(expand(dir));
+        }
+        dirs.push(self.paths.claude.clone());
+        let file = dirs.iter().find_map(|d| session_file(&d.join("projects"), &session));
+        let Some(file) = file else { return Ok(vec![]) };
+        let text = std::fs::read_to_string(&file).map_err(e)?;
+        let seen = self.store.lock().unwrap().steps_seen(id).map_err(e)?;
+        Ok(crate::chat::turns(&text, &seen))
+    }
+
+    /// You view `step` now: questions you ask from now on belong to it.
+    pub fn review_step_seen(&self, id: &str, step: &str) -> Res<()> {
+        self.store.lock().unwrap().step_seen(id, step, now()).map_err(e)
+    }
+
+    /// Dismisses a take note, or brings it back (`on` false). `note` is its key.
+    pub fn review_dismiss(&self, id: &str, note: &str, on: bool) -> Res<()> {
+        self.pr_only(id)?;
+        self.store.lock().unwrap().dismiss(id, note, on).map_err(e)?;
+        self.emit_review(id);
+        Ok(())
+    }
+
+    /// Writes Claude's take again: for one step, or for the PR when `step` is None.
+    /// The guide session does it, with the notes you dismissed, so it does not repeat
+    /// them (SPEC 11.12).
+    pub fn review_retake(&self, id: &str, step: Option<&str>) -> Res<()> {
+        self.pr_only(id)?;
+        if let Some(s) = step {
+            self.step(id, s)?;
+        }
+        // The check and the switch to "updating" in one lock: a double click starts
+        // one run.
+        let row = {
+            let mut reviews = self.reviews.lock().unwrap();
+            let r = reviews.get_mut(id).ok_or("gone")?;
+            if matches!(r.status.as_str(), "fetching" | "writing" | "updating") {
+                return Err("the review is still running".into());
+            }
+            if r.row.guide_session.is_none() {
+                return Err("the guide session has not started".into());
+            }
+            r.status = "updating".into();
+            r.error = None;
+            r.row.clone()
+        };
+        self.emit_review(id);
+        let dismissed = self.store.lock().unwrap().dismissed(id).map_err(e)?;
+        let mine: Vec<&String> = dismissed.iter().filter(|k| step.is_none_or(|s| k.starts_with(&format!("{s}|")))).collect();
+        let what = match step {
+            Some(s) => format!("Write your take on step {s} again. Read its code at {} first. Call guide_update_step with id {s} and fields {{\"take\": ...}}.", row.head),
+            None => format!("Write your take on the whole PR again. Read the code at {} first. Call guide_set_steps with the full guide, with the new PR take and every step as it is.", row.head),
+        };
+        let prompt = if mine.is_empty() {
+            format!("{what} Reply with one line when done.")
+        } else {
+            let list: Vec<String> = mine.iter().map(|k| format!("- {}", k.split_once('|').map(|x| x.1).unwrap_or(k))).collect();
+            format!("{what} The reviewer dismissed these notes; do not write them again:\n{}\nReply with one line when done.", list.join("\n"))
+        };
+        let pr = PrInfo {
+            number: row.number,
+            title: row.title.clone(),
+            body: String::new(),
+            head_ref_oid: row.head.clone(),
+            head_ref_name: String::new(),
+            base_ref_name: String::new(),
+            base_ref_oid: String::new(),
+            files: vec![],
+        };
+        let hub = self.arc();
+        let rid = id.to_owned();
+        std::thread::spawn(move || {
+            if let Err(err) = hub.run_guide(&rid, &pr, Some(prompt)) {
+                hub.set_status(&rid, "error", Some(err));
+            }
+        });
+        Ok(())
+    }
+
     /// Tests only: adds a review row as a review with a guide, with no gh and no agent.
     #[doc(hidden)]
     pub fn debug_add_review(&self, row: ReviewRow) {
@@ -2459,6 +2612,20 @@ fn agent_text(head: &str, note: &str, drafts: &[DraftRow]) -> String {
         .chars()
         .map(|c| if c.is_control() && c != '\n' { ' ' } else { c })
         .collect()
+}
+
+/// The lines of the review's last coverage that the app put into "Not in the guide".
+fn r_missed(hub: &Hub, id: &str) -> usize {
+    hub.reviews.lock().unwrap().get(id).and_then(|r| r.coverage.as_ref().map(|c| c.missed_lines)).unwrap_or(0)
+}
+
+/// `<projects>/<any folder>/<session>.jsonl`, the file of a Claude session.
+fn session_file(projects: &Path, session: &str) -> Option<PathBuf> {
+    if session.is_empty() || !session.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return None;
+    }
+    let name = format!("{session}.jsonl");
+    std::fs::read_dir(projects).ok()?.flatten().map(|d| d.path().join(&name)).find(|p| p.is_file())
 }
 
 /// True when the nvim at `sock` has no unsaved file. An nvim that does not answer
