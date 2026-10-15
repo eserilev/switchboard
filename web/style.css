@@ -516,7 +516,7 @@ tr.noted-nit td.ln::after { color: var(--muted); }
 #lfirst { width: 100%; resize: vertical; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: 13px/1.4 var(--mono); padding: 8px; }
 /* The task button of a tile shows on hover or focus, so the title keeps its room. */
 .pane .tool[data-ptaskmenu] { display: none; }
-.pane:hover .tool[data-ptaskmenu], .pane:focus-within .tool[data-ptaskmenu], .pane.focused .tool[data-ptaskmenu] { display: inline-block; }
+.pane.hover .tool[data-ptaskmenu], .pane:focus-within .tool[data-ptaskmenu], .pane.focused .tool[data-ptaskmenu] { display: inline-block; }
 .thint { white-space: nowrap; }
 
 /* planning (SPEC 27, phase 3) */
