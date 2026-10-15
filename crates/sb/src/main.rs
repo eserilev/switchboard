@@ -279,6 +279,16 @@ fn task(args: &[String]) -> i32 {
         if let Some(b) = t["blocked_by"].as_str() {
             println!("blocked by: {b}");
         }
+        if let Some(p) = t["points"].as_u64() {
+            println!("points: {p}");
+        }
+        let words = |k: &str| t[k].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
+        if !words("tags").is_empty() {
+            println!("tags:   {}", words("tags").join(", "));
+        }
+        for l in words("links") {
+            println!("link:   {l}");
+        }
         let notes = t["notes"].as_str().unwrap_or("").trim();
         if !notes.is_empty() {
             println!("\n{notes}");

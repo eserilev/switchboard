@@ -39,6 +39,18 @@ pub struct Task {
     pub started: Option<u64>,
     /// Set exactly when the status is `done`.
     pub done: Option<u64>,
+    /// 0 to 99, or none.
+    #[serde(default)]
+    pub points: Option<u32>,
+    /// Short words, lowercase, for the filter.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// http(s) URLs, for example a PR or an issue.
+    #[serde(default)]
+    pub links: Vec<String>,
+    /// Set when the task is in the archive (SPEC 27.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -49,7 +61,7 @@ pub struct Sprint {
     /// Local calendar dates, `YYYY-MM-DD`. The end date is a sprint day.
     pub start: String,
     pub end: String,
-    /// `open` or `closed`. Planned sprints come in a later phase (SPEC 27.13).
+    /// `planned`, `open` or `closed`. At most one is open and at most one is planned.
     pub state: String,
 }
 
@@ -58,7 +70,8 @@ pub struct TaskEvent {
     pub at: u64,
     /// `you` (the window), `cli`, or a pane id.
     pub by: String,
-    /// `created`, `status`, `sprint`, `edited` or `copied`.
+    /// `created`, `status`, `sprint`, `edited`, `copied`, `points`, `link`,
+    /// `link_removed`, `linked`, `unlinked`, `note`, `deleted` or `restored`.
     pub kind: String,
     pub value: Option<String>,
 }
@@ -78,15 +91,27 @@ pub struct NewTask {
     pub sprint: Option<String>,
     #[serde(default)]
     pub repo: Option<String>,
+    #[serde(default)]
+    pub points: Option<u32>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub links: Vec<String>,
 }
 
-/// The text fields of a task. An edit sends all of them.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+/// The fields of a task that an edit changes. An edit sends all of them.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct TaskFields {
     pub title: String,
     pub notes: String,
     pub priority: String,
     pub repo: Option<String>,
+    #[serde(default)]
+    pub points: Option<u32>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub links: Vec<String>,
 }
 
 /// A drag: into `sprint` (None: the backlog), with an optional new status, before
@@ -122,6 +147,24 @@ pub struct TasksView {
     /// The task repo folders that are not on disk. The hub fills it in.
     #[serde(default)]
     pub missing: Vec<String>,
+    /// The deleted tasks, newest first (SPEC 27.2).
+    #[serde(default)]
+    pub archive: Vec<Task>,
+    /// The status changes of the tasks in the open sprint, oldest first, for the
+    /// burndown (SPEC 27.8).
+    #[serde(default)]
+    pub burn: Vec<StatusEvent>,
+    /// The PR links that GitHub reports as merged. The hub fills it in (SPEC 27.6).
+    #[serde(default)]
+    pub merged: Vec<String>,
+}
+
+/// A status change of a task.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct StatusEvent {
+    pub task: String,
+    pub at: u64,
+    pub status: String,
 }
 
 /// A pane linked to a task, with what the store knows of the pane. A closed pane
@@ -220,7 +263,13 @@ pub enum Place {
     Done,
 }
 
-const TASK_COLS: &str = "id, title, notes, status, blocked_by, priority, sprint, repo, rank, created, changed, started, done";
+const TASK_COLS: &str =
+    "id, title, notes, status, blocked_by, priority, sprint, repo, rank, created, changed, started, done, points, tags, links, deleted";
+
+/// A JSON list column. A bad value reads as an empty list.
+fn list_col(r: &Row, i: usize) -> rusqlite::Result<Vec<String>> {
+    Ok(serde_json::from_str(&r.get::<_, String>(i)?).unwrap_or_default())
+}
 
 fn task_row(r: &Row) -> rusqlite::Result<Task> {
     let opt = |v: Option<i64>| v.map(|v| v as u64);
@@ -238,6 +287,10 @@ fn task_row(r: &Row) -> rusqlite::Result<Task> {
         changed: r.get::<_, i64>(10)? as u64,
         started: opt(r.get(11)?),
         done: opt(r.get(12)?),
+        points: r.get::<_, Option<i64>>(13)?.map(|v| v as u32),
+        tags: list_col(r, 14)?,
+        links: list_col(r, 15)?,
+        deleted: opt(r.get(16)?),
     })
 }
 
@@ -252,6 +305,13 @@ fn get_task(c: &Connection, id: &str) -> T<Task> {
         .ok_or_else(|| format!("no task {id}"))
 }
 
+fn get_archived(c: &Connection, id: &str) -> T<Task> {
+    c.query_row(&format!("SELECT {TASK_COLS} FROM task WHERE id = ?1 AND deleted IS NOT NULL"), [id], task_row)
+        .optional()
+        .map_err(e)?
+        .ok_or_else(|| format!("task {id} is not in the archive"))
+}
+
 fn get_sprint(c: &Connection, id: &str) -> T<Sprint> {
     c.query_row("SELECT id, name, goal, start_day, end_day, state FROM sprint WHERE id = ?1", [id], sprint_row)
         .optional()
@@ -260,14 +320,17 @@ fn get_sprint(c: &Connection, id: &str) -> T<Sprint> {
 }
 
 fn save_task(c: &Connection, t: &Task) -> T<()> {
+    let json = |l: &Vec<String>| serde_json::to_string(l).unwrap_or_else(|_| "[]".into());
     c.execute(
-        "INSERT INTO task (id, title, notes, status, blocked_by, priority, sprint, repo, rank, created, changed, started, done)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        "INSERT INTO task (id, title, notes, status, blocked_by, priority, sprint, repo, rank, created, changed, started, done,
+           points, tags, links, deleted)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
          ON CONFLICT(id) DO UPDATE SET title=?2, notes=?3, status=?4, blocked_by=?5, priority=?6, sprint=?7, repo=?8,
-           rank=?9, changed=?11, started=?12, done=?13",
+           rank=?9, changed=?11, started=?12, done=?13, points=?14, tags=?15, links=?16, deleted=?17",
         params![
             t.id, t.title, t.notes, t.status, t.blocked_by, t.priority, t.sprint, t.repo, t.rank,
-            t.created as i64, t.changed as i64, t.started.map(|v| v as i64), t.done.map(|v| v as i64)
+            t.created as i64, t.changed as i64, t.started.map(|v| v as i64), t.done.map(|v| v as i64),
+            t.points.map(|v| v as i64), json(&t.tags), json(&t.links), t.deleted.map(|v| v as i64)
         ],
     )
     .map_err(e)?;
@@ -322,6 +385,73 @@ fn check_priority(p: &str) -> T<()> {
     } else {
         Err(format!("the priority is one of {}", PRIORITIES.join(", ")))
     }
+}
+
+fn check_points(p: Option<u32>) -> T<()> {
+    match p {
+        Some(p) if p > 99 => Err("points are a whole number from 0 to 99".into()),
+        _ => Ok(()),
+    }
+}
+
+/// Tags are short words: lowercase, with no `#` in front, no space, at most 30
+/// characters, at most 10 of them. A tag twice counts once.
+fn check_tags(tags: &[String]) -> T<Vec<String>> {
+    let mut out: Vec<String> = vec![];
+    for t in tags {
+        let t = t.trim().trim_start_matches('#').to_lowercase();
+        if t.is_empty() {
+            continue;
+        }
+        if t.chars().any(|c| c.is_whitespace() || c.is_control() || c == ',') {
+            return Err(format!("a tag is one word: {t:?}"));
+        }
+        if t.chars().count() > 30 {
+            return Err("a tag has at most 30 characters".into());
+        }
+        if !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    if out.len() > 10 {
+        return Err("a task has at most 10 tags".into());
+    }
+    Ok(out)
+}
+
+/// Links are http(s) URLs with no space, at most 20 of them. A link twice counts once.
+fn check_links(links: &[String]) -> T<Vec<String>> {
+    let mut out: Vec<String> = vec![];
+    for l in links {
+        let l = l.trim();
+        if l.is_empty() {
+            continue;
+        }
+        let scheme = l.starts_with("https://") || l.starts_with("http://");
+        if !scheme || l.chars().any(|c| c.is_whitespace() || c.is_control()) || l.len() > 500 {
+            return Err(format!("a link is an http or https URL: {l:?}"));
+        }
+        if !out.iter().any(|x| x == l) {
+            out.push(l.to_owned());
+        }
+    }
+    if out.len() > 20 {
+        return Err("a task has at most 20 links".into());
+    }
+    Ok(out)
+}
+
+/// The PR of a GitHub link, as `https://github.com/<owner>/<repo>/pull/<n>`, or None
+/// for any other link. `#…`, `?…` and a path after the number do not count.
+pub fn pr_url(link: &str) -> Option<String> {
+    let rest = link.trim().strip_prefix("https://github.com/")?;
+    let mut parts = rest.split(['/', '#', '?']);
+    let (owner, repo, pull, n) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+    let word = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+    if !word(owner) || !word(repo) || pull != "pull" || n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("https://github.com/{owner}/{repo}/pull/{n}"))
 }
 
 /// `YYYY-MM-DD`, with a real month and day.
@@ -415,8 +545,26 @@ impl Store {
             .prepare(&format!("SELECT {TASK_COLS} FROM task WHERE deleted IS NULL ORDER BY sprint, rank, rowid"))
             .map_err(e)?;
         let tasks = s.query_map([], task_row).map_err(e)?.collect::<Result<_, _>>().map_err(e)?;
+        let mut s = self
+            .db
+            .prepare(&format!("SELECT {TASK_COLS} FROM task WHERE deleted IS NOT NULL ORDER BY deleted DESC, rowid DESC"))
+            .map_err(e)?;
+        let archive = s.query_map([], task_row).map_err(e)?.collect::<Result<_, _>>().map_err(e)?;
+        let mut s = self
+            .db
+            .prepare(
+                "SELECT e.task, e.at, e.value FROM task_event e JOIN task t ON t.id = e.task AND t.deleted IS NULL
+                 JOIN sprint s ON s.id = t.sprint AND s.state = 'open'
+                 WHERE e.kind IN ('status', 'created') AND e.value IS NOT NULL ORDER BY e.id",
+            )
+            .map_err(e)?;
+        let burn = s
+            .query_map([], |r| Ok(StatusEvent { task: r.get(0)?, at: r.get::<_, i64>(1)? as u64, status: r.get(2)? }))
+            .map_err(e)?
+            .collect::<Result<_, _>>()
+            .map_err(e)?;
         let links = self.task_links()?;
-        Ok(TasksView { sprints, tasks, links, missing: vec![] })
+        Ok(TasksView { sprints, tasks, links, missing: vec![], archive, burn, merged: vec![] })
     }
 
     pub fn task(&self, id: &str) -> T<Task> {
@@ -436,6 +584,9 @@ impl Store {
         let title = check_title(&n.title)?;
         let priority = n.priority.unwrap_or_else(|| "normal".into());
         check_priority(&priority)?;
+        check_points(n.points)?;
+        let tags = check_tags(&n.tags)?;
+        let links = check_links(&n.links)?;
         writable_sprint(tx, n.sprint.as_deref())?;
         let id = self.next_id("t").map_err(e)?;
         let mut t = Task {
@@ -452,6 +603,10 @@ impl Store {
             changed: at,
             started: None,
             done: None,
+            points: n.points,
+            tags,
+            links,
+            deleted: None,
         };
         let status = n.status.unwrap_or_else(|| "todo".into());
         apply_status(&mut t, &status, n.blocked_by.as_deref(), at)?;
@@ -464,24 +619,48 @@ impl Store {
         Ok(t.id)
     }
 
-    /// Changes the text fields. The history gets one `edited` row.
+    /// Changes the fields. The history gets a `points` row for new points, a `link`
+    /// or `link_removed` row for each link, and one `edited` row for the rest.
     pub fn task_edit(&self, id: &str, f: TaskFields, by: &str, at: u64) -> T<Task> {
         let title = check_title(&f.title)?;
         check_priority(&f.priority)?;
+        check_points(f.points)?;
+        let tags = check_tags(&f.tags)?;
+        let links = check_links(&f.links)?;
         let tx = self.db.unchecked_transaction().map_err(e)?;
         let mut t = get_task(&tx, id)?;
         editable(&tx, &t)?;
         let repo = f.repo.filter(|r| !r.trim().is_empty());
-        if t.title == title && t.notes == f.notes && t.priority == f.priority && t.repo == repo {
+        let points = t.points != f.points;
+        let added: Vec<String> = links.iter().filter(|l| !t.links.contains(l)).cloned().collect();
+        let removed: Vec<String> = t.links.iter().filter(|l| !links.contains(l)).cloned().collect();
+        // A new order of the same links is an edit too.
+        let reorder = added.is_empty() && removed.is_empty() && t.links != links;
+        let text = t.title != title || t.notes != f.notes || t.priority != f.priority || t.repo != repo || t.tags != tags || reorder;
+        if !text && !points && added.is_empty() && removed.is_empty() {
             return Ok(t);
         }
         t.title = title;
         t.notes = f.notes;
         t.priority = f.priority;
         t.repo = repo;
+        t.tags = tags;
+        t.points = f.points;
+        t.links = links;
         t.changed = at;
         save_task(&tx, &t)?;
-        event(&tx, id, at, by, "edited", None)?;
+        if text {
+            event(&tx, id, at, by, "edited", None)?;
+        }
+        if points {
+            event(&tx, id, at, by, "points", t.points.map(|p| p.to_string()).as_deref())?;
+        }
+        for l in &added {
+            event(&tx, id, at, by, "link", Some(l))?;
+        }
+        for l in &removed {
+            event(&tx, id, at, by, "link_removed", Some(l))?;
+        }
         tx.commit().map_err(e)?;
         Ok(t)
     }
@@ -528,24 +707,70 @@ impl Store {
         get_task(&self.db, id)
     }
 
-    /// Removes a task and its history. Phase 1 has no archive (SPEC 27.13).
-    pub fn task_delete(&self, id: &str) -> T<()> {
+    /// Moves a task to the archive. It loses its pane links; its panes stay.
+    pub fn task_delete(&self, id: &str, by: &str, at: u64) -> T<()> {
         let tx = self.db.unchecked_transaction().map_err(e)?;
-        let t = get_task(&tx, id)?;
+        let mut t = get_task(&tx, id)?;
         editable(&tx, &t)?;
-        tx.execute("DELETE FROM task WHERE id = ?1", [id]).map_err(e)?;
-        tx.execute("DELETE FROM task_event WHERE task = ?1", [id]).map_err(e)?;
+        t.deleted = Some(at);
+        t.changed = at;
+        save_task(&tx, &t)?;
         tx.execute("DELETE FROM task_pane WHERE task = ?1", [id]).map_err(e)?;
+        event(&tx, id, at, by, "deleted", None)?;
         tx.commit().map_err(e)?;
         Ok(())
     }
 
-    /// A new task in the backlog with the title, notes, priority and repo of `id`.
-    /// The way to work again on a task of a closed sprint.
+    /// Takes a task out of the archive, at the end of its list. When its sprint
+    /// closed in the meantime, it goes to the backlog.
+    pub fn task_restore(&self, id: &str, by: &str, at: u64) -> T<Task> {
+        let tx = self.db.unchecked_transaction().map_err(e)?;
+        let mut t = get_archived(&tx, id)?;
+        if let Some(sp) = t.sprint.clone() {
+            let gone = match get_sprint(&tx, &sp) {
+                Ok(x) => x.state == "closed",
+                Err(_) => true,
+            };
+            if gone {
+                t.sprint = None;
+            }
+        }
+        t.deleted = None;
+        t.changed = at;
+        save_task(&tx, &t)?;
+        place(&tx, id, t.sprint.as_deref(), None)?;
+        event(&tx, id, at, by, "restored", t.sprint.as_deref())?;
+        tx.commit().map_err(e)?;
+        get_task(&self.db, id)
+    }
+
+    /// Removes the tasks that went to the archive before `before`, with their history.
+    /// Returns how many.
+    pub fn task_prune(&self, before: u64) -> T<usize> {
+        let tx = self.db.unchecked_transaction().map_err(e)?;
+        let gone = "SELECT id FROM task WHERE deleted IS NOT NULL AND deleted < ?1";
+        tx.execute(&format!("DELETE FROM task_event WHERE task IN ({gone})"), [before as i64]).map_err(e)?;
+        tx.execute(&format!("DELETE FROM task_pane WHERE task IN ({gone})"), [before as i64]).map_err(e)?;
+        let n = tx.execute("DELETE FROM task WHERE deleted IS NOT NULL AND deleted < ?1", [before as i64]).map_err(e)?;
+        tx.commit().map_err(e)?;
+        Ok(n)
+    }
+
+    /// A new task in the backlog with the fields of `id`, in To do. The way to work
+    /// again on a task of a closed sprint.
     pub fn task_copy(&self, id: &str, by: &str, at: u64) -> T<Task> {
         let tx = self.db.unchecked_transaction().map_err(e)?;
         let t = get_task(&tx, id)?;
-        let n = NewTask { title: t.title, notes: t.notes, priority: Some(t.priority), repo: t.repo, ..NewTask::default() };
+        let n = NewTask {
+            title: t.title,
+            notes: t.notes,
+            priority: Some(t.priority),
+            repo: t.repo,
+            points: t.points,
+            tags: t.tags,
+            links: t.links,
+            ..NewTask::default()
+        };
         let new = self.add_in(&tx, n, by, at, Some(id))?;
         tx.commit().map_err(e)?;
         get_task(&self.db, &new)
@@ -564,18 +789,23 @@ impl Store {
         rows.collect::<Result<_, _>>().map_err(e)
     }
 
-    /// A new open sprint. At most one sprint is open.
+    /// A new sprint. With no open sprint, it opens. With an open one, it is the
+    /// planned next sprint. At most one is open and at most one is planned.
     pub fn sprint_new(&self, s: &NewSprint) -> T<Sprint> {
         let s = check_sprint(s)?;
         let tx = self.db.unchecked_transaction().map_err(e)?;
-        let open: i64 = tx.query_row("SELECT COUNT(*) FROM sprint WHERE state = 'open'", [], |r| r.get(0)).map_err(e)?;
-        if open > 0 {
-            return Err("a sprint is open. Close it first".into());
-        }
+        let count = |state: &str| -> T<i64> {
+            tx.query_row("SELECT COUNT(*) FROM sprint WHERE state = ?1", [state], |r| r.get(0)).map_err(e)
+        };
+        let state = match (count("open")?, count("planned")?) {
+            (0, _) => "open",
+            (_, 0) => "planned",
+            _ => return Err("the next sprint is planned already. Close the open sprint first".into()),
+        };
         let id = self.next_id("s").map_err(e)?;
         tx.execute(
-            "INSERT INTO sprint (id, name, goal, start_day, end_day, state) VALUES (?1, ?2, ?3, ?4, ?5, 'open')",
-            params![id, s.name, s.goal, s.start, s.end],
+            "INSERT INTO sprint (id, name, goal, start_day, end_day, state) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, s.name, s.goal, s.start, s.end, state],
         )
         .map_err(e)?;
         tx.commit().map_err(e)?;
@@ -597,7 +827,8 @@ impl Store {
     }
 
     /// Closes the open sprint `id`. `places` gives a place for each task in it that
-    /// is not done. `next` opens a new sprint for the tasks that go to `Next`.
+    /// is not done. A planned sprint opens, and the tasks that go to `Next` go there.
+    /// With no planned sprint, `next` opens a new one for them.
     pub fn sprint_close(
         &self,
         id: &str,
@@ -627,11 +858,22 @@ impl Store {
                 None => return Err(format!("choose a place for \"{}\"", t.title)),
             }
         }
-        if next.is_none() && plan.iter().any(|(_, p)| *p == Place::Next) {
+        let planned: Option<String> =
+            tx.query_row("SELECT id FROM sprint WHERE state = 'planned'", [], |r| r.get(0)).optional().map_err(e)?;
+        if planned.is_some() && next.is_some() {
+            return Err("the next sprint is planned already".into());
+        }
+        if planned.is_none() && next.is_none() && plan.iter().any(|(_, p)| *p == Place::Next) {
             return Err("the next sprint needs a name and dates".into());
         }
         tx.execute("UPDATE sprint SET state = 'closed' WHERE id = ?1", [id]).map_err(e)?;
         let next_id = match &next {
+            None => {
+                if let Some(p) = &planned {
+                    tx.execute("UPDATE sprint SET state = 'open' WHERE id = ?1", [p]).map_err(e)?;
+                }
+                planned
+            }
             Some(s) => {
                 let nid = self.next_id("s").map_err(e)?;
                 tx.execute(
@@ -641,7 +883,6 @@ impl Store {
                 .map_err(e)?;
                 Some(nid)
             }
-            None => None,
         };
         for (mut t, p) in plan {
             match p {
@@ -871,7 +1112,7 @@ mod tests {
     fn moves_keep_the_order_and_the_history() {
         let s = Store::memory().unwrap();
         let sp = s.sprint_new(&sprint("S1")).unwrap();
-        assert!(s.sprint_new(&sprint("S2")).unwrap_err().contains("is open"));
+        assert_eq!(s.sprint_new(&sprint("S2")).unwrap().state, "planned", "a second sprint is the planned one");
         let a = add(&s, "a", Some(&sp.id));
         let b = add(&s, "b", Some(&sp.id));
         let c = add(&s, "c", None);
@@ -911,7 +1152,7 @@ mod tests {
         assert_eq!((f.status.as_str(), f.done, f.sprint.as_deref()), ("done", Some(12), Some(sp.id.as_str())));
         // The closed sprint is read-only.
         assert!(s.task_status(&done.id, "doing", None, "you", 13).unwrap_err().contains("closed sprint"));
-        assert!(s.task_delete(&done.id).is_err());
+        assert!(s.task_delete(&done.id, "you", 13).is_err());
         assert!(s.task_move(&back.id, &TaskMove { sprint: Some(sp.id.clone()), status: None, blocked_by: None, before: None }, "you", 13).is_err());
         assert!(s.sprint_edit(&sp.id, &sprint("again")).is_err());
         // Copy to backlog makes a new task.
@@ -943,15 +1184,20 @@ mod tests {
                 };
                 let frozen = closed(&v);
                 let open = v.sprints.iter().find(|x| x.state == "open").map(|x| x.id.clone());
+                let planned = v.sprints.iter().find(|x| x.state == "planned").map(|x| x.id.clone());
                 // Any task, also one in a closed sprint: the rules refuse those changes.
                 let ids: Vec<String> = v.tasks.iter().map(|t| t.id.clone()).collect();
                 let mut pick = |extra: u64| ids.get(rnd(ids.len() as u64 + extra) as usize).cloned();
                 let any = pick(0);
                 let before = pick(1);
-                let sp = if rnd(2) == 0 { open.clone() } else { None };
+                let sp = match rnd(3) {
+                    0 => open.clone(),
+                    1 => planned.clone(),
+                    _ => None,
+                };
                 let status = STATUSES[rnd(5) as usize];
                 let reason = if rnd(3) == 0 { None } else { Some("someone") };
-                match rnd(9) {
+                match rnd(10) {
                     0 | 1 => {
                         let _ = s.task_add(NewTask { title: format!("t{step}"), sprint: sp, ..NewTask::default() }, "you", at);
                     }
@@ -969,14 +1215,20 @@ mod tests {
                     6 => {
                         if let Some(id) = &any {
                             if rnd(3) == 0 {
-                                let _ = s.task_delete(id);
+                                let _ = s.task_delete(id, "you", at);
                             } else {
                                 let _ = s.task_copy(id, "you", at);
                             }
                         }
                     }
                     7 => {
-                        assert_eq!(s.sprint_new(&sprint(&format!("S{step}"))).is_ok(), open.is_none());
+                        assert_eq!(s.sprint_new(&sprint(&format!("S{step}"))).is_ok(), open.is_none() || planned.is_none());
+                    }
+                    8 => {
+                        if let Some(t) = v.archive.get(rnd(v.archive.len() as u64) as usize) {
+                            let back = s.task_restore(&t.id, "you", at).unwrap();
+                            assert!(back.sprint.is_none() || back.sprint == open || back.sprint == planned, "a restore never goes into a closed sprint");
+                        }
                     }
                     _ => {
                         if let Some(sp) = &open {
@@ -984,13 +1236,25 @@ mod tests {
                                 .map(|t| (t.id.clone(), [Place::Next, Place::Backlog, Place::Done][rnd(3) as usize])).collect();
                             let next = if rnd(2) == 0 { Some(sprint("N")) } else { None };
                             let r = s.sprint_close(sp, &places, next.as_ref(), "you", at);
-                            assert_eq!(r.is_ok(), next.is_some() || places.iter().all(|(_, p)| *p != Place::Next));
+                            let ok = match &planned {
+                                Some(_) => next.is_none(),
+                                None => next.is_some() || places.iter().all(|(_, p)| *p != Place::Next),
+                            };
+                            assert_eq!(r.is_ok(), ok, "{r:?}");
+                            if let (Ok(opened), Some(_)) = (&r, &planned) {
+                                assert_eq!(opened.clone(), Some(s.tasks_view().unwrap().sprints.into_iter().find(|x| x.state == "open").unwrap()), "the planned sprint opens");
+                            }
                         }
                     }
                 }
                 // The rules.
                 let v = s.tasks_view().unwrap();
-                assert!(v.sprints.iter().filter(|x| x.state == "open").count() <= 1);
+                let n_open = v.sprints.iter().filter(|x| x.state == "open").count();
+                let n_planned = v.sprints.iter().filter(|x| x.state == "planned").count();
+                assert!(n_open <= 1 && n_planned <= 1, "at most one open and one planned sprint");
+                assert!(n_planned == 0 || n_open == 1, "a planned sprint comes after an open one");
+                assert!(v.archive.iter().all(|t| t.deleted.is_some()) && v.tasks.iter().all(|t| t.deleted.is_none()));
+                assert!(v.links.iter().all(|l| v.tasks.iter().any(|t| t.id == l.task)), "an archived task has no links");
                 let mut keys: Vec<(Option<String>, i64)> = v.tasks.iter().map(|t| (t.sprint.clone(), t.rank)).collect();
                 let n = keys.len();
                 keys.sort();
@@ -1014,11 +1278,130 @@ mod tests {
                     // and its last status is the status.
                     let h = s.task_history(&t.id).unwrap();
                     assert!(h[0].kind == "created" || h[0].kind == "copied", "{h:?}");
-                    let last = h.iter().rev().find(|x| x.kind != "sprint" && x.kind != "edited").unwrap();
+                    let last = h.iter().rev().find(|x| ["created", "status", "copied"].contains(&x.kind.as_str())).unwrap();
                     let was = if last.kind == "copied" { Some("todo") } else { last.value.as_deref() };
                     assert_eq!(was, Some(t.status.as_str()), "{t:?} {h:?}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn points_tags_and_links() {
+        let s = Store::memory().unwrap();
+        let t = add(&s, "a", None);
+        let f = |points, tags: &[&str], links: &[&str]| TaskFields {
+            title: "a".into(),
+            notes: "".into(),
+            priority: "normal".into(),
+            repo: None,
+            points,
+            tags: tags.iter().map(|x| x.to_string()).collect(),
+            links: links.iter().map(|x| x.to_string()).collect(),
+        };
+        assert!(s.task_edit(&t.id, f(Some(100), &[], &[]), "you", 2).unwrap_err().contains("0 to 99"));
+        assert!(s.task_edit(&t.id, f(None, &["two words"], &[]), "you", 2).is_err());
+        assert!(s.task_edit(&t.id, f(None, &[&"x".repeat(31)], &[]), "you", 2).is_err());
+        let many: Vec<String> = (0..11).map(|i| format!("t{i}")).collect();
+        assert!(s.task_edit(&t.id, f(None, &many.iter().map(|x| x.as_str()).collect::<Vec<_>>(), &[]), "you", 2).is_err());
+        for bad in ["javascript:alert(1)", "ftp://x", "https://a b", "file:///etc/passwd"] {
+            assert!(s.task_edit(&t.id, f(None, &[], &[bad]), "you", 2).is_err(), "{bad}");
+        }
+        let pr = "https://github.com/sigp/lighthouse/pull/10071";
+        let t2 = s.task_edit(&t.id, f(Some(3), &["#Infra", "infra", " ci "], &[pr, pr, "https://example.com/x"]), "you", 3).unwrap();
+        assert_eq!((t2.points, t2.tags.clone(), t2.links.len()), (Some(3), vec!["infra".to_owned(), "ci".to_owned()], 2));
+        assert_eq!(s.task(&t.id).unwrap(), t2, "the fields stay in the store");
+        // Points 0 is a value, not none.
+        let t3 = s.task_edit(&t.id, f(Some(0), &["infra", "ci"], &[pr]), "you", 4).unwrap();
+        assert_eq!(t3.points, Some(0));
+        let h: Vec<(String, Option<String>)> = s.task_history(&t.id).unwrap().into_iter().skip(1).map(|x| (x.kind, x.value)).collect();
+        let row = |k: &str, v: Option<&str>| (k.to_owned(), v.map(str::to_owned));
+        assert_eq!(h, [
+            row("edited", None), row("points", Some("3")), row("link", Some(pr)), row("link", Some("https://example.com/x")),
+            row("points", Some("0")), row("link_removed", Some("https://example.com/x")),
+        ]);
+        // The same fields again add no row. A copy keeps them.
+        s.task_edit(&t.id, f(Some(0), &["infra", "ci"], &[pr]), "you", 5).unwrap();
+        assert_eq!(s.task_history(&t.id).unwrap().len(), 7);
+        let c = s.task_copy(&t.id, "you", 6).unwrap();
+        assert_eq!((c.points, c.tags, c.links), (Some(0), t3.tags, t3.links));
+    }
+
+    #[test]
+    fn the_archive_keeps_a_task_for_restore() {
+        let s = Store::memory().unwrap();
+        let sp = s.sprint_new(&sprint("S1")).unwrap();
+        let a = add(&s, "a", Some(&sp.id));
+        let b = add(&s, "b", Some(&sp.id));
+        let c = add(&s, "c", Some(&sp.id));
+        s.task_delete(&b.id, "you", 20).unwrap();
+        let v = s.tasks_view().unwrap();
+        assert_eq!(v.tasks.len(), 2);
+        assert_eq!((v.archive.len(), v.archive[0].deleted), (1, Some(20)));
+        assert!(s.task(&b.id).is_err() && s.task_status(&b.id, "doing", None, "you", 21).is_err(), "an archived task does not change");
+        assert!(s.task_restore(&a.id, "you", 21).is_err(), "only an archived task restores");
+        let back = s.task_restore(&b.id, "you", 22).unwrap();
+        let order: Vec<String> = s.tasks_view().unwrap().tasks.into_iter().map(|t| t.title).collect();
+        assert_eq!((back.sprint.as_deref(), order), (Some(sp.id.as_str()), vec!["a".into(), "c".into(), "b".into()]), "it comes back at the end");
+        // Its sprint closed while it was in the archive: it comes back to the backlog.
+        s.task_delete(&c.id, "you", 23).unwrap();
+        s.sprint_close(&sp.id, &[(a.id.clone(), Place::Done), (b.id.clone(), Place::Done)], None, "you", 24).unwrap();
+        let back = s.task_restore(&c.id, "you", 25).unwrap();
+        assert_eq!(back.sprint, None);
+        let kinds: Vec<String> = s.task_history(&c.id).unwrap().into_iter().map(|h| h.kind).collect();
+        assert_eq!(kinds, ["created", "deleted", "restored"]);
+        // The prune removes what went to the archive before the cut, with its history.
+        s.task_delete(&c.id, "you", 30).unwrap();
+        let d = add(&s, "d", None);
+        s.task_delete(&d.id, "you", 50).unwrap();
+        assert_eq!(s.task_prune(40).unwrap(), 1);
+        let v = s.tasks_view().unwrap();
+        assert_eq!(v.archive.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), ["d"]);
+        assert!(s.task_history(&c.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_planned_sprint_opens_at_close() {
+        let s = Store::memory().unwrap();
+        let s1 = s.sprint_new(&sprint("S1")).unwrap();
+        let s2 = s.sprint_new(&sprint("S2")).unwrap();
+        assert_eq!((s1.state.as_str(), s2.state.as_str()), ("open", "planned"));
+        assert!(s.sprint_new(&sprint("S3")).unwrap_err().contains("planned already"));
+        // You plan the next sprint: tasks go into it, and it can change.
+        let p = add(&s, "planned", Some(&s2.id));
+        assert!(s.sprint_edit(&s2.id, &NewSprint { goal: "later".into(), ..sprint("S2") }).is_ok());
+        let a = add(&s, "a", Some(&s1.id));
+        // A new sprint at close is refused when one is planned.
+        assert!(s.sprint_close(&s1.id, &[(a.id.clone(), Place::Next)], Some(&sprint("X")), "you", 5).unwrap_err().contains("planned already"));
+        let opened = s.sprint_close(&s1.id, &[(a.id.clone(), Place::Next)], None, "you", 5).unwrap().unwrap();
+        assert_eq!((opened.id.as_str(), opened.state.as_str()), (s2.id.as_str(), "open"));
+        let order: Vec<String> = s.tasks_view().unwrap().tasks.into_iter().filter(|t| t.sprint.as_deref() == Some(s2.id.as_str())).map(|t| t.title).collect();
+        assert_eq!(order, [p.title.clone(), "a".into()], "the moved task goes after the planned ones");
+        // Now a new sprint is planned again.
+        assert_eq!(s.sprint_new(&sprint("S3")).unwrap().state, "planned");
+    }
+
+    #[test]
+    fn the_burn_has_the_status_changes_of_the_open_sprint() {
+        let s = Store::memory().unwrap();
+        let sp = s.sprint_new(&sprint("S1")).unwrap();
+        let a = add(&s, "a", Some(&sp.id));
+        let b = add(&s, "b", None);
+        s.task_status(&a.id, "done", None, "you", 30).unwrap();
+        s.task_status(&b.id, "done", None, "you", 31).unwrap();
+        let burn = s.tasks_view().unwrap().burn;
+        let rows: Vec<(&str, u64, &str)> = burn.iter().map(|x| (x.task.as_str(), x.at, x.status.as_str())).collect();
+        assert_eq!(rows, [(a.id.as_str(), 10, "todo"), (a.id.as_str(), 30, "done")], "only the tasks of the open sprint");
+    }
+
+    #[test]
+    fn pr_urls() {
+        let n = "https://github.com/sigp/lighthouse/pull/10071";
+        for ok in [n, "https://github.com/sigp/lighthouse/pull/10071/files", "https://github.com/sigp/lighthouse/pull/10071#issuecomment-1", " https://github.com/sigp/lighthouse/pull/10071?x=1"] {
+            assert_eq!(pr_url(ok).as_deref(), Some(n), "{ok}");
+        }
+        for no in ["https://github.com/sigp/lighthouse/issues/1", "https://github.com/sigp/lighthouse/pull/", "https://github.com/sigp/lighthouse/pull/12a", "http://github.com/a/b/pull/1", "https://gitlab.com/a/b/pull/1", "https://github.com/a b/c/pull/1", "https://github.com/a/b/pull/1;rm"] {
+            assert_eq!(pr_url(no), None, "{no}");
         }
     }
 
@@ -1051,8 +1434,10 @@ mod tests {
         s.task_unlink("p1", "you", 5).unwrap();
         assert!(s.task_links().unwrap().is_empty());
         s.task_link(&b.id, "p1", None, "you", 6).unwrap();
-        s.task_delete(&b.id).unwrap();
+        s.task_delete(&b.id, "you", 7).unwrap();
         assert!(s.task_links().unwrap().is_empty(), "a deleted task loses its links");
+        s.task_restore(&b.id, "you", 8).unwrap();
+        assert!(s.task_links().unwrap().is_empty(), "a restore does not bring the links back");
     }
 
     #[test]

@@ -39,8 +39,31 @@ fn task_changes_reach_the_window_and_stay() {
         }
     }
     let _kill = Kill(std::env::var("SB_TMUX_SOCKET").unwrap(), root.clone());
+    // Two tasks in the archive before the start: one deleted more than 30 days ago,
+    // one less.
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let paths = switchboard_core::paths::Paths::from_env();
+    paths.create_all().unwrap();
+    let store = switchboard_core::store::Store::open(&paths.store()).unwrap();
+    let old = store.task_add(NewTask { title: "old".into(), ..NewTask::default() }, "you", 1).unwrap();
+    store.task_delete(&old.id, "you", now - 31 * 86_400).unwrap();
+    let new = store.task_add(NewTask { title: "new".into(), ..NewTask::default() }, "you", 2).unwrap();
+    store.task_delete(&new.id, "you", now - 29 * 86_400).unwrap();
+    drop(store);
     let events = Arc::new(Events::default());
     let hub = Hub::start(switchboard_core::paths::Paths::from_env(), PathBuf::from(env!("CARGO_BIN_EXE_sb")), events.clone()).unwrap();
+    // At hub start, the old one goes with its history. Restore brings the other back.
+    let v = hub.tasks().unwrap();
+    assert_eq!(v.archive.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), ["new"], "the prune at start");
+    assert!(hub.task_history(&old.id).unwrap().is_empty(), "the history goes too");
+    hub.task_restore(&new.id).unwrap();
+    let last = events.tasks().pop().unwrap();
+    assert!(last["archive"].as_array().unwrap().is_empty() && last["tasks"].as_array().unwrap().iter().any(|t| t["title"] == "new"));
+    assert!(hub.task_restore(&new.id).is_err(), "a second restore is refused");
+    assert_eq!(events.tasks().len(), 1, "and sends nothing");
+    hub.task_delete(&new.id).unwrap();
+    events.0.lock().unwrap().clear();
+
     let sprint = hub
         .sprint_new(NewSprint { name: "S1".into(), goal: "".into(), start: "2026-10-12".into(), end: "2026-10-25".into() })
         .unwrap();

@@ -168,6 +168,7 @@ commands! {
     task_move(id: String, to: TaskMove) -> Value => |h| h.task_move(&id, to).map(|v| json!(v));
     task_delete(id: String) -> () => |h| h.task_delete(&id);
     task_copy(id: String) -> Value => |h| h.task_copy(&id).map(|v| json!(v));
+    task_restore(id: String) -> Value => |h| h.task_restore(&id).map(|v| json!(v));
     task_history(id: String) -> Value => |h| h.task_history(&id).map(|v| json!(v));
     sprint_new(sprint: NewSprint) -> Value => |h| h.sprint_new(sprint).map(|v| json!(v));
     sprint_edit(id: String, sprint: NewSprint) -> Value => |h| h.sprint_edit(&id, sprint).map(|v| json!(v));
@@ -337,6 +338,7 @@ fn main() {
             task_move,
             task_delete,
             task_copy,
+            task_restore,
             task_history,
             sprint_new,
             sprint_edit,

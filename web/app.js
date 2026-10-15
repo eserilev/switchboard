@@ -829,7 +829,7 @@ function copyText(text) {
   return ok;
 }
 
-window.SB = { S, invoke, call, listen, esc, toast, setTab, openNvim, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, openLauncher, paneName, copyText, LABEL, term, $ };
+window.SB = { S, invoke, call, listen, esc, toast, setTab, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, openLauncher, paneName, copyText, LABEL, term, $ };
 
 (async function start() {
   try {

@@ -859,6 +859,13 @@ Where the build differs from the text above:
 - A review run stops at once when Claude reports that the `sb` MCP server failed, and before the start when the `sb` binary is missing. A missing `sb` once made the agent run on without its guide tools.
 - Review runs get each spec clone with `--add-dir`.
 - Start agent waits for the trust dialog, a permission prompt and Needs you before it pastes the first message. It does not see other startup dialogs of Claude Code, for example "New MCP server found in .mcp.json". A paste into such a dialog has no Enter and no control characters, but its newlines can still move the choice. Answer such a dialog before the 1.5 s after the session starts, or paste the message again.
+- Tasks (27): a new sprint opens when no sprint is open. With one open, the new sprint is the planned one. So a planned sprint exists only while a sprint is open.
+- Tasks (27): the filter syntax is words, `#tag`, `repo:name` and `prio:high`. A `#tag` word matches the start of a tag, so it works while you type. The filter stays in memory only.
+- Tasks (27): the sprint bar shows tasks when no task of the sprint has points. The burndown shows only when it has points. It uses the points of today for every day, and the status history for what was done. It shows the tasks that are in the sprint today: a task done in the backlog before it came into the sprint counts as done from day 1, and a task moved out of the sprint leaves the past days too.
+- Tasks (27): Review from a task needs a linked pane that is on the board. A closed pane has no worktree that the hub tracks.
+- Tasks (27): the PR poll runs 10 s after the start, then every 5 minutes. GitHub reports merged as final, so the hub does not read a merged PR again until the next start. A `gh` failure only goes to the log. A `gh` that does not end in 30 s is killed.
+- Tasks (27): a task edit adds a `points` row, a `link` or `link_removed` row for each link, and one `edited` row for the other fields. Delete and Restore add `deleted` and `restored`.
+- Tasks (27): Copy as Markdown lists Done, In review, In progress, Blocked and To do, in that order. When the copy fails, a dialog shows the text.
 - `--allowedTools`, `--disallowedTools` and `--mcp-config` take lists. The prompt of a `claude -p` run goes first, or one of them takes it.
 - Every `nvim --server` call times out after 3 s. An nvim that waits at "Press ENTER" never answers.
 - tmux `%pane:off` stops tmux from reading the pane. Tiles use `pause`.
@@ -1027,7 +1034,7 @@ Not checked: the full state space, because Apalache needs Java, which is not ins
 
 ## 27. Tasks
 
-Status: phases 1 and 2 are built (27.13). Phase 3 is not built.
+Status: built, in three phases (27.13).
 
 A list of the tasks you work on, as in sprint planning. You write them in Switchboard, set their status, and start agents from them. Tasks live only in the local store. Switchboard never reads them from or writes them to an issue tracker (27.10).
 
@@ -1092,7 +1099,7 @@ The sprint header shows the name, the goal, the days left, and a bar of done poi
 
 Click a card to open its panel on the right: every field, the notes editor, the history, and the actions Start agent, Link pane, Review and Delete.
 
-A filter field at the top filters by text, tag, repo and priority. The filter applies to both views.
+A filter field at the top filters by text, tag, repo and priority: words, `#tag`, `repo:name` and `prio:high`. Every word must match. The filter applies to both views and to the archive.
 
 ### 27.5 Keys
 
@@ -1151,12 +1158,13 @@ Agents and scripts read and change tasks with `sb task`. It talks to the hub ove
 ```
 sb task list [--sprint current|backlog|<name>] [--status <s>] [--json]
 sb task show [<id>]
-sb task add <title> [--notes <text>] [--repo <dir>] [--sprint current|backlog]
+sb task add <title> [--notes <text>] [--repo <dir>] [--sprint current|backlog|<name>]
 sb task note <id> <text>
 sb task status <id> todo|doing|blocked|review [--by <who or what blocks it>]
 ```
 
 - In a pane, `sb task show` with no id shows the task linked to that pane (`SB_PANE`).
+- `sb task add --sprint <name>` takes the name of the open or the planned sprint. A closed sprint is refused.
 - `sb task note` adds the note at the end of the notes, under "**Note from <pane or cli>:**". The history keeps the text.
 - `--json` prints the reply as JSON. A failure prints the reason and exits 1.
 - The socket never sets `done`, never changes the status of a `done` task, never deletes, and never closes a sprint, whoever calls. Only the window does these.
@@ -1202,7 +1210,7 @@ CREATE TABLE task_event (id INTEGER PRIMARY KEY, task TEXT NOT NULL, at INTEGER 
 
 Ranks are unique in each sprint and in the backlog. Each add and each move renumbers its list in the same transaction, with a step of 1024. A list holds tens of tasks, so the renumber is cheap.
 
-The window gets the commands `tasks`, `task_add`, `task_edit`, `task_status`, `task_move`, `task_delete`, `task_copy`, `task_history`, `sprint_new`, `sprint_edit` and `sprint_close`. After each change, the hub sends the whole list as a `tasks` event. A refused change sends nothing. The socket `Request` gets the `Task*` requests of 27.7.
+The window gets the commands `tasks`, `task_add`, `task_edit`, `task_status`, `task_move`, `task_delete`, `task_restore`, `task_copy`, `task_history`, `sprint_new`, `sprint_edit` and `sprint_close`. After each change, the hub sends the whole list as a `tasks` event. A refused change sends nothing. The socket `Request` gets the `Task*` requests of 27.7.
 
 ```toml
 [tasks]
@@ -1244,4 +1252,15 @@ branch_prefix = "sb/"
    - `sb task` and its socket rule (27.7). History rows `linked`, `unlinked` and `note`.
    - The `[tasks]` config of 27.11 (`sprint_days`, `branch_prefix`), from phase 3.
    - Tests: unit tests for branch names, links and the socket; the random socket test; an end-to-end test (`crates/sb/tests/task_agent.rs`) on a real hub, tmux and git, with a stand-in `claude`: the next free branch, the link, `doing`, no paste before the session, one paste with no Enter, the clipboard path after the wait, `sb task` from the pane (never done), no resume of an agent that runs, and Resume of a closed pane with `--resume`. 32 more window checks.
-3. **Planning.** Points, the burndown, planned sprints, Copy as Markdown, tags and the filter, the archive, the PR-merged poll, Review from a task, and `Shift+J`/`Shift+K`.
+3. **Planning.** Built.
+   - Points (0 to 99), tags and links in the panel. The card shows the points and the tags; a click on a tag filters by it. A PR link of a review open in Switchboard opens its tab; other links open in the browser.
+   - The sprint bar of done points over total points, and the burndown line (27.8). Section headers show the points too.
+   - Planned sprints: Plan next sprint while one is open. Close names it as the next sprint, and it opens.
+   - Copy as Markdown on a sprint (27.9), in the header and on each list section.
+   - The filter (`/` focuses it, Esc clears it), for the board, the list and the archive.
+   - The archive: Delete moves a task there, the Archive view lists it with Restore, and the hub start removes what is older than 30 days. A task whose sprint closed comes back to the backlog.
+   - The "PR merged" hint, from the PR poll, with → Done and Dismiss.
+   - Review from a task. With two or more linked panes, you pick one.
+   - `Shift+J` and `Shift+K`, also Shift with the arrow keys. `sb task show` prints the points, the tags and the links.
+   - The window gets `task_restore`. The `tasks` event has `archive`, `burn` (the status changes of the open sprint) and `merged`.
+   - Tests: unit tests for points, tags, links and their history rows, the archive and the prune, planned sprints, the burn, and PR URLs. The random test adds restore and planned sprints; a mutant with two planned sprints and one with a restore into a closed sprint fail it. A hub test for the prune at start and Restore. A hub test (`crates/sb/tests/task_poll.rs`) with a stand-in `gh`: only `gh pr view --json state`, no read of a merged PR again, none for a done task. 48 more window checks; they run in America/New_York, so the burndown check crosses a DST change.

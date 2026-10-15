@@ -163,6 +163,11 @@ pub struct Hub {
     pub(crate) trees: Mutex<()>,
     /// The last size the window asked for.
     size: Mutex<(u16, u16)>,
+    /// The task PR links that GitHub reports as merged (SPEC 27.6). Merged is final,
+    /// so a link in it is not read again.
+    pub(crate) merged: Mutex<Vec<String>>,
+    /// True while a PR poll runs, so two never overlap.
+    pub(crate) polling: std::sync::atomic::AtomicBool,
     pub(crate) me: Weak<Hub>,
 }
 
@@ -228,11 +233,14 @@ impl Hub {
             reviews: Mutex::default(),
             size: Mutex::new((200, 50)),
             trees: Mutex::new(()),
+            merged: Mutex::default(),
+            polling: std::sync::atomic::AtomicBool::new(false),
             me: me.clone(),
         });
         hub.keep_session()?;
         hub.reattach()?;
         hub.load_reviews();
+        hub.prune_tasks();
         // Old review worktrees go in the background: a removal can take seconds.
         let h = hub.clone();
         std::thread::spawn(move || h.sweep_closed());
@@ -1569,6 +1577,7 @@ impl Hub {
             }
         }
         self.review_tick(n);
+        self.task_tick(n);
     }
 }
 

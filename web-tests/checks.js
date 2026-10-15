@@ -1056,6 +1056,267 @@
       check("Start on a task with no repo lets you pick the repo", !$("#launcher").hidden && !$("#ltask").hidden && $("#lsave").hidden && $$("#lrepos li[data-i]").length === 2 && $("#lfirst").value === "Write the IL tests", JSON.stringify({ ltask: $("#ltask").hidden, n: $$("#lrepos li[data-i]").length, f: $("#lfirst").value, err: window.__errors }));
       $("#lcancel").click();
     }
+
+  // Tasks, phase 3 (SPEC 27): points, the burndown, planned sprints, Markdown, tags and
+  // the filter, the archive, PR merged, Review from a task, and Shift+J/K. A fresh list.
+  {
+    const TT = window.SBTasks._test;
+    const at = (d, hm) => new Date(`${d}T${hm}`).getTime() / 1000;
+    const pr = "https://github.com/sigp/lighthouse/pull/10071";
+    const d3 = {
+      sprints: [{ id: "s1", name: "Sprint 1", goal: "Plan", start: dayOff(-2), end: dayOff(11), state: "open" }],
+      tasks: [
+        tk({ id: "a1", title: "Alpha infra task", rank: 1024, points: 5, tags: ["infra"], status: "done", done: at(dayOff(-1), "12:00") }),
+        tk({ id: "a2", title: "Beta ci task", rank: 2048, points: 3, tags: ["ci"], status: "doing", links: ["https://example.com/doc"] }),
+        tk({ id: "a3", title: "Gamma", rank: 3072, points: 2, priority: "high", repo: "/c/lighthouse", notes: "needle in the notes", links: [pr] }),
+        tk({ id: "a4", title: "Delta", rank: 4096, links: ["https://example.com/a"] }),
+      ],
+      links: [
+        { pane: "p1", task: "a2", kind: "claude", title: null, tree: "/c/lighthouse", session: "s1", connection: "a", closed: false },
+        { pane: "p2", task: "a2", kind: "claude", title: null, tree: "/c/lighthouse-il", session: "s2", connection: "a", closed: false },
+      ],
+      missing: [],
+      archive: [tk({ id: "z1", title: "Old deleted task", sprint: "s0", rank: 1024, deleted: at(dayOff(-1), "09:00") })],
+      burn: ["a1", "a2", "a3", "a4"].map((task) => ({ task, at: at(dayOff(-2), "10:00"), status: "todo" })).concat([{ task: "a1", at: at(dayOff(-1), "12:00"), status: "done" }]),
+      merged: [pr],
+    };
+    window.__data.tasks = structuredClone(d3);
+    window.__data.history.a2 = [{ at: 1760000000, by: "you", kind: "points", value: "3" }, { at: 1760000001, by: "p1", kind: "link", value: "https://example.com/doc" },
+      { at: 1760000002, by: "you", kind: "deleted", value: null }, { at: 1760000003, by: "you", kind: "restored", value: null }];
+    window.SB.setTab("tasks");
+    $('#tview [data-v="board"]').click();
+    window.__emit("tasks", structuredClone(d3));
+    await wait(80);
+    document.querySelector('[data-act="panel-close"]')?.click();
+    await wait(30);
+    check("a card shows its points and its tags", $('[data-task="a2"] .tpts')?.textContent === "3" && $('[data-task="a2"] .ttag')?.textContent === "#ci");
+    check("the sprint header shows done points over total points", $(".tscount")?.textContent === "5/10 pts", $(".tscount")?.textContent);
+    check("the burndown line shows the points left", $("svg.tburn")?.getAttribute("aria-label") === "Burndown: 5 of 10 points left" && !!$("svg.tburn polyline.real"), $("svg.tburn")?.outerHTML);
+    {
+      const b = TT.burnLeft(d3.sprints[0], TT.T.tasks.filter((t) => t.sprint === "s1"));
+      check("the burndown has one value for each day up to today", JSON.stringify(b.left) === "[10,5,5]" && b.days.length === 14, JSON.stringify(b));
+      // Local midnight, over the DST change of March 2026 (the checks run in America/New_York).
+      const keep = TT.T.burn;
+      TT.T.burn = [{ task: "x", at: at("2026-03-06", "09:00"), status: "todo" }, { task: "y", at: at("2026-03-06", "09:00"), status: "todo" },
+        { task: "x", at: at("2026-03-08", "23:30"), status: "done" }, { task: "y", at: at("2026-03-09", "00:30"), status: "done" }];
+      const d = TT.burnLeft({ start: "2026-03-06", end: "2026-03-10" }, [{ id: "x", points: 1 }, { id: "y", points: 2 }]);
+      TT.T.burn = keep;
+      check("the burndown splits days at local midnight, also over a DST change", JSON.stringify(d.days) === '["2026-03-06","2026-03-07","2026-03-08","2026-03-09","2026-03-10"]' && JSON.stringify(d.left) === "[3,3,2,0,0]", JSON.stringify(d));
+    }
+
+    // The filter.
+    const filter = async (text) => { const f = $("#tfilter"); f.focus(); f.value = text; f.dispatchEvent(new Event("input", { bubbles: true })); await wait(30); };
+    const cards = () => $$("#view-tasks .tboard [data-task]").map((x) => x.dataset.task).sort().join();
+    await filter("#infra");
+    check("a #tag filter shows only the tasks with the tag", cards() === "a1", cards());
+    check("the filter keeps its focus while you type", document.activeElement?.id === "tfilter" && $("#tfilter").value === "#infra");
+    await filter("prio:high");
+    check("prio: filters by priority", cards() === "a3", cards());
+    await filter("repo:lighth");
+    check("repo: filters by repo", cards() === "a3", cards());
+    await filter("needle");
+    check("a word matches the notes too", cards() === "a3", cards());
+    await filter("beta task");
+    check("every word must match", cards() === "a2", cards());
+    $("#tfilter").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await wait(30);
+    check("Esc in the filter clears it", $("#tfilter").value === "" && cards() === "a1,a2,a3,a4" && document.activeElement?.id !== "tfilter", cards());
+    docKey("/");
+    await wait(20);
+    check("/ focuses the filter", document.activeElement?.id === "tfilter");
+    document.activeElement.blur();
+    $('[data-task="a1"] .ttag').click();
+    await wait(30);
+    check("a click on a tag filters by it and opens no panel", $("#tfilter").value === "#infra" && cards() === "a1" && !$(".tpanel"), cards());
+    await filter("");
+    document.activeElement.blur();
+    $('#tview [data-v="list"]').click();
+    await wait(30);
+    await filter("zzz");
+    check("the filter applies to the list view too", $$("#view-tasks .trow").length === 0 && $(".tsec .tnone")?.textContent === "No task matches the filter.");
+    await filter("");
+    document.activeElement.blur();
+    $('#tview [data-v="board"]').click();
+    await wait(30);
+
+    // PR merged.
+    check("a merged PR link shows the PR merged hint", !!$('[data-task="a3"] [data-hint="done"]') && !$('[data-task="a4"] [data-hint="done"]'));
+    const st = called("task_status").length;
+    $('[data-task="a3"] [data-hint="done"]').click();
+    await wait(30);
+    check("PR merged → Done sets the task to Done", called("task_status").slice(-1)[0]?.[1].status === "done" && called("task_status").length === st + 1);
+    window.__data.tasks = structuredClone(d3);
+    window.__emit("tasks", structuredClone(d3));
+    await wait(30);
+    $('[data-task="a3"] [data-hint="hush-merged"]').click();
+    await wait(30);
+    window.__emit("pane", Object.assign(structuredClone(window.__data.panes.find((x) => x.id === "p2")), { lamp: "working" }));
+    window.__emit("tasks", structuredClone(d3));
+    await wait(40);
+    check("Dismiss hides the PR merged hint, also after pane and task events", !$('[data-task="a3"] [data-hint="done"]'));
+
+    // The panel: points, tags and links.
+    $('[data-task="a2"]').click();
+    await wait(60);
+    check("the panel shows the points, the tags and the links", $("#tp-points")?.value === "3" && $("#tp-tags")?.value === "ci" && $$("#tp-linklist a").length === 1);
+    check("the history names the new rows", /Points: 3.*Link added: https:\/\/example\.com\/doc.*Moved to the archive.*Restored/s.test([...$$("#tp-hist li")].reverse().map((x) => x.textContent).join("|")), $("#tp-hist")?.textContent);
+    const edits = () => called("task_edit");
+    const ne = edits().length;
+    $("#tp-points").value = "8";
+    $("#tp-points").dispatchEvent(new Event("change", { bubbles: true }));
+    await wait(30);
+    check("a points edit sends the points", edits().length === ne + 1 && edits().slice(-1)[0][1].fields.points === 8, JSON.stringify(edits().slice(-1)[0]));
+    $("#tp-points").value = "120";
+    $("#tp-points").dispatchEvent(new Event("change", { bubbles: true }));
+    await wait(30);
+    check("points out of range stay in the window", edits().length === ne + 1 && $("#tp-points").value === "8");
+    $("#tp-tags").value = "#Infra, CI  docs";
+    $("#tp-tags").dispatchEvent(new Event("change", { bubbles: true }));
+    await wait(30);
+    check("a tags edit sends lowercase words with no #", JSON.stringify(edits().slice(-1)[0][1].fields.tags) === '["infra","ci","docs"]', JSON.stringify(edits().slice(-1)[0][1].fields));
+    {
+      // An agent note arrives while you type a link: the next edit keeps the note.
+      const d = structuredClone(window.__data.tasks);
+      d.tasks.find((t) => t.id === "a2").notes = "**Note from p1:**\ntests pass";
+      window.__data.tasks = d;
+      $("#tp-link").focus();
+      window.__emit("tasks", structuredClone(d));
+      await wait(40);
+      $("#tp-link").value = "https://example.com/n";
+      $("#tp-link").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await wait(60);
+      const f = edits().slice(-1)[0][1].fields;
+      check("an edit while the panel stays keeps a note that arrived meanwhile", f.notes === "**Note from p1:**\ntests pass" && f.points === 8 && JSON.stringify(f.tags) === '["infra","ci","docs"]', JSON.stringify(f));
+      $("#tp-linklist [data-unlinkurl='https://example.com/n']").click();
+      await wait(60);
+    }
+    const ln = $("#tp-link");
+    ln.focus();
+    ln.value = "javascript:alert(1)";
+    ln.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await wait(30);
+    check("a link that is not http(s) is refused", edits().length === ne + 4 && $("#tp-link").value === "javascript:alert(1)");
+    $("#tp-link").value = "https://example.com/new";
+    $("#tp-link").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await wait(60);
+    check("Enter in the link field adds the link", JSON.stringify(edits().slice(-1)[0][1].fields.links) === '["https://example.com/doc","https://example.com/new"]' && $("#tp-link").value === "" && $$("#tp-linklist a").length === 2,
+      JSON.stringify(edits().slice(-1)[0][1].fields.links));
+    document.activeElement.blur();
+    $('#tp-linklist [data-unlinkurl="https://example.com/doc"]').click();
+    await wait(60);
+    check("× removes a link", JSON.stringify(edits().slice(-1)[0][1].fields.links) === '["https://example.com/new"]');
+    const opens = called("open_url").length;
+    $("#tp-linklist a").click();
+    await wait(30);
+    check("a link opens in the browser, not in the window", called("open_url").length === opens + 1 && called("open_url").slice(-1)[0][1].url === "https://example.com/new" && location.protocol === "file:");
+
+    // Review from a task: two linked panes, so you pick one.
+    $('[data-act="review"]').click();
+    await wait(30);
+    check("Review with two linked panes asks which one", $$("[data-reviewpane]").length === 2);
+    const rv = called("review_open_local").length;
+    $('[data-reviewpane="p2"]').click();
+    await wait(80);
+    check("the pick opens a review of that pane's commits", called("review_open_local").length === rv + 1 && called("review_open_local").slice(-1)[0][1].pane === "p2");
+    window.SB.setTab("tasks");
+    await wait(30);
+    // A PR link of a review open in Switchboard opens its tab.
+    $('[data-task="a3"]').click();
+    await wait(60);
+    const urls = called("open_url").length;
+    $("#tp-linklist a").click();
+    await wait(30);
+    check("a PR link of an open review opens the review tab", window.SB.S.tab === "r1" && called("open_url").length === urls, window.SB.S.tab);
+    window.SB.setTab("tasks");
+    await wait(30);
+    $('[data-act="panel-close"]').click();
+    await wait(30);
+
+    // Shift+J and Shift+K move the focused task in its column.
+    $('[data-task="a3"]').click();
+    await wait(30);
+    $('[data-act="panel-close"]').click();
+    await wait(30);
+    const moves = called("task_move").length;
+    docKey("J");
+    await wait(40);
+    check("J with no Shift (Caps Lock) moves no task", called("task_move").length === moves);
+    const shiftKey = (k) => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: k, shiftKey: true, bubbles: true }));
+    shiftKey("J");
+    await wait(40);
+    const mv = called("task_move").slice(-1)[0]?.[1];
+    check("Shift+J moves the task down one place", mv?.id === "a3" && mv.to.before === null && mv.to.status === null && mv.to.sprint === "s1", JSON.stringify(mv));
+    check("the board shows the new order", $$('.tcol[data-status="todo"] [data-task]').map((x) => x.dataset.task).join() === "a4,a3");
+    shiftKey("K");
+    await wait(40);
+    const mv2 = called("task_move").slice(-1)[0]?.[1];
+    check("Shift+K moves it up again", mv2?.id === "a3" && mv2.to.before === "a4" && $$('.tcol[data-status="todo"] [data-task]').map((x) => x.dataset.task).join() === "a3,a4", JSON.stringify(mv2));
+
+    // Copy as Markdown.
+    const mdText = TT.sprintMarkdown(TT.T.sprints.find((s) => s.id === "s1"));
+    check("Copy as Markdown groups the tasks by status, with points and links",
+      /^## Sprint 1 — Plan\n/.test(mdText) && mdText.includes("1 of 4 tasks done · 5 of 15 points done") && /### Done \(1\)\n- Alpha infra task \(5 pts\)/.test(mdText)
+      && /### In progress \(1\)\n- Beta ci task \(8 pts\)\n  - https:\/\/example\.com\/new/.test(mdText) && mdText.indexOf("### Done") < mdText.indexOf("### To do"), mdText);
+    $('.thead [data-act="sprint-md"]').click();
+    await wait(40);
+    check("the Copy as Markdown button copies, or shows the text to copy", !$("#toast").hidden || $("#tb-text")?.value === mdText);
+    if (!$("#tbox").hidden) $("#tbox [data-b='0']").click();
+    await wait(20);
+
+    // A planned sprint.
+    check("the head offers Plan next sprint", [...$$('.thead [data-act="sprint-new"]')].some((b) => b.textContent === "Plan next sprint"));
+    $('.thead [data-act="sprint-new"]').click();
+    await wait(40);
+    check("the plan dialog says when the sprint opens", $("#tbox h4")?.textContent === "Plan the next sprint" && $("#tbox").textContent.includes("It opens when you close Sprint 1") && $("#ts-start").value === dayOff(12), $("#ts-start")?.value);
+    $("#ts-name").value = "Sprint 2";
+    $("#tbox .btn.primary").click();
+    await wait(60);
+    check("Plan sprint makes a planned sprint", called("sprint_new").slice(-1)[0]?.[1].sprint.name === "Sprint 2" && window.__data.tasks.sprints.find((s) => s.name === "Sprint 2")?.state === "planned");
+    check("with a planned sprint the head offers no Plan next sprint", ![...$$('.thead [data-act="sprint-new"]')].length);
+    $('#tview [data-v="list"]').click();
+    await wait(30);
+    check("the list view shows the planned sprint after the open one", $$("#view-tasks .tsec .tsname").slice(0, 3).map((x) => x.textContent).join() === "Sprint 1,Sprint 2,Backlog" && !!$(".tsec .tplan"),
+      $$("#view-tasks .tsec .tsname").map((x) => x.textContent).join());
+    $('.thead [data-act="sprint-close"]').click();
+    await wait(40);
+    check("Close names the planned sprint and asks for no new one", $("#tbox").textContent.includes("Sprint 2 opens next.") && !$("#tc-next") && $("#tbox [data-place] option")?.textContent === "Sprint 2");
+    $("#tbox .btn.primary").click();
+    await wait(60);
+    const cl = called("sprint_close").slice(-1)[0]?.[1];
+    check("Close sends no new sprint when one is planned", cl?.next === null && cl.places.length === 3, JSON.stringify(cl));
+    check("the planned sprint opens", $$("#view-tasks .tsec .tsname")[0]?.textContent === "Sprint 2" && !$(".tsec .tplan"));
+
+    // The archive.
+    const live = window.__data.tasks.tasks.find((t) => t.sprint === window.__data.tasks.sprints.find((s) => s.name === "Sprint 2").id);
+    $(`.trow[data-task="${live.id}"]`).click();
+    await wait(50);
+    $('[data-act="delete"]').click();
+    await wait(30);
+    check("Delete says the task goes to the archive", $("#tbox").textContent.includes("to the archive") && $("#tbox").textContent.includes("30 days"));
+    $("#tbox .btn.primary").click();
+    await wait(60);
+    check("Delete sends task_delete", called("task_delete").slice(-1)[0]?.[1].id === live.id && !$(`.trow[data-task="${live.id}"]`));
+    $('#tview [data-v="archive"]').click();
+    await wait(30);
+    check("the Archive view lists the deleted tasks, newest first", $$("#view-tasks [data-arch]").map((x) => x.dataset.arch).join() === `${live.id},z1` && $$("#view-tasks [data-restore]").length === 2,
+      $$("#view-tasks [data-arch]").map((x) => x.dataset.arch).join());
+    check("the Archive view has no new-task button", !$('.thead [data-act="new"]'));
+    $('[data-restore="z1"]').click();
+    await wait(60);
+    {
+      // The keys do nothing on the Archive view, also with a task focused before.
+      TT.T.focus = "a4";
+      const n = called("task_status").length + called("task_start_plan").length;
+      docKey("5");
+      docKey("s");
+      docKey("o");
+      await wait(40);
+      check("the status, start and new-task keys do nothing on the Archive view", called("task_status").length + called("task_start_plan").length === n && !TT.T.adding && $("#launcher").hidden);
+    }
+    check("Restore takes the task out of the archive", called("task_restore").slice(-1)[0]?.[1].id === "z1" && !$('[data-arch="z1"]') && window.__data.tasks.tasks.find((t) => t.id === "z1")?.sprint === null);
+    $('#tview [data-v="board"]').click();
+    await wait(30);
+  }
     window.SB.setTab("board");
   }
 

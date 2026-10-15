@@ -48,7 +48,7 @@ window.__data = {
 // Tasks (SPEC 27): a small copy of the hub rules, and a `tasks` event after each change.
 const pad2 = (n) => String(n).padStart(2, "0");
 const dayOff = (n) => { const x = new Date(); x.setDate(x.getDate() + n); return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`; };
-const tk = (o) => Object.assign({ notes: "", status: "todo", blocked_by: null, priority: "normal", sprint: "s1", repo: null, created: 1, changed: 1, started: null, done: null }, o);
+const tk = (o) => Object.assign({ notes: "", status: "todo", blocked_by: null, priority: "normal", sprint: "s1", repo: null, created: 1, changed: 1, started: null, done: null, points: null, tags: [], links: [] }, o);
 window.__data.tasks = {
   sprints: [{ id: "s0", name: "Sprint 0", goal: "", start: dayOff(-30), end: dayOff(-17), state: "closed" }, { id: "s1", name: "Sprint 1", goal: "Ship inclusion lists", start: dayOff(-3), end: dayOff(10), state: "open" }],
   tasks: [
@@ -64,6 +64,7 @@ window.__data.tasks.links = [
   { pane: "p7", task: "t3", kind: "claude", title: "spec agent", tree: "/c/lighthouse-spec", session: "s7", connection: "a", closed: true },
 ];
 window.__data.tasks.missing = ["/gone/repo"];
+Object.assign(window.__data.tasks, { archive: [], burn: [], merged: [] });
 window.__data.history = { t1: [{ at: 1760000000, by: "you", kind: "created", value: "todo" }, { at: 1760000100, by: "you", kind: "status", value: "doing" }] };
 function taskShim(cmd, a) {
   const d = window.__data.tasks;
@@ -102,18 +103,43 @@ function taskShim(cmd, a) {
       break;
     }
     case "task_edit": { const t = find(a.id); Object.assign(t, a.fields); out = t; break; }
-    case "task_delete": d.tasks = d.tasks.filter((t) => t.id !== a.id); break;
+    case "task_delete": {
+      const t = find(a.id);
+      d.tasks = d.tasks.filter((x) => x.id !== a.id);
+      d.links = d.links.filter((l) => l.task !== a.id);
+      d.archive.unshift(Object.assign(t, { deleted: 1760000000 }));
+      break;
+    }
+    case "task_restore": {
+      const t = d.archive.find((x) => x.id === a.id);
+      if (!t) throw "not in the archive";
+      d.archive = d.archive.filter((x) => x.id !== a.id);
+      delete t.deleted;
+      if (t.sprint && d.sprints.find((x) => x.id === t.sprint)?.state !== "open" && d.sprints.find((x) => x.id === t.sprint)?.state !== "planned") t.sprint = null;
+      d.tasks.push(t);
+      renumber(t.sprint, t.id, null);
+      out = t;
+      break;
+    }
     case "task_start_plan": { const t = find(a.id); out = { task: t.id, repo: t.repo, branch: "sb/" + t.title.toLowerCase().replace(/[^a-z0-9]+/g, "-"), title: t.title, first: t.title + (t.notes ? "\n\n" + t.notes : "") }; break; }
     case "task_link": d.links = d.links.filter((l) => l.pane !== a.pane).concat([{ pane: a.pane, task: a.task, kind: "claude", title: null, tree: "/c/x", session: null, connection: "a", closed: false }]); break;
     case "task_unlink": d.links = d.links.filter((l) => l.pane !== a.pane); break;
     case "task_resume": out = "p9"; break;
     case "task_copy": { const t = find(a.id); out = tk({ id: `t${d.tasks.length + 10}`, title: t.title, sprint: null, rank: 99999 }); d.tasks.push(out); break; }
-    case "sprint_new": out = Object.assign({ id: `s${d.sprints.length}`, state: "open" }, a.sprint); d.sprints.push(out); break;
+    case "sprint_new": {
+      const open = d.sprints.some((x) => x.state === "open");
+      if (open && d.sprints.some((x) => x.state === "planned")) throw "the next sprint is planned already";
+      out = Object.assign({ id: `s${d.sprints.length}${d.sprints.some((x) => x.id === `s${d.sprints.length}`) ? "b" : ""}`, state: open ? "planned" : "open" }, a.sprint);
+      d.sprints.push(out);
+      break;
+    }
     case "sprint_edit": out = Object.assign(d.sprints.find((s) => s.id === a.id), a.sprint); break;
     case "sprint_close": {
       d.sprints.find((s) => s.id === a.id).state = "closed";
-      const next = a.next && Object.assign({ id: `s${d.sprints.length}`, state: "open" }, a.next);
-      if (next) d.sprints.push(next);
+      const planned = d.sprints.find((s) => s.state === "planned");
+      if (planned) planned.state = "open";
+      const next = planned || (a.next && Object.assign({ id: `s${d.sprints.length}`, state: "open" }, a.next));
+      if (next && !planned) d.sprints.push(next);
       for (const [id, p] of a.places) {
         const t = find(id);
         if (p === "done") status(t, "done");
@@ -193,7 +219,7 @@ window.__TAURI__ = {
         case "tasks": return structuredClone(d.tasks);
         case "task_history": return d.history[args.id] || [];
         case "task_add": case "task_status": case "task_move": case "task_edit": case "task_delete": case "task_copy":
-        case "task_start_plan": case "task_link": case "task_unlink": case "task_resume":
+        case "task_start_plan": case "task_link": case "task_unlink": case "task_resume": case "task_restore":
         case "sprint_new": case "sprint_edit": case "sprint_close": return taskShim(cmd, args);
         default: return null;
       }

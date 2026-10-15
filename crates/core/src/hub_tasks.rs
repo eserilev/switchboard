@@ -48,6 +48,60 @@ impl Drop for Resuming {
     }
 }
 
+/// Seconds between two PR polls. `SB_PR_POLL_SECS` changes it, for tests.
+fn poll_secs() -> u64 {
+    std::env::var("SB_PR_POLL_SECS").ok().and_then(|v| v.parse().ok()).filter(|v| *v > 0).unwrap_or(300)
+}
+
+/// Asks GitHub for the state of one PR. It only reads (SPEC 3). A `gh` that does not
+/// end in 30 s is killed, so a network stall never stops the polls.
+fn pr_state(url: &str) -> Res<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("gh")
+        .args(["pr", "view", url, "--json", "state", "--jq", ".state"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("gh: {e}"))?;
+    let end = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        match child.try_wait().map_err(|e| format!("gh: {e}"))? {
+            Some(st) => break st,
+            None if Instant::now() >= end => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("gh did not answer in 30 s".into());
+            }
+            None => std::thread::sleep(Duration::from_millis(100)),
+        }
+    };
+    let mut out = String::new();
+    let mut err = String::new();
+    if let Some(mut o) = child.stdout.take() {
+        let _ = o.read_to_string(&mut out);
+    }
+    if let Some(mut e) = child.stderr.take() {
+        let _ = e.read_to_string(&mut err);
+    }
+    if !status.success() {
+        return Err(err.trim().to_owned());
+    }
+    Ok(out.trim().to_owned())
+}
+
+/// Sets `Hub::polling` back to false when the poll ends, also on a panic.
+struct PollDone(std::sync::Weak<Hub>);
+
+impl Drop for PollDone {
+    fn drop(&mut self) {
+        if let Some(hub) = self.0.upgrade() {
+            hub.polling.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
 /// How long the first message waits for the agent, in ms. Time in the folder trust
 /// dialog does not count. `SB_FIRST_WAIT_MS` changes it, for tests.
 fn first_wait() -> u64 {
@@ -61,6 +115,8 @@ impl Hub {
         missing.sort();
         missing.dedup();
         v.missing = missing;
+        let merged = self.merged.lock().unwrap().clone();
+        v.merged = merged.into_iter().filter(|m| v.tasks.iter().any(|t| t.links.iter().any(|l| tasks::pr_url(l).as_deref() == Some(m)))).collect();
         Ok(v)
     }
 
@@ -98,7 +154,20 @@ impl Hub {
     }
 
     pub fn task_delete(&self, id: &str) -> Res<()> {
-        self.task_change(|s| s.task_delete(id))
+        self.task_change(|s| s.task_delete(id, BY, now()))
+    }
+
+    pub fn task_restore(&self, id: &str) -> Res<Task> {
+        self.task_change(|s| s.task_restore(id, BY, now()))
+    }
+
+    /// At hub start: tasks in the archive for more than 30 days go (SPEC 27.2).
+    pub(crate) fn prune_tasks(&self) {
+        match self.store.lock().unwrap().task_prune(now().saturating_sub(30 * 86_400)) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(target: "sb::tasks", n, "old tasks left the archive"),
+            Err(err) => tracing::warn!(target: "sb::tasks", %err, "the archive prune failed"),
+        }
     }
 
     pub fn task_copy(&self, id: &str) -> Res<Task> {
@@ -261,6 +330,59 @@ impl Hub {
             s.task_unlink(pane, BY, now())
         })?;
         Ok(v.id)
+    }
+
+    /// Each second from the ticker. The first PR poll runs 10 s after start, then
+    /// one every 5 minutes, in a thread of its own: `gh` can take seconds.
+    pub(crate) fn task_tick(&self, n: u64) {
+        let secs = poll_secs();
+        let first = secs.min(10);
+        if n < first || !(n - first).is_multiple_of(secs) {
+            return;
+        }
+        if self.polling.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let me = self.me.clone();
+        let spawned = std::thread::Builder::new().name("sb-prpoll".into()).spawn(move || {
+            let _done = PollDone(me.clone());
+            if let Some(hub) = me.upgrade() {
+                hub.poll_prs();
+            }
+        });
+        if spawned.is_err() {
+            self.polling.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Reads the state of each PR link of the tasks that are not done, with
+    /// `gh pr view --json state`. A link GitHub reports as merged gets the "PR merged"
+    /// hint (SPEC 27.6). It never posts.
+    pub(crate) fn poll_prs(&self) {
+        let view = match self.store.lock().unwrap().tasks_view() {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let known = self.merged.lock().unwrap().clone();
+        let mut urls: Vec<String> =
+            view.tasks.iter().filter(|t| t.status != "done").flat_map(|t| t.links.iter().filter_map(|l| tasks::pr_url(l))).collect();
+        urls.sort();
+        urls.dedup();
+        urls.retain(|u| !known.contains(u));
+        let mut new = vec![];
+        for url in urls {
+            match pr_state(&url) {
+                Ok(state) if state == "MERGED" => new.push(url),
+                Ok(_) => {}
+                Err(err) => tracing::info!(target: "sb::tasks", %url, %err, "the PR state did not load"),
+            }
+        }
+        if new.is_empty() {
+            return;
+        }
+        tracing::info!(target: "sb::tasks", n = new.len(), "PRs merged");
+        self.merged.lock().unwrap().extend(new);
+        self.emit_tasks();
     }
 
     /// One `sb task` request from the socket. The reply is `{ok, error}` plus the data.
