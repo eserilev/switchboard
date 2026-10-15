@@ -81,6 +81,8 @@ fn board(name: &str) -> Board {
             tree: None,
             run: "shell".into(),
             title: None,
+            task: None,
+            first: None,
         })
         .unwrap();
     hub.debug_set_kind(&v.id, "claude").unwrap();

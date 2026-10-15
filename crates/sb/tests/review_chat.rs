@@ -100,6 +100,8 @@ fn the_chat_of_each_step_and_dismissed_notes() {
             tree: Some(tree.to_string_lossy().into()),
             run: "shell".into(),
             title: Some("Ask #7".into()),
+            task: None,
+            first: None,
         })
         .unwrap()
         .id;

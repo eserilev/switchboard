@@ -454,7 +454,7 @@ tr.noted-nit td.ln::after { color: var(--muted); }
 .trow .tt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tnone { color: var(--muted); padding: 8px; margin: 0; }
 
-.tpanel { display: grid; grid-template-rows: auto auto auto 1fr auto auto; gap: 10px; padding: 12px 14px; border-left: 1px solid var(--line); background: var(--panel); min-height: 0; overflow-y: auto; }
+.tpanel { display: grid; grid-template-rows: auto auto auto 1fr auto auto auto; gap: 10px; padding: 12px 14px; border-left: 1px solid var(--line); background: var(--panel); min-height: 0; overflow-y: auto; }
 .tphead { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 12px; }
 .tpanel input, .tpanel select, .tpanel textarea, .tform input, #tbox select, #tbox input:not([type="checkbox"]) { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: 13px/1.4 var(--body); padding: 6px 8px; }
 #tp-title { font: 700 18px/1.3 var(--display); font-stretch: 90%; }
@@ -481,3 +481,39 @@ tr.noted-nit td.ln::after { color: var(--muted); }
   .tboard { grid-template-columns: repeat(5, minmax(200px, 1fr)); }
 }
 .trow .tchip, .tclose .tchip { justify-self: start; }
+
+/* tasks and agents (SPEC 27.6) */
+.ptask { display: block; max-width: 100%; border: 0; padding: 0 0 2px; background: transparent; color: var(--accent); font: 600 12px/1.3 var(--body); text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ptask:hover { text-decoration: underline; }
+#livetitle .ptask { display: inline; flex: none; max-width: 30ch; padding: 0; }
+.taskmenu { position: fixed; right: auto; z-index: 40; max-height: 60vh; overflow-y: auto; min-width: 240px; max-width: 360px; }
+.taskmenu button span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tmhead { padding: 8px 10px 4px; font: 700 11px/1 var(--display); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); border-top: 1px solid var(--line); margin-top: 4px; }
+.tdots { display: inline-flex; gap: 4px; align-items: center; margin-left: 6px; }
+.tdot { --c: var(--muted); display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.tdot[data-lamp="working"] { --c: var(--working); }
+.tdot[data-lamp="needs"] { --c: var(--needs); }
+.tdot[data-lamp="turn"] { --c: var(--done); }
+.tdot[data-lamp="limit"] { --c: var(--limit); }
+.tdot[data-lamp="error"] { --c: var(--error); }
+.tdot[data-lamp="ended"] { background: transparent; border: 1px solid var(--muted); }
+.tcard.needs { border-color: var(--needs); animation: tpulse 2.4s ease-in-out infinite; }
+@keyframes tpulse { 50% { border-color: color-mix(in srgb, var(--needs) 25%, var(--line)); } }
+.tmiss { color: var(--error); font-size: 12px; }
+.thint { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--done); border-top: 1px dashed var(--line); padding-top: 6px; }
+.thint .tool:first-of-type { margin-left: auto; color: var(--done); border-color: var(--done); }
+.tpagents h5 { margin: 0 0 4px; font: 700 12px/1 var(--display); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.tpagents { display: grid; gap: 4px; }
+.tpa { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.tpaname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tpastate { color: var(--muted); font: 11px/1 var(--mono); }
+.tplink { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0; }
+.tpabtns { display: flex; gap: 6px; padding-top: 4px; }
+.ltask { display: grid; gap: 6px; }
+.ltaskhead { font-size: 13px; color: var(--muted); }
+.ltaskhead b { color: var(--fg); }
+#lfirst { width: 100%; resize: vertical; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: 13px/1.4 var(--mono); padding: 8px; }
+/* The task button of a tile shows on hover or focus, so the title keeps its room. */
+.pane .tool[data-ptaskmenu] { display: none; }
+.pane:hover .tool[data-ptaskmenu], .pane:focus-within .tool[data-ptaskmenu], .pane.focused .tool[data-ptaskmenu] { display: inline-block; }
+.thint { white-space: nowrap; }

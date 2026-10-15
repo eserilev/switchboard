@@ -551,7 +551,7 @@ impl Hub {
             return Err("No comments to send.".into());
         }
         let text = agent_text(&row.head, note, &drafts);
-        let paste = format!("\x1b[200~{text}\x1b[201~");
+        let paste = crate::hub::bracketed_paste(&text);
         self.input(&pane, paste.as_bytes())?;
         let ids: Vec<i64> = drafts.iter().map(|d| d.id).collect();
         self.store

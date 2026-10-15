@@ -112,12 +112,19 @@ function tile(p) {
   const nvimBtn = p.kind !== "nvim" && S.settings.nvim ? `<button class="tool" data-nvim>nvim</button>` : "";
   const state = p.lamp === "none" ? p.kind : LABEL[p.lamp] || p.lamp;
   const reviewBtn = p.kind === "claude" ? `<button class="tool" data-lreview title="Review the commits that are not pushed">review</button>` : "";
+  const taskBtn = p.kind !== "nvim" ? `<button class="tool" data-ptaskmenu title="Link this pane to a task">task</button>` : "";
   const cls = ["pane", p.unseen && "unseen", S.focus === p.id && "focused", p.id === S.live && "is-live"].filter(Boolean).join(" ");
   return `<div class="${cls}" data-id="${esc(p.id)}" data-lamp="${esc(p.lamp)}" tabindex="0">
-    <div class="ptitle"><span class="name">${esc(paneName(p))}</span><span class="state">${esc(state)}</span>${reviewBtn}${nvimBtn}<button class="tool x" data-close aria-label="Close">×</button></div>
-    <div class="psum"><span class="meta">${esc(meta(p))}</span><span class="text">${esc(p.summary || "")}</span>${actions(p)}</div>
+    <div class="ptitle"><span class="name">${esc(paneName(p))}</span><span class="state">${esc(state)}</span>${taskBtn}${reviewBtn}${nvimBtn}<button class="tool x" data-close aria-label="Close">×</button></div>
+    <div class="psum">${taskLine(p)}<span class="meta">${esc(meta(p))}</span><span class="text">${esc(p.summary || "")}</span>${actions(p)}</div>
     <pre class="term-tail">${esc(p.tail.map(strip).join("\n"))}</pre>
   </div>`;
+}
+
+// The task of a pane, under its title (SPEC 27.6). A click opens the task.
+function taskLine(p) {
+  const t = window.SBTasks?.forPane(p.id);
+  return t ? `<button class="ptask" data-ptask="${esc(t.id)}" title="Open the task">▸ ${esc(t.title)}</button>` : "";
 }
 
 // Many pane events can come in one frame. Draw the board once per frame.
@@ -235,6 +242,8 @@ $("#board").addEventListener("click", (e) => {
   if (b.dataset.close !== undefined) return call("pane_close", { id });
   if (b.dataset.nvim !== undefined) return openNvim(paneById(id).tree);
   if (b.dataset.lreview !== undefined) return openLocalReview(id);
+  if (b.dataset.ptask) return window.SBTasks?.open(b.dataset.ptask);
+  if (b.dataset.ptaskmenu !== undefined) return window.SBTasks?.menu(id, b);
   if (b.dataset.allow) return call("permit_answer", { permit: b.dataset.allow, allow: true });
   if (b.dataset.deny) return call("permit_answer", { permit: b.dataset.deny, allow: false });
   if (b.dataset.trust) return call("trust_answer", { id, yes: b.dataset.trust === "1" });
@@ -444,7 +453,7 @@ function drawLiveTitle() {
   const nvimBtn = p.kind !== "nvim" && S.settings.nvim ? `<button class="tool" data-nvim>nvim</button>` : "";
   const reviewBtn = p.kind === "claude" && !S.termHost ? `<button class="tool" data-lreview title="Review the commits that are not pushed">review</button>` : "";
   $("#livetitle").innerHTML = `<span class="name">${esc(paneName(p))}</span><span class="state" style="color:var(--muted)">${esc(state)}</span>
-    <span class="psum meta" style="border:0;padding:0;font:500 11px/1 var(--mono);color:var(--muted)">${esc(meta(p))}</span>${actions(p).replace('class="tact"', 'class="tact" style="margin:0"')}
+    ${taskLine(p)}<span class="psum meta" style="border:0;padding:0;font:500 11px/1 var(--mono);color:var(--muted)">${esc(meta(p))}</span>${actions(p).replace('class="tact"', 'class="tact" style="margin:0"')}
     ${reviewBtn}${nvimBtn}<button class="tool" data-collapse aria-label="Collapse">⤡</button>`;
 }
 $("#livetitle").addEventListener("click", (e) => {
@@ -454,6 +463,7 @@ $("#livetitle").addEventListener("click", (e) => {
   if (b.dataset.collapse !== undefined) return collapse();
   if (b.dataset.nvim !== undefined) return openNvim(p.tree);
   if (b.dataset.lreview !== undefined) return openLocalReview(p.id);
+  if (b.dataset.ptask) return window.SBTasks?.open(b.dataset.ptask);
   if (b.dataset.allow) return call("permit_answer", { permit: b.dataset.allow, allow: true });
   if (b.dataset.deny) return call("permit_answer", { permit: b.dataset.deny, allow: false });
   if (b.dataset.trust) return call("trust_answer", { id: p.id, yes: b.dataset.trust === "1" });
@@ -576,7 +586,8 @@ function cycleConnection() {
 // ---------- launcher (SPEC 9) ----------
 
 // `prior`: the last closed round of the typed PR. `prSel` 0 starts the next round, 1 a full review.
-const L = { list: [], sel: 0, where: "main", run: "claude", pr: null, prior: null, priorUrl: null, prSel: 0 };
+// `task`: the plan of Start agent from a task (SPEC 27.6), or null.
+const L = { list: [], sel: 0, where: "main", run: "claude", pr: null, prior: null, priorUrl: null, prSel: 0, task: null };
 const fuzzy = (q, s) => { let j = 0; for (const c of s.toLowerCase()) if (c === q[j]) j++; return j === q.length; };
 const setSeg = (id, v) => document.querySelectorAll(`#${id} button`).forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === v));
 const agentIn = (tree) => S.panes.some((p) => p.kind === "claude" && p.tree === tree && p.lamp !== "ended");
@@ -621,7 +632,10 @@ function drawLauncher() {
   $("#ltree").hidden = L.where !== "tree";
   setSeg("lwhere", L.where);
   setSeg("lrun", L.run);
-  $("#lsave").hidden = !!L.pr;
+  $("#lsave").hidden = !!L.pr || !!L.task;
+  $("#ltask").hidden = !L.task || !!L.pr;
+  $("#llayouts").hidden = !!L.task;
+  $("#lfirst").hidden = L.run !== "claude";
 }
 
 function pickRepo(i) {
@@ -633,19 +647,45 @@ function pickRepo(i) {
   drawLauncher();
 }
 
-async function openLauncher() {
-  if (S.tab !== "board") setTab("board");
+// With `task` (a Start plan), the launcher opens over the Tasks tab, filled in: the
+// task's repo, a new worktree with the plan's branch, Claude Code, the first message.
+async function openLauncher(task = null) {
+  if (!task && S.tab !== "board") setTab("board");
+  L.task = task;
   $("#launcher").hidden = false;
-  $("#lq").value = "";
-  $("#lbranch").value = "";
+  const repoName = task?.repo ? task.repo.split("/").filter(Boolean).pop() : "";
+  $("#lq").value = repoName;
+  $("#lbranch").value = task?.branch || "";
   $("#lerr").textContent = "";
+  if (task) {
+    $("#ltasktitle").textContent = task.title;
+    $("#lfirst").value = task.first;
+    L.run = "claude";
+  }
   L.sel = 0;
+  // The task's repo, exactly. A repo that is not in the list is an error, never
+  // the first fuzzy match. After the list loads, this runs again only if you
+  // changed nothing in the meantime.
+  L.touched = false;
+  L.bad = null;
+  const pickTask = () => {
+    if (!task || L.touched) return;
+    const i = L.list.findIndex((r) => r.path === task.repo);
+    pickRepo(i < 0 ? 0 : i);
+    L.where = "new";
+    L.bad = task.repo && i < 0 && S.repos.length ? `The task's repo ${task.repo} is not in your repo list. Add its parent folder to scan in the config, or pick a repo and change the task.` : null;
+    $("#lerr").textContent = L.bad || "";
+    drawLauncher();
+  };
   drawLauncher();
   pickRepo(0);
+  pickTask();
   $("#lq").focus();
   drawLayouts();
   S.repos = await invoke("repos").catch((e) => { $("#lerr").textContent = String(e); return S.repos; });
-  if (!$("#launcher").hidden) pickRepo(Math.min(L.sel, S.repos.length - 1));
+  if ($("#launcher").hidden) return;
+  if (task) pickTask();
+  else pickRepo(Math.min(L.sel, S.repos.length - 1));
 }
 
 async function drawLayouts() {
@@ -655,6 +695,7 @@ async function drawLayouts() {
 
 function closeLauncher() {
   $("#launcher").hidden = true;
+  L.task = null;
   (S.live ? term : $("#newpane")).focus();
 }
 
@@ -668,7 +709,10 @@ async function launch() {
   }
   const r = L.list[L.sel];
   if (!r) return;
-  const req = { repo: r.path, place: L.where, branch: L.where === "new" ? $("#lbranch").value.trim() : null, tree: L.where === "tree" ? $("#ltree").value : null, run: L.run, title: null };
+  const t = L.task;
+  if (t && L.bad && !L.touched) { $("#lerr").textContent = L.bad; return; }
+  const req = { repo: r.path, place: L.where, branch: L.where === "new" ? $("#lbranch").value.trim() : null, tree: L.where === "tree" ? $("#ltree").value : null, run: L.run,
+    title: t ? t.title : null, task: t && L.run !== "nvim" ? t.task : null, first: t && L.run === "claude" ? $("#lfirst").value : null };
   if (req.place === "new" && !req.branch) { $("#lerr").textContent = "Type a branch name."; $("#lbranch").focus(); return; }
   try {
     const v = await invoke("pane_open", { req });
@@ -680,19 +724,20 @@ async function launch() {
   }
 }
 
-$("#newpane").addEventListener("click", openLauncher);
+$("#newpane").addEventListener("click", () => openLauncher());
 $("#lcancel").addEventListener("click", closeLauncher);
 $("#lgo").addEventListener("click", launch);
 $("#launcher").addEventListener("click", (e) => { if (e.target.id === "launcher") closeLauncher(); });
-$("#lq").addEventListener("input", () => { L.sel = 0; pickRepo(0); });
+$("#lq").addEventListener("input", () => { L.touched = true; L.sel = 0; pickRepo(0); });
+$("#lbranch").addEventListener("input", () => (L.touched = true));
 $("#lrepos").addEventListener("click", (e) => {
   const pr = e.target.closest("li[data-pr]");
   if (pr) { L.prSel = +pr.dataset.pr; drawLauncher(); return; }
   const li = e.target.closest("li[data-i]");
-  if (li) pickRepo(+li.dataset.i);
+  if (li) { L.touched = true; pickRepo(+li.dataset.i); }
 });
 $("#lrepos").addEventListener("dblclick", (e) => { if (e.target.closest("li[data-i], li[data-pr]")) launch(); });
-$("#lwhere").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { L.where = b.dataset.v; drawLauncher(); if (L.where === "new") $("#lbranch").focus(); } });
+$("#lwhere").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { L.touched = true; L.where = b.dataset.v; drawLauncher(); if (L.where === "new") $("#lbranch").focus(); } });
 $("#lrun").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { L.run = b.dataset.v; drawLauncher(); } });
 $("#llayouts").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-layout]");
@@ -741,12 +786,17 @@ listen("panes", (e) => {
   if (S.live && !paneById(S.live)) collapse();
   else drawBoard();
   window.SBReview?.panes?.();
+  window.SBTasks?.panes();
 });
 listen("pane", (e) => {
   upsert(e.payload);
   drawBoard();
   window.SBReview?.panes?.();
+  window.SBTasks?.panes();
 });
+// The first message of Start agent did not go in: it goes to the clipboard.
+// A click on Copy is a user gesture, so the copy works in every webview.
+listen("paste_failed", (e) => window.SBTasks?.showText("The first message did not go in", `The agent was not ready: ${e.payload.why}. Copy the message and paste it into the pane yourself.`, e.payload.text));
 listen("connections", (e) => { S.conn = e.payload; drawConn(); drawBoard(); });
 listen("focus", (e) => refreshPanes().then(() => expand(e.payload)));
 listen("tmux_exit", () => toast("The Switchboard tmux server ended. Restart the app to start it again."));
@@ -765,7 +815,21 @@ listen("review_closed", (e) => {
   else drawTabs();
 });
 
-window.SB = { S, invoke, call, listen, esc, toast, setTab, openNvim, expand, collapse, parkLive, paneById, refreshPanes, term, $ };
+// Copies with a hidden text field, and gives the focus back. True when it worked.
+function copyText(text) {
+  const back = document.activeElement;
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (_) {}
+  ta.remove();
+  back?.focus?.();
+  return ok;
+}
+
+window.SB = { S, invoke, call, listen, esc, toast, setTab, openNvim, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, openLauncher, paneName, copyText, LABEL, term, $ };
 
 (async function start() {
   try {

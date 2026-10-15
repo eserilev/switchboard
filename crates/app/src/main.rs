@@ -127,7 +127,7 @@ commands! {
     layout_open(name: String) -> () => |h| h.layout_open(&name);
     settings() -> Value => |h| {
         let c = h.config();
-        Ok(json!({ "leader": c.leader, "nvim": switchboard_core::nvim::installed() }))
+        Ok(json!({ "leader": c.leader, "nvim": switchboard_core::nvim::installed(), "sprint_days": c.tasks.sprint_days }))
     };
     reviews() -> Value => |h| Ok(json!(h.reviews()));
     review_open(url: String, round_of: Option<String>) -> String => |h| h.review_open(&url, round_of.as_deref());
@@ -171,6 +171,10 @@ commands! {
     task_history(id: String) -> Value => |h| h.task_history(&id).map(|v| json!(v));
     sprint_new(sprint: NewSprint) -> Value => |h| h.sprint_new(sprint).map(|v| json!(v));
     sprint_edit(id: String, sprint: NewSprint) -> Value => |h| h.sprint_edit(&id, sprint).map(|v| json!(v));
+    task_start_plan(id: String) -> Value => |h| h.task_start_plan(&id).map(|v| json!(v));
+    task_link(task: String, pane: String) -> () => |h| h.task_link(&task, &pane);
+    task_unlink(pane: String) -> () => |h| h.task_unlink(&pane);
+    task_resume(pane: String) -> String => |h| h.task_resume(&pane);
     sprint_close(id: String, places: Vec<(String, Place)>, next: Option<NewSprint>) -> Value => |h| h.sprint_close(&id, places, next).map(|v| json!(v));
 }
 
@@ -337,6 +341,10 @@ fn main() {
             sprint_new,
             sprint_edit,
             sprint_close,
+            task_start_plan,
+            task_link,
+            task_unlink,
+            task_resume,
             log,
             open_url,
         ])

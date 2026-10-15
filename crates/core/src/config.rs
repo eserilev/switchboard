@@ -14,6 +14,7 @@ pub struct Config {
     pub poll_head_minutes: u64,
     pub connections: BTreeMap<String, ConnectionCfg>,
     pub review: ReviewCfg,
+    pub tasks: TasksCfg,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -40,6 +41,22 @@ pub struct ReviewCfg {
     pub spec_clones: Vec<String>,
 }
 
+/// The `[tasks]` table (SPEC 27.11).
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields, default)]
+pub struct TasksCfg {
+    /// The length of a new sprint in days.
+    pub sprint_days: u32,
+    /// The start of the branch name for an agent started from a task.
+    pub branch_prefix: String,
+}
+
+impl Default for TasksCfg {
+    fn default() -> Self {
+        TasksCfg { sprint_days: 14, branch_prefix: "sb/".into() }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -49,6 +66,7 @@ impl Default for Config {
             poll_head_minutes: 2,
             connections: BTreeMap::new(),
             review: ReviewCfg::default(),
+            tasks: TasksCfg::default(),
         }
     }
 }

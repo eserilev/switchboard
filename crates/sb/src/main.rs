@@ -43,6 +43,7 @@ fn main() {
         Some("state") => state(args.get(1).map(String::as_str).unwrap_or("")),
         Some("permit") => permit(),
         Some("open") => open(&args[1..]),
+        Some("task") => task(&args[1..]),
         Some("mcp") => mcp::serve(),
         Some("connect") if args.get(1).map(String::as_str) == Some("add") => {
             connect_add(&args[2..])
@@ -52,7 +53,7 @@ fn main() {
             0
         }
         _ => {
-            eprintln!("usage: sb open [path] [-w branch] [--nvim|--shell]\n       sb connect add <name> [--endpoint <url> --model <m> --token <keyring:name>]");
+            eprintln!("usage: sb open [path] [-w branch] [--nvim|--shell]\n       {TASK_USAGE}\n       sb connect add <name> [--endpoint <url> --model <m> --token <keyring:name>]");
             2
         }
     };
@@ -187,6 +188,105 @@ fn open(args: &[String]) -> i32 {
     }
     eprintln!("sb open: Switchboard did not answer in 10 s");
     1
+}
+
+const TASK_USAGE: &str = "sb task list [--sprint current|backlog|<name>] [--status <s>] [--json]
+       sb task show [<id>] [--json]
+       sb task add <title> [--notes <text>] [--repo <dir>] [--sprint current|backlog|<name>]
+       sb task note <id> <text>
+       sb task status <id> todo|doing|review|blocked [--by <who or what blocks it>]";
+
+/// `sb task` (SPEC 27.7). It never sets done, deletes or closes a sprint: only the
+/// window does that. `SB_PANE` labels the history row.
+fn task(args: &[String]) -> i32 {
+    use switchboard_core::tasks::TaskOp;
+    let usage = || {
+        eprintln!("usage: {TASK_USAGE}");
+        2
+    };
+    let mut free: Vec<String> = vec![];
+    let mut flags: std::collections::HashMap<&str, String> = Default::default();
+    let mut json_out = false;
+    let mut it = args.iter().skip(1);
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--json" => json_out = true,
+            f @ ("--sprint" | "--status" | "--notes" | "--repo" | "--by") => match it.next() {
+                Some(v) => {
+                    flags.insert(f, v.clone());
+                }
+                None => return usage(),
+            },
+            f if f.starts_with("--") => {
+                eprintln!("sb task: unknown flag {f}");
+                return usage();
+            }
+            v => free.push(v.to_owned()),
+        }
+    }
+    let flag = |k: &str| flags.get(k).cloned();
+    let op = match (args.first().map(String::as_str), free.as_slice()) {
+        (Some("list"), []) => TaskOp::List { sprint: flag("--sprint"), status: flag("--status") },
+        (Some("show"), [] | [_]) => TaskOp::Show { id: free.first().cloned() },
+        (Some("add"), [title]) => TaskOp::Add {
+            title: title.clone(),
+            notes: flag("--notes"),
+            repo: flag("--repo").map(|r| std::fs::canonicalize(&r).map(|p| p.to_string_lossy().into_owned()).unwrap_or(r)),
+            sprint: flag("--sprint"),
+        },
+        (Some("note"), [id, text]) => TaskOp::Note { id: id.clone(), text: text.clone() },
+        (Some("status"), [id, status]) => TaskOp::Status { id: id.clone(), status: status.clone(), blocked_by: flag("--by") },
+        _ => return usage(),
+    };
+    let show = matches!(op, TaskOp::Show { .. });
+    let list = matches!(op, TaskOp::List { .. });
+    let req = Request::Task { pane: std::env::var("SB_PANE").ok().filter(|p| !p.is_empty()), op };
+    let line = match send(&req, true) {
+        Ok(Some(line)) => line,
+        _ => {
+            eprintln!("sb task: Switchboard is not running");
+            return 1;
+        }
+    };
+    let v: Value = serde_json::from_str(&line).unwrap_or(json!({ "ok": false, "error": "bad reply" }));
+    if v["ok"] != json!(true) {
+        eprintln!("sb task: {}", v["error"].as_str().unwrap_or("failed"));
+        return 1;
+    }
+    if json_out {
+        let mut v = v;
+        if let Some(o) = v.as_object_mut() {
+            o.remove("ok");
+        }
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+        return 0;
+    }
+    let sprint_name = |id: &Value| -> String {
+        v["sprints"].as_array().into_iter().flatten().find(|s| &s["id"] == id).and_then(|s| s["name"].as_str()).unwrap_or("backlog").to_owned()
+    };
+    let one = |t: &Value| format!("{:<6} {:<8} {}", t["id"].as_str().unwrap_or(""), t["status"].as_str().unwrap_or(""), t["title"].as_str().unwrap_or(""));
+    if list {
+        for t in v["tasks"].as_array().into_iter().flatten() {
+            println!("{}  ({})", one(t), sprint_name(&t["sprint"]));
+        }
+    } else if show {
+        let t = &v["task"];
+        println!("{}", one(t));
+        println!("sprint: {}", v["sprint"].as_str().unwrap_or("backlog"));
+        if let Some(r) = t["repo"].as_str() {
+            println!("repo:   {r}");
+        }
+        if let Some(b) = t["blocked_by"].as_str() {
+            println!("blocked by: {b}");
+        }
+        let notes = t["notes"].as_str().unwrap_or("").trim();
+        if !notes.is_empty() {
+            println!("\n{notes}");
+        }
+    } else {
+        println!("{}", one(&v["task"]));
+    }
+    0
 }
 
 fn start_app() -> std::io::Result<()> {

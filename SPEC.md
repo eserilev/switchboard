@@ -682,6 +682,10 @@ token = "keyring:switchboard/local"
 [review]
 prompt = "prompts/review.md"   # optional override
 spec_clones = ["~/Documents/Code/Ethereum/Consensus/consensus-specs"]   # example path
+
+[tasks]                         # SPEC 27
+sprint_days = 14
+branch_prefix = "sb/"
 ```
 
 A missing file gives the defaults. An unknown key is an error with the key name.
@@ -854,6 +858,7 @@ Where the build differs from the text above:
 - A thread fork and the pin and draft summaries use the active connection.
 - A review run stops at once when Claude reports that the `sb` MCP server failed, and before the start when the `sb` binary is missing. A missing `sb` once made the agent run on without its guide tools.
 - Review runs get each spec clone with `--add-dir`.
+- Start agent waits for the trust dialog, a permission prompt and Needs you before it pastes the first message. It does not see other startup dialogs of Claude Code, for example "New MCP server found in .mcp.json". A paste into such a dialog has no Enter and no control characters, but its newlines can still move the choice. Answer such a dialog before the 1.5 s after the session starts, or paste the message again.
 - `--allowedTools`, `--disallowedTools` and `--mcp-config` take lists. The prompt of a `claude -p` run goes first, or one of them takes it.
 - Every `nvim --server` call times out after 3 s. An nvim that waits at "Press ENTER" never answers.
 - tmux `%pane:off` stops tmux from reading the pane. Tiles use `pause`.
@@ -1022,7 +1027,7 @@ Not checked: the full state space, because Apalache needs Java, which is not ins
 
 ## 27. Tasks
 
-Status: phase 1 is built (27.13). Phases 2 and 3 are not built.
+Status: phases 1 and 2 are built (27.13). Phase 3 is not built.
 
 A list of the tasks you work on, as in sprint planning. You write them in Switchboard, set their status, and start agents from them. Tasks live only in the local store. Switchboard never reads them from or writes them to an issue tracker (27.10).
 
@@ -1116,13 +1121,15 @@ The Tasks keys work only on the Tasks tab, and only when no text field and no te
 - The pane title is the task title.
 - The first message is the task title and its notes. The launcher shows it. You can change it before you start.
 
-The app types the first message into the new Claude pane as a paste with no Enter, as Send to agent does (11.11). You read it and send it. The paste waits for the first Idle lamp of the pane, for at most 20 s. After 20 s, the app copies the message to the clipboard and shows a notice.
+The app types the first message into the new Claude pane as a paste with no Enter, as Send to agent does (11.11). You read it and send it. The paste waits until the agent is ready: the pane has its session id from the `SessionStart` hook, no dialog shows, and 1.5 s went by. A new pane is Idle from the start, so the Idle lamp is not a ready signal. The wait is at most 20 s; time in the folder trust dialog does not count. After 20 s, or when the pane ends first, a dialog shows the message with a Copy button. A tab change does not close it.
+
+The paste has no control characters but newline and tab. So a note from an agent cannot end the paste early or press Enter. Send to agent (11.11) uses the same paste.
 
 An agent can write task notes (27.7), so a note from one agent can become the prompt of another. You read the paste before you press Enter.
 
 Start links the new pane to the task. When the task is `todo`, Start sets it to `doing`.
 
-**Link pane** links a pane that already runs. A pane links to at most one task. A link to a second task moves it. A tile has a task menu too: "Link to task…" and "New task from this pane".
+**Link pane** links a pane that already runs. A pane links to at most one task. A link to a second task moves it. A tile has a task menu too: "Link to task…", "Unlink", and "New task from this pane". The **task** button of a tile shows on hover or focus, so the title keeps its room. A task from a pane takes the pane name as its title, the pane's repo, the open sprint, and In progress.
 
 A linked pane shows the task title on its tile, under the title. A click on it opens the task.
 
@@ -1133,9 +1140,9 @@ The app never changes a status on its own, except the `todo` to `doing` move at 
 - "Agent finished": a linked pane went to Your turn, and the task is `doing`. One click sets `review`.
 - "PR merged": a link is a PR that GitHub reports as merged. One click sets `done`. Every 5 minutes, the hub reads the PR links of the tasks that are not `done`, with `gh pr view --json state`. It only reads. It never posts (3).
 
-A hint goes away after one click, a status change, or Dismiss.
+A hint goes away after one click, a status change, or Dismiss. Dismiss lasts until that pane leaves Your turn. The window keeps it in memory only.
 
-When a linked pane closes, the link stays and shows "ended". The link keeps the session id, so Resume on the task resumes the agent (16).
+When a linked pane closes, the link stays and shows "ended". The link keeps the session id, so Resume on the task resumes the agent (16). A pane that is still on the board resumes in place, only when it has ended, or has an Error and its process is gone: a resume never restarts an agent that runs. A second click while a resume runs fails. A closed pane starts again as a new pane in its folder, with its session and its connection, and the link moves to the new pane.
 
 ### 27.7 `sb task`
 
@@ -1146,11 +1153,14 @@ sb task list [--sprint current|backlog|<name>] [--status <s>] [--json]
 sb task show [<id>]
 sb task add <title> [--notes <text>] [--repo <dir>] [--sprint current|backlog]
 sb task note <id> <text>
-sb task status <id> todo|doing|blocked|review
+sb task status <id> todo|doing|blocked|review [--by <who or what blocks it>]
 ```
 
 - In a pane, `sb task show` with no id shows the task linked to that pane (`SB_PANE`).
-- The socket never sets `done`, never deletes, and never closes a sprint, whoever calls. Only the window does these.
+- `sb task note` adds the note at the end of the notes, under "**Note from <pane or cli>:**". The history keeps the text.
+- `--json` prints the reply as JSON. A failure prints the reason and exits 1.
+- The socket never sets `done`, never changes the status of a `done` task, never deletes, and never closes a sprint, whoever calls. Only the window does these.
+- The history names the caller's pane only when `SB_PANE` is a pane on the board. Any other value gives `cli`.
 - This rule is a guard against mistakes, not a security boundary. An agent pane runs as you and can write the store. `SB_PANE` only labels the history row.
 - The task tools are not in the review MCP server. The review agent only reads (4).
 
@@ -1213,7 +1223,7 @@ branch_prefix = "sb/"
   - a pane links to at most one task;
   - each change has one history row.
 - Store: `every_old_version_migrates_with_its_rows` runs from every old version with random rows.
-- Quint, next to `models/permit.qnt`: whatever the clients interleave, no socket request leads to `done`, a delete or a sprint close.
+- The socket rule: 3,000 random `sb task` requests, with random ids, statuses and sprints. After each one, no task became `done`, no task is gone, and no sprint changed. A build that lets the socket set `done` fails it. There is no Quint model: each request is one call in one transaction, so the order of clients does not matter, and a model adds nothing that the random requests do not test.
 - End-to-end, on a real hub and tmux: Start from a task opens a worktree pane, waits for Idle, pastes the first message with no Enter, links the pane, and sets `doing`. `sb task status <id> done` fails from any caller, with and without `SB_PANE`. A closed pane keeps its link and resumes.
 - Window checks: create, edit, drag between columns and sections, the keys, the filter, the close-sprint dialog, the hints. A note with `<script>` and a `javascript:` link renders as text.
 
@@ -1224,8 +1234,14 @@ branch_prefix = "sb/"
    - The board and list views. Leader `t`, and the keys except `s`, `/` and `Shift+J`/`Shift+K`.
    - The history. Delete with no archive. Store version 10, with the tables of phases 2 and 3.
    - A new task in the Blocked column asks who or what blocks it, as a move to Blocked does.
-   - A new sprint lasts 14 days. The `[tasks]` config of 27.11 comes in phase 3.
+   - A new sprint lasts `sprint_days` days (27.11).
    - The store does not check that `task.sprint` names a sprint. SQLite foreign keys are off. The rules in `tasks.rs` check it.
    - Tests: 5 unit and property tests in `tasks.rs` (3,000 random steps; a mutant with the closed-sprint guard off fails them), a hub test (`crates/sb/tests/tasks.rs`), and 36 window checks.
-2. **Agents.** Start agent, Link pane, the task title on the tile, lamp dots on cards, the "Agent finished" hint, and `sb task` with the rule of 27.7.
+2. **Agents.** Built.
+   - Start agent (the panel, the `s` key) fills the launcher from the task. Open links the pane, sets `doing`, and pastes the first message when the agent is ready (27.6).
+   - Link pane in the panel and in the tile menu, Unlink, New task from this pane, Resume of a linked pane.
+   - The task title on the tile, lamp dots on cards and list rows, a pulse when a pane needs you, "repo missing", and the "Agent finished" hint.
+   - `sb task` and its socket rule (27.7). History rows `linked`, `unlinked` and `note`.
+   - The `[tasks]` config of 27.11 (`sprint_days`, `branch_prefix`), from phase 3.
+   - Tests: unit tests for branch names, links and the socket; the random socket test; an end-to-end test (`crates/sb/tests/task_agent.rs`) on a real hub, tmux and git, with a stand-in `claude`: the next free branch, the link, `doing`, no paste before the session, one paste with no Enter, the clipboard path after the wait, `sb task` from the pane (never done), no resume of an agent that runs, and Resume of a closed pane with `--resume`. 32 more window checks.
 3. **Planning.** Points, the burndown, planned sprints, Copy as Markdown, tags and the filter, the archive, the PR-merged poll, Review from a task, and `Shift+J`/`Shift+K`.

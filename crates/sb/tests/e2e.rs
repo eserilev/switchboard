@@ -112,6 +112,8 @@ fn hooks_permits_and_panes_end_to_end() {
             tree: None,
             run: "shell".into(),
             title: Some("demo".into()),
+            task: None,
+            first: None,
         })
         .unwrap();
     let id = v.id.clone();
@@ -139,6 +141,8 @@ fn hooks_permits_and_panes_end_to_end() {
             tree: None,
             run: "shell".into(),
             title: None,
+            task: None,
+            first: None,
         })
         .unwrap();
     assert!(wt.tree.ends_with("demo-feat"), "{}", wt.tree);
@@ -305,6 +309,8 @@ fn hooks_permits_and_panes_end_to_end() {
             tree: None,
             run: "shell".into(),
             title: None,
+            task: None,
+            first: None,
         })
         .unwrap();
     std::thread::sleep(Duration::from_millis(300));
@@ -405,6 +411,8 @@ fn hooks_permits_and_panes_end_to_end() {
             tree: None,
             run: "shell".into(),
             title: None,
+            task: None,
+            first: None,
         })
         .unwrap();
     assert!(hub.views().iter().any(|p| p.id == again.id));

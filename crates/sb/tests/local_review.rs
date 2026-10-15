@@ -99,6 +99,8 @@ fn review_local_commits_send_to_the_agent_and_keep_its_worktree() {
             tree: Some(wt.to_string_lossy().into()),
             run: "shell".into(),
             title: Some("agent".into()),
+            task: None,
+            first: None,
         })
         .unwrap()
         .id;

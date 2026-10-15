@@ -137,6 +137,8 @@ fn close_cleans_up_and_never_races_a_checkout() {
             tree: Some(tree.to_string_lossy().into()),
             run: "shell".into(),
             title: Some(title.into()),
+            task: None,
+            first: None,
         })
         .unwrap()
         .id

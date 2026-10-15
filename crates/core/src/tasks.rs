@@ -116,6 +116,99 @@ pub struct NewSprint {
 pub struct TasksView {
     pub sprints: Vec<Sprint>,
     pub tasks: Vec<Task>,
+    /// The panes linked to tasks (SPEC 27.6), also the closed ones.
+    #[serde(default)]
+    pub links: Vec<TaskLink>,
+    /// The task repo folders that are not on disk. The hub fills it in.
+    #[serde(default)]
+    pub missing: Vec<String>,
+}
+
+/// A pane linked to a task, with what the store knows of the pane. A closed pane
+/// keeps its link and its session, so the task can resume it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct TaskLink {
+    pub pane: String,
+    pub task: String,
+    pub kind: Option<String>,
+    pub title: Option<String>,
+    pub tree: Option<String>,
+    pub session: Option<String>,
+    pub connection: Option<String>,
+    pub closed: bool,
+}
+
+/// A request on the socket, from `sb task` (SPEC 27.7). `pane` is `SB_PANE` of the
+/// caller. It only labels the history: it is not proof of who calls.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum TaskOp {
+    List {
+        #[serde(default)]
+        sprint: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+    },
+    Show {
+        #[serde(default)]
+        id: Option<String>,
+    },
+    Add {
+        title: String,
+        #[serde(default)]
+        notes: Option<String>,
+        #[serde(default)]
+        repo: Option<String>,
+        #[serde(default)]
+        sprint: Option<String>,
+    },
+    Note {
+        id: String,
+        text: String,
+    },
+    Status {
+        id: String,
+        status: String,
+        #[serde(default)]
+        blocked_by: Option<String>,
+    },
+}
+
+impl TaskOp {
+    /// True when the request can change the store.
+    pub fn writes(&self) -> bool {
+        !matches!(self, TaskOp::List { .. } | TaskOp::Show { .. })
+    }
+}
+
+/// The statuses that the socket can set. `done` is for the window only (SPEC 27.7).
+pub const SOCKET_STATUSES: [&str; 4] = ["todo", "doing", "blocked", "review"];
+
+/// A branch name for a task: `<prefix><slug>`. The slug is the title in lowercase
+/// ASCII, with `-` for each run of other characters, at most 40 characters; an empty
+/// slug is `task-<id>`. When `taken` says a name is in use, `-2`, `-3` and so on
+/// follow (SPEC 27.6).
+pub fn branch_for(prefix: &str, title: &str, id: &str, taken: impl Fn(&str) -> bool) -> String {
+    let mut slug = String::new();
+    for c in title.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let mut slug: String = slug.chars().take(40).collect();
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        slug = format!("task-{id}");
+    }
+    let base = format!("{prefix}{slug}");
+    if !taken(&base) {
+        return base;
+    }
+    (2..).map(|n| format!("{base}-{n}")).find(|b| !taken(b)).unwrap()
 }
 
 /// Where a task that is not done goes when its sprint closes.
@@ -322,7 +415,8 @@ impl Store {
             .prepare(&format!("SELECT {TASK_COLS} FROM task WHERE deleted IS NULL ORDER BY sprint, rank, rowid"))
             .map_err(e)?;
         let tasks = s.query_map([], task_row).map_err(e)?.collect::<Result<_, _>>().map_err(e)?;
-        Ok(TasksView { sprints, tasks })
+        let links = self.task_links()?;
+        Ok(TasksView { sprints, tasks, links, missing: vec![] })
     }
 
     pub fn task(&self, id: &str) -> T<Task> {
@@ -571,6 +665,158 @@ impl Store {
     }
 }
 
+impl Store {
+    pub fn task_links(&self) -> T<Vec<TaskLink>> {
+        let mut s = self
+            .db
+            .prepare(
+                "SELECT l.pane, l.task, p.kind, p.title, p.tree, COALESCE(p.session, l.session), p.connection, p.closed IS NOT NULL OR p.id IS NULL
+                 FROM task_pane l JOIN task t ON t.id = l.task AND t.deleted IS NULL LEFT JOIN pane p ON p.id = l.pane
+                 ORDER BY l.rowid",
+            )
+            .map_err(e)?;
+        let rows = s
+            .query_map([], |r| {
+                Ok(TaskLink {
+                    pane: r.get(0)?,
+                    task: r.get(1)?,
+                    kind: r.get(2)?,
+                    title: r.get(3)?,
+                    tree: r.get(4)?,
+                    session: r.get(5)?,
+                    connection: r.get(6)?,
+                    closed: r.get(7)?,
+                })
+            })
+            .map_err(e)?;
+        rows.collect::<Result<_, _>>().map_err(e)
+    }
+
+    /// Links `pane` to `task`. A pane links to at most one task: a second link moves it.
+    pub fn task_link(&self, task: &str, pane: &str, session: Option<&str>, by: &str, at: u64) -> T<()> {
+        let tx = self.db.unchecked_transaction().map_err(e)?;
+        let t = get_task(&tx, task)?;
+        editable(&tx, &t)?;
+        let was: Option<String> =
+            tx.query_row("SELECT task FROM task_pane WHERE pane = ?1", [pane], |r| r.get(0)).optional().map_err(e)?;
+        if was.as_deref() == Some(task) {
+            return Ok(());
+        }
+        tx.execute(
+            "INSERT INTO task_pane (pane, task, session) VALUES (?1, ?2, ?3)
+             ON CONFLICT(pane) DO UPDATE SET task = ?2, session = ?3",
+            params![pane, task, session],
+        )
+        .map_err(e)?;
+        if let Some(old) = was {
+            event(&tx, &old, at, by, "unlinked", Some(pane))?;
+        }
+        event(&tx, task, at, by, "linked", Some(pane))?;
+        tx.commit().map_err(e)
+    }
+
+    pub fn task_unlink(&self, pane: &str, by: &str, at: u64) -> T<()> {
+        let tx = self.db.unchecked_transaction().map_err(e)?;
+        let was: Option<String> =
+            tx.query_row("SELECT task FROM task_pane WHERE pane = ?1", [pane], |r| r.get(0)).optional().map_err(e)?;
+        let Some(task) = was else { return Ok(()) };
+        tx.execute("DELETE FROM task_pane WHERE pane = ?1", [pane]).map_err(e)?;
+        event(&tx, &task, at, by, "unlinked", Some(pane))?;
+        tx.commit().map_err(e)
+    }
+
+    /// The task linked to `pane`.
+    pub fn task_of_pane(&self, pane: &str) -> T<Option<String>> {
+        self.db.query_row("SELECT task FROM task_pane WHERE pane = ?1", [pane], |r| r.get(0)).optional().map_err(e)
+    }
+
+    /// Adds a note at the end of the notes, with who wrote it. The history keeps the text.
+    pub fn task_note(&self, id: &str, text: &str, by: &str, at: u64) -> T<Task> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("the note is empty".into());
+        }
+        let tx = self.db.unchecked_transaction().map_err(e)?;
+        let mut t = get_task(&tx, id)?;
+        editable(&tx, &t)?;
+        let head = format!("**Note from {by}:**");
+        t.notes = if t.notes.trim().is_empty() { format!("{head}\n{text}") } else { format!("{}\n\n{head}\n{text}", t.notes.trim_end()) };
+        t.changed = at;
+        save_task(&tx, &t)?;
+        event(&tx, id, at, by, "note", Some(text))?;
+        tx.commit().map_err(e)?;
+        Ok(t)
+    }
+
+    /// One `sb task` request. The socket never sets `done`, never deletes and never
+    /// closes a sprint, whoever calls (SPEC 27.7). `by` labels the history.
+    pub fn task_request(&self, op: TaskOp, pane: Option<&str>, by: &str, at: u64) -> T<serde_json::Value> {
+        use serde_json::json;
+        let v = self.tasks_view()?;
+        // `current`, `backlog`, or a sprint name. Some(None) is the backlog.
+        let sprint_of = |name: &str, open_only: bool| -> T<Option<String>> {
+            match name {
+                "backlog" => Ok(None),
+                "current" => v.sprints.iter().find(|s| s.state == "open").map(|s| Some(s.id.clone())).ok_or("no sprint is open".into()),
+                n => v
+                    .sprints
+                    .iter()
+                    .rev()
+                    .find(|s| (s.name == n || s.id == n) && (!open_only || s.state != "closed"))
+                    .map(|s| Some(s.id.clone()))
+                    .ok_or(format!("no sprint {n:?}")),
+            }
+        };
+        match op {
+            TaskOp::List { sprint, status } => {
+                let sp = sprint.as_deref().map(|n| sprint_of(n, false)).transpose()?;
+                let tasks: Vec<&Task> = v
+                    .tasks
+                    .iter()
+                    .filter(|t| sp.as_ref().is_none_or(|s| &t.sprint == s))
+                    .filter(|t| status.as_deref().is_none_or(|s| t.status == s))
+                    .collect();
+                Ok(json!({ "tasks": tasks, "sprints": v.sprints }))
+            }
+            TaskOp::Show { id } => {
+                let id = match id {
+                    Some(id) => id,
+                    None => {
+                        let p = pane.ok_or("give a task id. Outside a Switchboard pane there is no linked task")?;
+                        self.task_of_pane(p)?.ok_or("no task is linked to this pane")?
+                    }
+                };
+                let t = get_task(&self.db, &id)?;
+                let sprint = t.sprint.as_ref().and_then(|s| v.sprints.iter().find(|x| &x.id == s)).map(|s| s.name.clone());
+                let panes: Vec<&TaskLink> = v.links.iter().filter(|l| l.task == id).collect();
+                Ok(json!({ "task": t, "sprint": sprint, "panes": panes, "history": self.task_history(&id)? }))
+            }
+            TaskOp::Add { title, notes, repo, sprint } => {
+                let sp = match sprint.as_deref() {
+                    Some(n) => sprint_of(n, true)?,
+                    None => None,
+                };
+                let n = NewTask { title, notes: notes.unwrap_or_default(), repo, sprint: sp, ..NewTask::default() };
+                Ok(json!({ "task": self.task_add(n, by, at)? }))
+            }
+            TaskOp::Note { id, text } => Ok(json!({ "task": self.task_note(&id, &text, by, at)? })),
+            TaskOp::Status { id, status, blocked_by } => {
+                if !SOCKET_STATUSES.contains(&status.as_str()) {
+                    return Err(if status == "done" {
+                        "only the Switchboard window sets a task to done".into()
+                    } else {
+                        format!("the status is one of {}", SOCKET_STATUSES.join(", "))
+                    });
+                }
+                if get_task(&self.db, &id)?.status == "done" {
+                    return Err("this task is done. Only the Switchboard window opens it again".into());
+                }
+                Ok(json!({ "task": self.task_status(&id, &status, blocked_by.as_deref(), by, at)? }))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -772,6 +1018,110 @@ mod tests {
                     let was = if last.kind == "copied" { Some("todo") } else { last.value.as_deref() };
                     assert_eq!(was, Some(t.status.as_str()), "{t:?} {h:?}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn branch_names() {
+        let none = |_: &str| false;
+        assert_eq!(branch_for("sb/", "Fix the slot-0 test!", "t1", none), "sb/fix-the-slot-0-test");
+        assert_eq!(branch_for("sb/", "  ÉÀ 🎉 ", "t7", none), "sb/task-t7");
+        assert_eq!(branch_for("", &"a".repeat(50), "t1", none).len(), 40);
+        assert_eq!(branch_for("sb/", "word ".repeat(10).as_str(), "t1", none), "sb/word-word-word-word-word-word-word-word");
+        let taken = |b: &str| b == "sb/x" || b == "sb/x-2";
+        assert_eq!(branch_for("sb/", "X", "t1", taken), "sb/x-3");
+    }
+
+    #[test]
+    fn links_move_and_stay_after_the_pane_closes() {
+        let s = Store::memory().unwrap();
+        let a = add(&s, "a", None);
+        let b = add(&s, "b", None);
+        s.db.execute("INSERT INTO pane (id, kind, repo, tree, title, session, lamp, unseen, updated) VALUES ('p1', 'claude', 'r', '/t', 'agent', 'sess1', 'idle', 0, 1)", []).unwrap();
+        s.task_link(&a.id, "p1", None, "you", 2).unwrap();
+        s.task_link(&b.id, "p1", None, "you", 3).unwrap();
+        let l = s.task_links().unwrap();
+        assert_eq!(l.len(), 1, "a pane links to at most one task");
+        assert_eq!((l[0].task.as_str(), l[0].session.as_deref(), l[0].closed), (b.id.as_str(), Some("sess1"), false));
+        let kinds = |id: &str| s.task_history(id).unwrap().into_iter().map(|h| h.kind).collect::<Vec<_>>();
+        assert_eq!(kinds(&a.id), ["created", "linked", "unlinked"]);
+        s.close_pane("p1", 4).unwrap();
+        assert!(s.task_links().unwrap()[0].closed, "the link stays and shows ended");
+        s.task_unlink("p1", "you", 5).unwrap();
+        assert!(s.task_links().unwrap().is_empty());
+        s.task_link(&b.id, "p1", None, "you", 6).unwrap();
+        s.task_delete(&b.id).unwrap();
+        assert!(s.task_links().unwrap().is_empty(), "a deleted task loses its links");
+    }
+
+    #[test]
+    fn socket_requests() {
+        let s = Store::memory().unwrap();
+        let sp = s.sprint_new(&sprint("S1")).unwrap();
+        let r = s.task_request(TaskOp::Add { title: "From an agent".into(), notes: None, repo: None, sprint: Some("current".into()) }, Some("p3"), "p3", 1).unwrap();
+        let id = r["task"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(r["task"]["sprint"], sp.id.as_str());
+        let err = s.task_request(TaskOp::Status { id: id.clone(), status: "done".into(), blocked_by: None }, None, "cli", 2).unwrap_err();
+        assert!(err.contains("only the Switchboard window"), "{err}");
+        s.task_request(TaskOp::Status { id: id.clone(), status: "review".into(), blocked_by: None }, Some("p3"), "p3", 3).unwrap();
+        s.task_request(TaskOp::Note { id: id.clone(), text: "tests pass".into() }, Some("p3"), "p3", 4).unwrap();
+        s.task_request(TaskOp::Note { id: id.clone(), text: "second".into() }, None, "cli", 5).unwrap();
+        let t = s.task(&id).unwrap();
+        assert_eq!(t.notes, "**Note from p3:**\ntests pass\n\n**Note from cli:**\nsecond");
+        let h = s.task_history(&id).unwrap();
+        assert_eq!((h[1].by.as_str(), h[1].kind.as_str()), ("p3", "status"));
+        // Show with no id: the task linked to the pane.
+        assert!(s.task_request(TaskOp::Show { id: None }, Some("p3"), "p3", 6).unwrap_err().contains("no task is linked"));
+        s.db.execute("INSERT INTO pane (id, kind, repo, tree, lamp, unseen, updated) VALUES ('p3', 'claude', 'r', '/t', 'idle', 0, 1)", []).unwrap();
+        s.task_link(&id, "p3", None, "you", 7).unwrap();
+        let show = s.task_request(TaskOp::Show { id: None }, Some("p3"), "p3", 8).unwrap();
+        assert_eq!((show["task"]["id"].as_str(), show["sprint"].as_str()), (Some(id.as_str()), Some("S1")));
+        let list = s.task_request(TaskOp::List { sprint: Some("backlog".into()), status: None }, None, "cli", 9).unwrap();
+        assert_eq!(list["tasks"].as_array().unwrap().len(), 0);
+        assert!(s.task_request(TaskOp::List { sprint: Some("nope".into()), status: None }, None, "cli", 9).is_err());
+    }
+
+    /// Random socket requests, with random ids, statuses and sprints, never set a task
+    /// to done, never remove a task, and never change a sprint (SPEC 27.7).
+    #[test]
+    fn the_socket_never_finishes_deletes_or_closes() {
+        let mut seed: u64 = 11;
+        let mut rnd = |n: u64| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) % n.max(1)
+        };
+        for _run in 0..10 {
+            let s = Store::memory().unwrap();
+            s.sprint_new(&sprint("S1")).unwrap();
+            for i in 0..6 {
+                let t = add(&s, &format!("seed {i}"), None);
+                // Some tasks are done: the socket never opens them again.
+                if i % 2 == 0 {
+                    s.task_status(&t.id, "done", None, "you", 1).unwrap();
+                }
+            }
+            for step in 0..300u64 {
+                let before = s.tasks_view().unwrap();
+                let ids: Vec<String> = before.tasks.iter().map(|t| t.id.clone()).chain(["t999".to_owned()]).collect();
+                let id = ids[rnd(ids.len() as u64) as usize].clone();
+                let words = ["todo", "doing", "blocked", "review", "done", "DONE", "", "current", "backlog", "S1"];
+                let w = || words[(step as usize * 7 + id.len()) % words.len()].to_owned();
+                let op = match rnd(5) {
+                    0 => TaskOp::List { sprint: Some(w()), status: Some(w()) },
+                    1 => TaskOp::Show { id: Some(id.clone()) },
+                    2 => TaskOp::Add { title: format!("x{step}"), notes: None, repo: None, sprint: Some(w()) },
+                    3 => TaskOp::Note { id: id.clone(), text: w() },
+                    _ => TaskOp::Status { id: id.clone(), status: STATUSES[rnd(5) as usize].into(), blocked_by: Some("x".into()) },
+                };
+                let _ = s.task_request(op, Some("p1"), "p1", 100 + step);
+                let after = s.tasks_view().unwrap();
+                assert_eq!(after.sprints, before.sprints, "the socket never changes a sprint");
+                for t in &before.tasks {
+                    let now = after.tasks.iter().find(|x| x.id == t.id).expect("the socket never removes a task");
+                    assert_eq!(now.status == "done", t.status == "done", "the socket never sets or clears done: {t:?}");
+                }
+                assert!(after.tasks.iter().filter(|t| !before.tasks.iter().any(|b| b.id == t.id)).all(|t| t.status != "done"));
             }
         }
     }

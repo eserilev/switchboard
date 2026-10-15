@@ -114,6 +114,12 @@ pub struct OpenReq {
     pub run: String,
     #[serde(default)]
     pub title: Option<String>,
+    /// Start agent from a task (SPEC 27.6): the task to link the pane to.
+    #[serde(default)]
+    pub task: Option<String>,
+    /// The first message, pasted with no Enter when the agent is ready.
+    #[serde(default)]
+    pub first: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -157,11 +163,22 @@ pub struct Hub {
     pub(crate) trees: Mutex<()>,
     /// The last size the window asked for.
     size: Mutex<(u16, u16)>,
-    me: Weak<Hub>,
+    pub(crate) me: Weak<Hub>,
 }
 
 type Res<T> = Result<T, String>;
 type Env = Vec<(String, String)>;
+
+/// `text` as one bracketed paste, with no control characters but newline and tab.
+/// So a text from an agent (a task note, a draft) can never end the paste early or
+/// press Enter: you read the paste and send it yourself.
+pub fn bracketed_paste(text: &str) -> String {
+    let clean: String = text
+        .chars()
+        .filter(|&c| c == '\n' || c == '\t' || !(c.is_control() || ('\u{80}'..='\u{9f}').contains(&c)))
+        .collect();
+    format!("\x1b[200~{clean}\x1b[201~")
+}
 
 fn e(x: impl std::fmt::Display) -> String {
     x.to_string()
@@ -509,7 +526,18 @@ impl Hub {
                     .find(|v| v.id == id)
                     .ok_or("nvim pane is gone".into())
             }
-            "claude" | "shell" => self.spawn(&req.run, &name, &tree, req.title, Start::default()),
+            "claude" | "shell" => {
+                let v = self.spawn(&req.run, &name, &tree, req.title, Start::default())?;
+                if let Some(task) = &req.task {
+                    self.task_started(task, &v.id);
+                }
+                if let Some(first) = req.first.filter(|f| !f.trim().is_empty()) {
+                    if req.run == "claude" {
+                        self.paste_when_ready(v.id.clone(), first);
+                    }
+                }
+                Ok(v)
+            }
             other => Err(format!("unknown run {other}")),
         }
     }
@@ -1329,6 +1357,8 @@ impl Hub {
                     tree: Some(path),
                     run: run.unwrap_or_else(|| "claude".into()),
                     title: None,
+                    task: None,
+                    first: None,
                 };
                 match self.open(req) {
                     Ok(v) => {
@@ -1350,6 +1380,7 @@ impl Hub {
                 Ok(()) => Ack::ok(),
                 Err(err) => Ack::err(err),
             }),
+            Request::Task { pane, op } => self.task_socket(pane.as_deref(), op),
         };
         let mut w = &conn;
         let _ = writeln!(w, "{reply}");
@@ -1581,6 +1612,7 @@ fn request_kind(r: &Request) -> &'static str {
         Request::Open { .. } => "open",
         Request::GuideSet { .. } => "guide_set",
         Request::GuideUpdate { .. } => "guide_update",
+        Request::Task { .. } => "task",
     }
 }
 
@@ -1608,5 +1640,12 @@ mod tests {
             trim_tail(lines),
             ["b", "c", "d", "e", "f", "g"].map(String::from).to_vec()
         );
+    }
+
+    #[test]
+    fn a_paste_has_no_control_characters() {
+        assert_eq!(bracketed_paste("a\nb\tc"), "\x1b[200~a\nb\tc\x1b[201~");
+        // An agent's note that tries to end the paste and press Enter.
+        assert_eq!(bracketed_paste("x\x1b[201~\rrm -rf /\u{9b}2~\x07"), "\x1b[200~x[201~rm -rf /2~\x1b[201~");
     }
 }

@@ -49,6 +49,10 @@
           <button type="button" data-v="nvim">nvim</button>
           <button type="button" data-v="shell">Shell</button>
         </div>
+        <div class="ltask" id="ltask" hidden>
+          <div class="ltaskhead">For task <b id="ltasktitle"></b></div>
+          <textarea id="lfirst" rows="4" aria-label="First message" title="Pasted into Claude with no Enter, when it is ready"></textarea>
+        </div>
         <div class="layouts" id="llayouts"></div>
       </div>
       <div class="lfoot">
@@ -60,6 +64,7 @@
     </div>
   </div>
 
+  <div class="menu taskmenu" id="taskmenu" role="menu" hidden></div>
   <div class="toast" id="toast" hidden></div>
 
   <script src="vendor/xterm/xterm.js"></script>

@@ -54,11 +54,16 @@ window.__data.tasks = {
   tasks: [
     tk({ id: "t1", title: "Review PR 10071", rank: 1024, priority: "high", repo: "/c/lighthouse", status: "doing" }),
     tk({ id: "t2", title: "Fix the slot 0 test", rank: 2048 }),
-    tk({ id: "t3", title: "Wait for the spec", rank: 3072, status: "blocked", blocked_by: "spec PR 4512" }),
+    tk({ id: "t3", title: "Wait for the spec", rank: 3072, status: "blocked", blocked_by: "spec PR 4512", repo: "/c/lighthouse" }),
     tk({ id: "t4", title: "Old done task", rank: 1024, sprint: "s0", status: "done", done: 5 }),
-    tk({ id: "t5", title: "Write the design doc", rank: 1024, sprint: null, notes: "See **this**. <script>window.__xss = 2</script> ![img](https://evil.example/x.png) [bad](javascript:window.__xss=3) [good](https://example.com)" }),
+    tk({ id: "t5", title: "Write the design doc", rank: 1024, sprint: null, repo: "/gone/repo", notes: "See **this**. <script>window.__xss = 2</script> ![img](https://evil.example/x.png) [bad](javascript:window.__xss=3) [good](https://example.com)" }),
   ],
 };
+window.__data.tasks.links = [
+  { pane: "p1", task: "t1", kind: "claude", title: null, tree: "/c/lighthouse", session: "s1", connection: "a", closed: false },
+  { pane: "p7", task: "t3", kind: "claude", title: "spec agent", tree: "/c/lighthouse-spec", session: "s7", connection: "a", closed: true },
+];
+window.__data.tasks.missing = ["/gone/repo"];
 window.__data.history = { t1: [{ at: 1760000000, by: "you", kind: "created", value: "todo" }, { at: 1760000100, by: "you", kind: "status", value: "doing" }] };
 function taskShim(cmd, a) {
   const d = window.__data.tasks;
@@ -98,6 +103,10 @@ function taskShim(cmd, a) {
     }
     case "task_edit": { const t = find(a.id); Object.assign(t, a.fields); out = t; break; }
     case "task_delete": d.tasks = d.tasks.filter((t) => t.id !== a.id); break;
+    case "task_start_plan": { const t = find(a.id); out = { task: t.id, repo: t.repo, branch: "sb/" + t.title.toLowerCase().replace(/[^a-z0-9]+/g, "-"), title: t.title, first: t.title + (t.notes ? "\n\n" + t.notes : "") }; break; }
+    case "task_link": d.links = d.links.filter((l) => l.pane !== a.pane).concat([{ pane: a.pane, task: a.task, kind: "claude", title: null, tree: "/c/x", session: null, connection: "a", closed: false }]); break;
+    case "task_unlink": d.links = d.links.filter((l) => l.pane !== a.pane); break;
+    case "task_resume": out = "p9"; break;
     case "task_copy": { const t = find(a.id); out = tk({ id: `t${d.tasks.length + 10}`, title: t.title, sprint: null, rank: 99999 }); d.tasks.push(out); break; }
     case "sprint_new": out = Object.assign({ id: `s${d.sprints.length}`, state: "open" }, a.sprint); d.sprints.push(out); break;
     case "sprint_edit": out = Object.assign(d.sprints.find((s) => s.id === a.id), a.sprint); break;
@@ -184,6 +193,7 @@ window.__TAURI__ = {
         case "tasks": return structuredClone(d.tasks);
         case "task_history": return d.history[args.id] || [];
         case "task_add": case "task_status": case "task_move": case "task_edit": case "task_delete": case "task_copy":
+        case "task_start_plan": case "task_link": case "task_unlink": case "task_resume":
         case "sprint_new": case "sprint_edit": case "sprint_close": return taskShim(cmd, args);
         default: return null;
       }

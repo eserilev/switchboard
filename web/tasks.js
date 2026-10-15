@@ -11,7 +11,7 @@
 
   // `sel`: the task in the panel. `focus`: the task the keys act on. `adding`: the
   // place of the new-task field, { status, sprint }. `drag`: the task in a drag.
-  const T = { sprints: [], tasks: [], loaded: false, view: load("view") === "list" ? "list" : "board", sel: null, focus: null, adding: null, cancel: null, drag: null, allDone: false, openClosed: new Set(), notes: "edit", history: [] };
+  const T = { sprints: [], tasks: [], loaded: false, view: load("view") === "list" ? "list" : "board", sel: null, focus: null, adding: null, cancel: null, links: [], missing: [], linking: false, hush: new Set(), drag: null, allDone: false, openClosed: new Set(), notes: "edit", history: [] };
 
   // Notes are Markdown. Raw HTML and images show as text; only http(s) links are links,
   // and they open in the browser (the click handler in review.js).
@@ -22,6 +22,15 @@
   const md = (s) => { try { return marked.parse(String(s ?? ""), { renderer: mdr, gfm: true }); } catch (_) { return esc(s); } };
 
   const view = () => $("#view-tasks");
+  // Panes linked to a task (SPEC 27.6). A pane that is not on the board has ended.
+  const linksOf = (id) => T.links.filter((l) => l.task === id);
+  const paneOf = (l) => window.SB.paneById(l.pane);
+  const lampOf = (l) => paneOf(l)?.lamp || "ended";
+  const linkName = (l) => { const p = paneOf(l); return p ? window.SB.paneName(p) : l.title || (l.tree || "").split("/").pop() || l.pane; };
+  const missing = (t) => !!t.repo && T.missing.includes(t.repo);
+  // "Agent finished": a linked pane is at Your turn and the task is In progress.
+  // Dismiss hides it until that pane leaves Your turn.
+  const hinted = (t) => t.status === "doing" && linksOf(t.id).some((l) => lampOf(l) === "turn" && !T.hush.has(`${t.id}|${l.pane}`));
   const openSprint = () => T.sprints.find((s) => s.state === "open");
   const sprintOf = (t) => T.sprints.find((s) => s.id === t.sprint);
   const frozen = (t) => sprintOf(t)?.state === "closed";
@@ -85,11 +94,21 @@
   }
 
   function card(t) {
-    const cls = ["tcard", T.focus === t.id && "focused", T.sel === t.id && "open"].filter(Boolean).join(" ");
+    const links = linksOf(t.id);
+    const needs = links.some((l) => lampOf(l) === "needs");
+    const cls = ["tcard", T.focus === t.id && "focused", T.sel === t.id && "open", needs && "needs"].filter(Boolean).join(" ");
     const meta = [t.priority !== "normal" && `<span class="tprio" data-p="${t.priority}">${t.priority === "high" ? "▲ High" : "▼ Low"}</span>`,
       t.repo && `<span class="trepo">${esc(repoName(t.repo))}</span>`,
-      t.blocked_by && `<span class="tblock">Blocked by ${esc(t.blocked_by)}</span>`].filter(Boolean).join("");
-    return `<div class="${cls}" data-task="${esc(t.id)}" draggable="true" tabindex="-1"><div class="tt">${esc(t.title)}</div>${meta ? `<div class="tm">${meta}</div>` : ""}</div>`;
+      missing(t) && `<span class="tmiss">repo missing</span>`,
+      t.blocked_by && `<span class="tblock">Blocked by ${esc(t.blocked_by)}</span>`,
+      links.length && `<span class="tdots">${links.map(dot).join("")}</span>`].filter(Boolean).join("");
+    const hint = hinted(t) ? `<div class="thint">Agent finished<button class="tool" data-hint="review" data-id="${esc(t.id)}" title="Set the task to In review">→ In review</button><button class="tool x" data-hint="hush" data-id="${esc(t.id)}" aria-label="Dismiss">×</button></div>` : "";
+    return `<div class="${cls}" data-task="${esc(t.id)}" draggable="true" tabindex="-1"><div class="tt">${esc(t.title)}</div>${meta ? `<div class="tm">${meta}</div>` : ""}${hint}</div>`;
+  }
+
+  function dot(l) {
+    const lamp = lampOf(l);
+    return `<i class="tdot" data-lamp="${esc(lamp)}" title="${esc(linkName(l))} · ${esc(window.SB.LABEL[lamp] || lamp)}"></i>`;
   }
 
   function adder(status, sprint) {
@@ -116,7 +135,7 @@
   function row(t, closed) {
     const cls = ["trow", T.focus === t.id && "focused", T.sel === t.id && "open"].filter(Boolean).join(" ");
     return `<div class="${cls}" data-task="${esc(t.id)}" draggable="${!closed}" tabindex="-1"><span class="tchip" data-s="${t.status}">${LABEL[t.status]}</span>
-      <span class="tt">${esc(t.title)}</span>${t.priority !== "normal" ? `<span class="tprio" data-p="${t.priority}">${t.priority === "high" ? "▲" : "▼"}</span>` : ""}<span class="trepo">${esc(repoName(t.repo))}</span></div>`;
+      <span class="tt">${esc(t.title)}</span>${t.priority !== "normal" ? `<span class="tprio" data-p="${t.priority}">${t.priority === "high" ? "▲" : "▼"}</span>` : ""}<span class="trepo">${missing(t) ? '<span class="tmiss">repo missing</span>' : esc(repoName(t.repo))}${linksOf(t.id).length ? `<span class="tdots">${linksOf(t.id).map(dot).join("")}</span>` : ""}</span></div>`;
   }
 
   // One list section: a sprint, or the backlog (null).
@@ -161,10 +180,86 @@
         <label class="wide" ${t.status === "blocked" ? "" : "hidden"}>Blocked by<input id="tp-blocked" value="${esc(t.blocked_by || "")}"${ro}></label>
       </div>
       <div class="tpnotes"><div class="seg" id="tp-nseg"${frozen(t) ? " hidden" : ""}>${[["edit", "Edit"], ["preview", "Preview"]].map(([v, l]) => `<button type="button" data-v="${v}" aria-pressed="${T.notes === v}">${l}</button>`).join("")}</div>${notes}</div>
+      ${agents(t)}
       <div class="tphist" id="tp-hist"></div>
       <div class="tpfoot">${frozen(t) ? `<button class="btn small" data-act="copy">Copy to backlog</button>` : `<button class="btn small" data-act="delete">Delete</button>`}</div>
     </aside>`;
   }
+
+  // The Agents part of the panel: the linked panes, Start agent and Link pane.
+  function agents(t) {
+    const ro = frozen(t);
+    const rows = linksOf(t.id).map((l) => {
+      const lamp = lampOf(l);
+      const live = !!paneOf(l);
+      const canResume = l.kind === "claude" && l.session && (lamp === "ended" || lamp === "error");
+      return `<div class="tpa" data-pane="${esc(l.pane)}">${dot(l)}<span class="tpaname">${esc(linkName(l))}</span><span class="tpastate">${esc(window.SB.LABEL[lamp] || lamp)}</span>
+        ${live && lamp !== "ended" ? `<button class="tool" data-pact="open">Open</button>` : ""}${canResume ? `<button class="tool" data-pact="resume">Resume</button>` : ""}
+        ${ro ? "" : `<button class="tool x" data-pact="unlink" aria-label="Unlink">×</button>`}</div>`;
+    }).join("");
+    const mine = new Set(linksOf(t.id).map((l) => l.pane));
+    const free = window.SB.S.panes.filter((p) => p.kind !== "nvim" && !mine.has(p.id));
+    const pick = T.linking && !ro
+      ? `<div class="tplink">${free.length ? free.map((p) => `<button class="tool" data-linkpane="${esc(p.id)}">${esc(window.SB.paneName(p))}${T.links.some((l) => l.pane === p.id) ? " (moves)" : ""}</button>`).join("") : `<span class="tnone">No pane to link.</span>`}</div>` : "";
+    const btns = ro ? "" : `<div class="tpabtns"><button class="btn small primary" data-act="start"${missing(t) ? ` disabled title="The repo folder is missing"` : ""}>Start agent</button>
+      <button class="btn small" data-act="link" aria-expanded="${T.linking}">Link pane</button></div>`;
+    return `<div class="tpagents"><h5>Agents</h5>${rows || `<p class="tnone">No agent works on this task.</p>`}${pick}${btns}</div>`;
+  }
+
+  async function startAgent(id) {
+    const t = task(id);
+    if (!t || frozen(t)) return;
+    if (missing(t)) return toast(`The repo folder of this task is missing: ${t.repo}`);
+    try {
+      const plan = await call("task_start_plan", { id });
+      window.SB.openLauncher(plan);
+    } catch (_) {}
+  }
+
+  // The task menu of a tile: link the pane to a task, unlink it, or make a task from it.
+  function menu(pane, btn) {
+    const m = $("#taskmenu");
+    const p = window.SB.paneById(pane);
+    if (!p) return;
+    if (!m.hidden && m.dataset.pane === pane) { m.hidden = true; return; }
+    const cur = T.links.find((l) => l.pane === pane);
+    const sp = openSprint();
+    const pickable = T.tasks.filter((t) => t.status !== "done" && !frozen(t) && t.id !== cur?.task && (!t.sprint || t.sprint === sp?.id))
+      .sort((a, b) => (a.sprint === sp?.id ? 0 : 1) - (b.sprint === sp?.id ? 0 : 1) || a.rank - b.rank).slice(0, 12);
+    m.innerHTML = `<button data-tm="new">New task from this pane</button>${cur ? `<button data-tm="unlink">Unlink from “${esc(task(cur.task)?.title || cur.task)}”</button>` : ""}
+      ${pickable.length ? `<div class="tmhead">Link to</div>${pickable.map((t) => `<button data-tm="link" data-id="${esc(t.id)}"><span>${esc(t.title)}</span><span class="at">${LABEL[t.status]}</span></button>`).join("")}` : ""}`;
+    m.dataset.pane = pane;
+    m.hidden = false;
+    const r = btn.getBoundingClientRect();
+    // Below the button, or above it when the menu does not fit below.
+    const below = r.bottom + 4 + m.offsetHeight <= window.innerHeight - 8;
+    m.style.top = `${Math.round(below ? r.bottom + 4 : Math.max(8, r.top - 4 - m.offsetHeight))}px`;
+    m.style.left = `${Math.round(Math.max(8, Math.min(r.left, window.innerWidth - m.offsetWidth - 8)))}px`;
+  }
+
+  async function menuPick(b) {
+    const m = $("#taskmenu");
+    const pane = m.dataset.pane;
+    m.hidden = true;
+    const p = window.SB.paneById(pane);
+    if (!p) return;
+    try {
+      if (b.dataset.tm === "unlink") return await call("task_unlink", { pane });
+      if (b.dataset.tm === "link") return await call("task_link", { task: b.dataset.id, pane });
+      const repo = window.SB.S.repos.find((r) => r.path === p.tree || r.worktrees.some((w) => w.path === p.tree))?.path || null;
+      const t = await call("task_add", { task: { title: window.SB.paneName(p), status: "doing", sprint: openSprint()?.id || null, repo } });
+      await call("task_link", { task: t.id, pane });
+      toast(`New task “${t.title}”, linked to this pane.`);
+    } catch (_) {}
+  }
+  document.addEventListener("click", (e) => {
+    const m = $("#taskmenu");
+    if (m.hidden) return;
+    const b = e.target.closest("#taskmenu button");
+    if (b) return menuPick(b);
+    if (!e.target.closest("[data-ptaskmenu]")) m.hidden = true;
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#taskmenu").hidden) $("#taskmenu").hidden = true; });
 
   function drawHistory() {
     const h = $("#tp-hist");
@@ -173,7 +268,10 @@
     const what = (x) => x.kind === "created" ? `Created as ${LABEL[x.value] || x.value}`
       : x.kind === "status" ? `Status: ${LABEL[x.value] || x.value}`
       : x.kind === "sprint" ? `Moved to ${esc(T.sprints.find((s) => s.id === x.value)?.name || "the backlog")}`
-      : x.kind === "copied" ? `Copied from a closed sprint` : "Edited";
+      : x.kind === "copied" ? `Copied from a closed sprint`
+      : x.kind === "linked" ? `Linked pane ${esc(x.value)}`
+      : x.kind === "unlinked" ? `Unlinked pane ${esc(x.value)}`
+      : x.kind === "note" ? `Note: ${esc(x.value)}` : "Edited";
     h.innerHTML = `<h5>History</h5><ol>${T.history.slice().reverse().map((x) => `<li><span class="when">${when(x.at)}</span>${what(x)}${x.by !== "you" ? ` <span class="by">· ${esc(x.by)}</span>` : ""}</li>`).join("")}</ol>`;
   }
 
@@ -200,7 +298,10 @@
   function setData(v) {
     T.sprints = v.sprints;
     T.tasks = v.tasks;
+    T.links = v.links || [];
+    T.missing = v.missing || [];
     T.loaded = true;
+    window.SB.drawBoard();
     if (T.sel && !task(T.sel)) T.sel = null;
     if (T.focus && !task(T.focus)) T.focus = null;
     draw();
@@ -208,6 +309,7 @@
   }
 
   function openPanel(id) {
+    if (T.sel !== id) T.linking = false;
     T.sel = id;
     T.focus = id;
     T.history = [];
@@ -314,7 +416,7 @@
   const readSprint = () => ({ name: $("#ts-name").value.trim(), goal: $("#ts-goal").value.trim(), start: $("#ts-start").value, end: $("#ts-end").value });
   const badSprint = (s) => !s.name ? "The sprint needs a name." : !s.start || !s.end ? "The sprint needs its dates." : s.end < s.start ? "The sprint ends before it starts." : false;
   const nextName = () => `Sprint ${T.sprints.length + 1}`;
-  const fresh = (start) => ({ name: nextName(), goal: "", start, end: addDays(start, 13) });
+  const fresh = (start) => ({ name: nextName(), goal: "", start, end: addDays(start, Math.max(1, S.settings?.sprint_days || 14) - 1) });
 
   async function newSprint() {
     const sprint = await ask(`<h4>New sprint</h4>${sprintFields(fresh(day(new Date())))}`, [["Cancel", null], ["Start sprint", "ok"]], readSprint, badSprint);
@@ -382,6 +484,24 @@
   document.addEventListener("click", (e) => {
     const v = view();
     if (!v || !v.contains(e.target)) return;
+    const hint = e.target.closest("[data-hint]");
+    if (hint) {
+      const t = task(hint.dataset.id);
+      if (!t) return;
+      if (hint.dataset.hint === "review") return setStatus(t.id, "review");
+      linksOf(t.id).filter((l) => lampOf(l) === "turn").forEach((l) => T.hush.add(`${t.id}|${l.pane}`));
+      return draw();
+    }
+    const pact = e.target.closest("[data-pact]");
+    if (pact) {
+      const pane = pact.closest("[data-pane]").dataset.pane;
+      if (pact.dataset.pact === "open") return window.SB.expand(pane);
+      if (pact.dataset.pact === "unlink") return call("task_unlink", { pane }).catch(() => {});
+      pact.disabled = true;
+      return call("task_resume", { pane }).then((id) => window.SB.refreshPanes().then(() => window.SB.expand(id))).catch(() => { pact.disabled = false; });
+    }
+    const lp = e.target.closest("[data-linkpane]");
+    if (lp) { T.linking = false; return call("task_link", { task: T.sel, pane: lp.dataset.linkpane }).catch(() => {}); }
     const el = e.target.closest("[data-act], [data-new], [data-closed], #tview button, #tp-nseg button, [data-task]");
     if (!el) return;
     if (el.closest("#tview")) { T.view = el.dataset.v; save("view", T.view); return draw(); }
@@ -402,6 +522,8 @@
       case "panel-close": return closePanel();
       case "delete": return del(T.sel);
       case "copy": return call("task_copy", { id: T.sel }).then((t) => openPanel(t.id)).catch(() => {});
+      case "start": return startAgent(T.sel);
+      case "link": T.linking = !T.linking; return draw();
     }
   });
 
@@ -535,6 +657,7 @@
     else if (k === "o") addHere();
     else if (k === "Enter" && T.focus) openPanel(T.focus);
     else if (k === "Escape" && T.sel) closePanel();
+    else if (k === "s" && T.focus) startAgent(T.focus);
     else if (/^[1-5]$/.test(k) && T.focus) setStatus(T.focus, STATUS[+k - 1][0]);
     else return;
     e.preventDefault();
@@ -550,7 +673,35 @@
     },
     // Leaving the tab closes an open dialog.
     leave: () => T.cancel?.(),
+    // A text to copy, in a dialog with a Copy button.
+    showText: async (title, why, text) => {
+      const p = ask(`<h4>${esc(title)}</h4><p>${esc(why)}</p><textarea id="tb-text" readonly rows="6">${esc(text)}</textarea>`, [["Close", null], ["Copy", "ok"]],
+        () => window.SB.copyText($("#tb-text").value));
+      // A tab change does not close this one: the text is not anywhere else.
+      T.cancel = null;
+      const ok = await p;
+      if (ok) toast("Copied. Paste it into the pane.");
+      else if (ok === false) toast("The copy did not work. Select the text and copy it yourself.");
+    },
+    // For the board: the task of a pane, the task menu of a tile, and a task to open.
+    forPane: (pane) => { const l = T.links.find((x) => x.pane === pane); return l ? task(l.task) : null; },
+    menu,
+    open: (id) => { if (!task(id)) return; window.SB.setTab("tasks"); openPanel(id); },
+    // A pane changed: a hint ends when its pane leaves Your turn; dots follow lamps.
+    panes: () => {
+      for (const k of [...T.hush]) {
+        const pane = k.split("|")[1];
+        if (window.SB.paneById(pane)?.lamp !== "turn") T.hush.delete(k);
+      }
+      // Pane events come often: redraw only when a linked lamp changes, never in a drag.
+      const sig = T.links.map((l) => `${l.pane}:${lampOf(l)}`).join() + `|${S.panes.length}`;
+      if (sig === T.lampSig) return;
+      T.lampSig = sig;
+      if (S.tab === "tasks" && T.loaded && !T.drag) draw();
+    },
     refresh,
     _test: { T, daysLeft, md },
   };
+  // The board shows task titles on tiles, so the list loads at start.
+  refresh();
 })();

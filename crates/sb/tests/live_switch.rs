@@ -80,6 +80,8 @@ fn live_switch_keeps_the_session() {
             tree: None,
             run: "claude".into(),
             title: None,
+            task: None,
+            first: None,
         })
         .unwrap();
     let id = v.id.clone();

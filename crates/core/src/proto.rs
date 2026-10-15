@@ -31,6 +31,12 @@ pub enum Request {
         step: String,
         fields: Value,
     },
+    /// `sb task` (SPEC 27.7). `pane` is the caller's `SB_PANE`: a label, not proof.
+    Task {
+        #[serde(default)]
+        pane: Option<String>,
+        op: crate::tasks::TaskOp,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
