@@ -1018,3 +1018,204 @@ The invariant `Always`:
 A `Mode` turns one fix off at a time: the open check at the checkout, the Discard list, the checkout guard, the lock rule, and the local guards. With the local guards off, the model finds the real bug path at once: the close starts a cleanup, the pin hides the agent's commits, the folder looks clean, and it goes. `scripts/check-models.sh` runs 12 fixed traces and 100,000 random runs of 50 steps of the code. Then it runs each mode with one fix off, and each must break `Always`; the script fails if one passes, so the model keeps the bugs it is for. Removing the open-review check from the cleanup rule also makes the random runs fail.
 
 Not checked: the full state space, because Apalache needs Java, which is not installed here. The model is small (3 reviews, 2 folders), and the random runs reach the bugs above in under a second.
+
+## 27. Tasks
+
+Status: planned, not built. 27.13 gives the build phases.
+
+A list of the tasks you work on, as in sprint planning. You write them in Switchboard, set their status, and start agents from them. Tasks live only in the local store. Switchboard never reads them from or writes them to an issue tracker (27.10).
+
+### 27.1 Terms
+
+| Term | Meaning |
+|---|---|
+| Task | One piece of work: a title, notes, a status, and optional links. |
+| Sprint | A named time box with a start date, an end date and a goal. It holds tasks. |
+| Backlog | The tasks in no sprint. |
+| Current sprint | The open sprint, whatever its dates. At most one sprint is open. |
+
+### 27.2 A task
+
+| Field | Rule |
+|---|---|
+| Title | One line, required, at most 200 characters. |
+| Notes | Markdown, optional. The window renders them with the sanitizer of the review: no raw HTML, and images show as text. A link opens in the system browser, never in the window. |
+| Status | `todo`, `doing`, `blocked`, `review` or `done`. The window names them To do, In progress, Blocked, In review, Done. |
+| Blocked by | Text, required when the status is `blocked`: who or what blocks the task. |
+| Points | An optional whole number from 0 to 99. |
+| Priority | `high`, `normal` (the default) or `low`. |
+| Sprint | One sprint, or none (the backlog). |
+| Repo | One repo folder, optional. Start (27.6) needs it. |
+| Links | URLs, for example a PR or an issue. A PR link of a review that is open in Switchboard opens that review tab. |
+| Tags | Short words, for a filter. |
+| Panes | The panes started from the task or linked to it (27.6). |
+| Rank | The order of the task in its sprint, or in the backlog. |
+| Times | Created, changed, started (first `doing`), done. |
+
+Rules:
+
+- In an open or planned sprint and in the backlog, every status change is allowed. The window never blocks a move there.
+- A task in a closed sprint cannot change, from the window or the socket. "Copy to backlog" makes a new task from it.
+- A move to `done` sets the done time. A move out of `done` clears it.
+- A move out of `blocked` clears "Blocked by".
+- Each change adds a row to the task history (27.8).
+- Delete asks first. A deleted task goes to the archive. The Archive view lists it, with Restore. At hub start, the store removes archived tasks older than 30 days.
+- A deleted task loses its pane links. Its panes stay.
+- When the repo folder of a task is missing, Start is off and the card shows "repo missing".
+
+### 27.3 Sprints
+
+- New sprint: a name, a start date, an end date and a goal. The default length is 14 days and is set in the config (27.11).
+- Dates are local calendar dates (`YYYY-MM-DD`). The end date is a sprint day. The dates of two sprints can overlap.
+- Days left and the burndown use local midnight.
+- At most one sprint is open, and at most one is planned. Plan the next sprint while the current one is open.
+- Close the sprint: a dialog lists each task that is not `done`. For each task, or for all of them at once, choose: the next sprint, the backlog, or `done`. Close then sets the sprint to `closed`. The planned sprint becomes open. With no planned sprint, the dialog asks for a new one, or leaves no sprint open.
+- A closed sprint keeps its tasks and its history, read-only. It shows in the sprint list with its done points and its total points.
+- A sprint has no automatic close. When its end date is past, the sprint header turns amber.
+
+### 27.4 The Tasks tab
+
+The Tasks tab sits next to Board in the tab bar. It has two views. A switch at the top picks one, and the app keeps your choice.
+
+- **Board view**: one column for each status, for the current sprint. A column shows the tasks of one status in rank order. Drag a card to another column or another place. The `done` column shows the last 10 done tasks and a "show all" link. With no open sprint, the board view shows the backlog and a New sprint button.
+- **List view**: the backlog and the open and planned sprints, as sections. Drag a task between sections to plan the sprint. Each section header shows the task count and the points: done, and total.
+
+A task card shows the title, the priority mark, the points, the tags, the repo name, and one lamp dot for each linked pane, in the lamp colors of 6.2. A card with a pane that needs you pulses, as its tile does.
+
+The sprint header shows the name, the goal, the days left, and a bar of done points over total points.
+
+Click a card to open its panel on the right: every field, the notes editor, the history, and the actions Start agent, Link pane, Review and Delete.
+
+A filter field at the top filters by text, tag, repo and priority. The filter applies to both views.
+
+### 27.5 Keys
+
+The Tasks keys work only on the Tasks tab, and only when no text field and no terminal has focus. The review keys (7) work only on a review tab.
+
+| Keys | Action |
+|---|---|
+| Leader, `t` | Tasks tab. |
+| `j` / `k` | Next or previous task in the column. |
+| `h` / `l` | Previous or next column (board view). |
+| `o` | New task in the focused column or section. |
+| `Enter` | Open the panel of the focused task. |
+| `1` to `5` | Set the status: To do, In progress, Blocked, In review, Done. |
+| `Shift+J` / `Shift+K` | Move the task down or up. |
+| `s` | Start an agent for the task (27.6). |
+| `/` | Focus the filter. |
+| `Esc` | Close the panel. |
+
+### 27.6 Tasks and agents
+
+**Start agent** opens the launcher (9.1), filled in from the task:
+
+- The repo is the task's repo.
+- The place is a new worktree. The branch is `<prefix><slug>`. The prefix is `sb/` by default and is set in the config.
+- The slug is the title in lowercase ASCII, with `-` for each run of other characters, at most 40 characters. An empty slug becomes `task-<id>`. When the branch exists, the app adds `-2`, `-3` and so on.
+- The pane title is the task title.
+- The first message is the task title and its notes. The launcher shows it. You can change it before you start.
+
+The app types the first message into the new Claude pane as a paste with no Enter, as Send to agent does (11.11). You read it and send it. The paste waits for the first Idle lamp of the pane, for at most 20 s. After 20 s, the app copies the message to the clipboard and shows a notice.
+
+An agent can write task notes (27.7), so a note from one agent can become the prompt of another. You read the paste before you press Enter.
+
+Start links the new pane to the task. When the task is `todo`, Start sets it to `doing`.
+
+**Link pane** links a pane that already runs. A pane links to at most one task. A link to a second task moves it. A tile has a task menu too: "Link to task…" and "New task from this pane".
+
+A linked pane shows the task title on its tile, under the title. A click on it opens the task.
+
+**Review** opens a review of the local commits of the linked pane (11.11). With more than one linked pane, a menu asks which one.
+
+The app never changes a status on its own, except the `todo` to `doing` move at Start. It shows hints on the card instead:
+
+- "Agent finished": a linked pane went to Your turn, and the task is `doing`. One click sets `review`.
+- "PR merged": a link is a PR that GitHub reports as merged. One click sets `done`. Every 5 minutes, the hub reads the PR links of the tasks that are not `done`, with `gh pr view --json state`. It only reads. It never posts (3).
+
+A hint goes away after one click, a status change, or Dismiss.
+
+When a linked pane closes, the link stays and shows "ended". The link keeps the session id, so Resume on the task resumes the agent (16).
+
+### 27.7 `sb task`
+
+Agents and scripts read and change tasks with `sb task`. It talks to the hub over the socket (13.4).
+
+```
+sb task list [--sprint current|backlog|<name>] [--status <s>] [--json]
+sb task show [<id>]
+sb task add <title> [--notes <text>] [--repo <dir>] [--sprint current|backlog]
+sb task note <id> <text>
+sb task status <id> todo|doing|blocked|review
+```
+
+- In a pane, `sb task show` with no id shows the task linked to that pane (`SB_PANE`).
+- The socket never sets `done`, never deletes, and never closes a sprint, whoever calls. Only the window does these.
+- This rule is a guard against mistakes, not a security boundary. An agent pane runs as you and can write the store. `SB_PANE` only labels the history row.
+- The task tools are not in the review MCP server. The review agent only reads (4).
+
+### 27.8 History
+
+The store keeps one row for each change: a status, a sprint, the points, a note, a link. Each row has the time and who made it: `you` (the window), `cli`, or a pane id.
+The task panel shows the history. A sprint shows its done points for each day as a small burndown line, from the history.
+
+### 27.9 Export
+
+- "Copy as Markdown" on a sprint copies its tasks, grouped by status, with the points and links. Use it for a standup or a sprint review.
+- `sb task list --json` gives the same data to scripts.
+
+### 27.10 Not in scope
+
+- An issue tracker sync: GitHub Issues, Jira or Linear. Switchboard keeps its rule: it never posts (3). A later version can import a GitHub issue by URL, read-only, into a new task.
+- Subtasks. Use a checklist in the notes.
+- More than one person. The store is local.
+- Time tracking.
+
+### 27.11 Store, IPC and config
+
+Store version 10 adds these tables. `tags` and `links` are JSON lists.
+
+```sql
+CREATE TABLE sprint (id TEXT PRIMARY KEY, name TEXT NOT NULL, goal TEXT,
+  start TEXT NOT NULL, end TEXT NOT NULL, state TEXT NOT NULL);       -- planned | open | closed
+CREATE TABLE task (id TEXT PRIMARY KEY, title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL, blocked_by TEXT, points INTEGER, priority TEXT NOT NULL DEFAULT 'normal',
+  sprint TEXT REFERENCES sprint(id), repo TEXT, tags TEXT NOT NULL DEFAULT '[]', links TEXT NOT NULL DEFAULT '[]',
+  rank INTEGER NOT NULL, created INTEGER NOT NULL, changed INTEGER NOT NULL,
+  started INTEGER, done INTEGER, deleted INTEGER);
+CREATE TABLE task_pane (pane TEXT PRIMARY KEY, task TEXT NOT NULL, session TEXT);
+CREATE TABLE task_event (id INTEGER PRIMARY KEY, task TEXT NOT NULL, at INTEGER NOT NULL,
+  by TEXT NOT NULL, kind TEXT NOT NULL, value TEXT);                  -- by: you | cli | a pane id
+```
+
+Ranks are unique in each sprint and in the backlog. Gaps are allowed. A move sets the rank between the new neighbors. When there is no gap, the sprint renumbers in one transaction.
+
+The window gets `task_*` commands and a `task_changed` event (13.4). The socket `Request` gets the `Task*` requests of 27.7.
+
+```toml
+[tasks]
+sprint_days = 14
+branch_prefix = "sb/"
+```
+
+### 27.12 Tests
+
+- Unit: each rule of 27.2, `sb task` argument checks, the slug and its `-2` suffix, dates at local midnight and at a DST change.
+- Property: random actions (add, move, status, close sprint, delete, restore, link) on random tasks. After each step:
+  - at most one sprint is open and at most one is planned;
+  - each task is in at most one sprint;
+  - ranks are unique in each sprint and in the backlog, and the shown order equals the rank order;
+  - a task is `done` exactly when it has a done time;
+  - a task is `blocked` exactly when it has "Blocked by";
+  - a closed sprint holds only `done` tasks and never changes again;
+  - a pane links to at most one task;
+  - each change has one history row.
+- Store: `every_old_version_migrates_with_its_rows` runs from every old version with random rows.
+- Quint, next to `models/permit.qnt`: whatever the clients interleave, no socket request leads to `done`, a delete or a sprint close.
+- End-to-end, on a real hub and tmux: Start from a task opens a worktree pane, waits for Idle, pastes the first message with no Enter, links the pane, and sets `doing`. `sb task status <id> done` fails from any caller, with and without `SB_PANE`. A closed pane keeps its link and resumes.
+- Window checks: create, edit, drag between columns and sections, the keys, the filter, the close-sprint dialog, the hints. A note with `<script>` and a `javascript:` link renders as text.
+
+### 27.13 Build phases
+
+1. **Tasks and one sprint.** Tasks with title, notes, status, Blocked by, priority, repo and rank. The backlog. One open sprint, with New and Close. The board and list views. Leader `t` and the keys except `s` and `Shift+J`/`Shift+K`. The status history. Delete with no archive. Store version 10.
+2. **Agents.** Start agent, Link pane, the task title on the tile, lamp dots on cards, the "Agent finished" hint, and `sb task` with the rule of 27.7.
+3. **Planning.** Points, the burndown, planned sprints, Copy as Markdown, tags and the filter, the archive, the PR-merged poll, Review from a task, and `Shift+J`/`Shift+K`.
