@@ -141,8 +141,8 @@ function drawBoard() {
 function drawBoardNow() {
   // A redraw in the middle of a drag throws away the tile under the pointer.
   if (drag?.on) { drawLater = true; return; }
-  const shown = S.panes.filter((p) => p.id !== S.live);
-  $("#board").innerHTML = shown.map(tile).join("");
+  // The open pane keeps its tile, so the other tiles do not move (SPEC 6).
+  $("#board").innerHTML = S.panes.map(tile).join("");
   $("#view-board").classList.toggle("has-live", !!S.live);
   $("#bgutter").hidden = !S.live || S.termHost !== null;
   drawTally();
@@ -224,7 +224,7 @@ function moveTile(id, target, after) {
 
 /// Moves the focused tile one place left (-1) or right (+1).
 function nudgeTile(d) {
-  const ids = S.panes.filter((p) => p.id !== S.live).map((p) => p.id);
+  const ids = S.panes.map((p) => p.id);
   const i = ids.indexOf(S.focus);
   const j = i + d;
   if (i < 0 || j < 0 || j >= ids.length) return;
@@ -237,6 +237,8 @@ $("#board").addEventListener("click", (e) => {
   if (!el) return;
   const id = el.dataset.id;
   const b = e.target.closest("button");
+  // A click on the open tile goes to its terminal.
+  if (!b && id === S.live && S.termHost === null) return term.focus();
   if (!b) return expand(id);
   e.stopPropagation();
   if (b.dataset.close !== undefined) return call("pane_close", { id });
@@ -495,7 +497,7 @@ function nextUnseen(dir) {
 }
 
 function moveFocus(d) {
-  const ids = S.panes.filter((p) => p.id !== S.live).map((p) => p.id);
+  const ids = S.panes.map((p) => p.id);
   if (!ids.length) return;
   const i = Math.max(0, ids.indexOf(S.focus));
   S.focus = ids[(i + d + ids.length) % ids.length];

@@ -92,7 +92,7 @@ The board is a grid of tiles. A tile shows:
 - The last 4 lines of the pane, from `tmux capture-pane -p -e`.
 - The actions for the state: Allow and Deny for Needs you, Switch for Limit.
 
-Expand a tile, and it becomes the live pane. It takes the full width and shows the full scrollback.
+Expand a tile, and it becomes the live pane. It takes the full width and shows the full scrollback. The tile stays in its place on the board, so the other tiles do not move. Its border and title bar turn light blue. A click on it goes to the live terminal.
 Only one pane is live at a time. The Claude TUI never draws at tile width, so many panes fit on a small screen.
 
 ### 6.2 Lamps

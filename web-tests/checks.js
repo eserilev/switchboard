@@ -63,7 +63,14 @@
   await wait(300);
   check("click expands", called("pane_expand").some((c) => c[1].id === "p1"));
   check("live section shows", !$("#live").hidden && $("#view-board").classList.contains("has-live"));
-  check("live pane is not in the strip", !$('#board .pane[data-id="p1"]'));
+  check("the live pane keeps its tile, in its place and marked", $$("#board .pane").map((p) => p.dataset.id).join() === "p1,p2,p3" && $('#board .pane[data-id="p1"]').classList.contains("is-live"), $$("#board .pane").map((p) => p.dataset.id + ":" + p.className).join());
+  check("the live tile is light blue", getComputedStyle($('#board .pane[data-id="p1"]')).borderTopColor === "rgb(124, 196, 240)", getComputedStyle($('#board .pane[data-id="p1"]')).borderTopColor);
+  {
+    const before = window.__calls.filter((c) => c[0] === "pane_expand").length;
+    $('.pane[data-id="p1"] .term-tail').click();
+    await wait(100);
+    check("a click on the live tile does not expand it again", window.__calls.filter((c) => c[0] === "pane_expand").length === before);
+  }
   // Many tiles with a live pane: they wrap in rows and stay inside the window.
   {
     const extra = Array.from({ length: 14 }, (_, i) => Object.assign(structuredClone(window.__data.panes[2]), { id: `px${i}`, tree: `/c/extra-${i}` }));
