@@ -1087,9 +1087,9 @@
     go(id, local(id).cur + 1);
   }
 
-  // Review keys work only when no text field has focus (SPEC 7).
+  // Review keys work only on a review tab, when no text field has focus (SPEC 7).
   document.addEventListener("keydown", (e) => {
-    if (S.tab === "board" || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!S.reviews.has(S.tab) || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.target.closest?.("textarea, input, select, [contenteditable='true']")) return;
     const id = S.tab;
     const l = local(id);

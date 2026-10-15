@@ -398,3 +398,86 @@ tr.noted-nit td.ln::after { color: var(--muted); }
 .clist .md { font-size: 13px; padding: 4px 0 2px 14px; }
 .cstep { font: 600 10px/1 var(--mono); color: var(--accent); margin-right: 6px; }
 .cempty { color: var(--muted); font-size: 12px; padding: 6px 0; }
+
+/* ---------- tasks (SPEC 27) ---------- */
+.tasks { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; overflow: hidden; }
+.tasks.has-panel { grid-template-columns: minmax(0, 1fr) min(400px, 40vw); }
+.tmain { display: grid; grid-template-rows: auto 1fr; min-width: 0; min-height: 0; }
+.thead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.tsprint { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; flex: 1; min-width: 0; }
+.tsname { font: 700 16px/1.2 var(--display); font-stretch: 85%; letter-spacing: .02em; }
+.tsgoal { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40ch; }
+.tsdays { color: var(--muted); font-size: 12px; }
+.tsdays.late { color: var(--needs); }
+.tsbar { align-self: center; width: 120px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.tsbar i { display: block; height: 100%; background: var(--done); }
+.tscount, .tsdates, .tn { color: var(--muted); font: 12px/1 var(--mono); }
+.tacts { display: flex; gap: 6px; }
+.tempty { padding: 16px; color: var(--muted); display: flex; align-items: center; gap: 12px; }
+
+.tboard { display: grid; grid-template-columns: repeat(5, minmax(180px, 1fr)); gap: 10px; padding: 12px; min-height: 0; overflow: auto; }
+.tcol { display: grid; grid-template-rows: auto 1fr; min-height: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.tcol > header, .tsec > header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.tcol > header .tool, .tsec > header .tool:last-child { margin-left: auto; }
+.tdrop { display: flex; flex-direction: column; gap: 6px; padding: 8px; min-height: 60px; overflow-y: auto; }
+.tdrop.drop-in { background: var(--hl-bg); }
+.tcard { --c: var(--working); border: 1px solid var(--line); border-left: 3px solid var(--c); border-radius: 6px; background: var(--bg); padding: 8px 10px; cursor: pointer; display: grid; gap: 4px; }
+.tcard[draggable="true"] { cursor: grab; }
+.tcard .tt { overflow-wrap: anywhere; }
+.tcard.focused, .trow.focused { outline: 2px solid var(--accent); outline-offset: -1px; }
+.tcard.open, .trow.open { background: var(--hl-bg); }
+.tcard.dragging, .trow.dragging { opacity: .4; }
+.drop-before { box-shadow: 0 -3px 0 var(--accent); }
+.tcol[data-status="todo"] .tcard { --c: var(--muted); }
+.tcol[data-status="blocked"] .tcard { --c: var(--error); }
+.tcol[data-status="review"] .tcard { --c: var(--limit); }
+.tcol[data-status="done"] .tcard { --c: var(--done); }
+.tm { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--muted); }
+.tprio[data-p="high"] { color: var(--needs); }
+.tblock { color: var(--error); }
+.trepo { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.tmore { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 4px; text-decoration: underline; }
+.tchip { --c: var(--muted); font: 700 11px/1 var(--display); font-stretch: 85%; letter-spacing: .06em; text-transform: uppercase; padding: 4px 6px; border-radius: 4px; color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); white-space: nowrap; }
+.tchip[data-s="doing"] { --c: var(--working); }
+.tchip[data-s="blocked"] { --c: var(--error); }
+.tchip[data-s="review"] { --c: var(--limit); }
+.tchip[data-s="done"] { --c: var(--done); }
+.tadd { width: 100%; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); color: var(--fg); font: 14px/1.4 var(--body); padding: 8px 10px; }
+.tadd:focus { outline: none; }
+
+.tsecs { display: grid; align-content: start; gap: 12px; padding: 12px; min-height: 0; overflow: auto; }
+.tsec { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.tsec.closed { opacity: .8; }
+.tlist { display: grid; padding: 4px; gap: 2px; min-height: 40px; }
+.trow { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.trow:hover { background: var(--panel-2); }
+.trow .tt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tnone { color: var(--muted); padding: 8px; margin: 0; }
+
+.tpanel { display: grid; grid-template-rows: auto auto auto 1fr auto auto; gap: 10px; padding: 12px 14px; border-left: 1px solid var(--line); background: var(--panel); min-height: 0; overflow-y: auto; }
+.tphead { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 12px; }
+.tpanel input, .tpanel select, .tpanel textarea, .tform input, #tbox select, #tbox input:not([type="checkbox"]) { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: 13px/1.4 var(--body); padding: 6px 8px; }
+#tp-title { font: 700 18px/1.3 var(--display); font-stretch: 90%; }
+.tpfields, .tform { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tpfields label, .tform label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.tpfields .wide, .tform .wide { grid-column: 1 / -1; }
+.tpnotes { display: grid; grid-template-rows: auto 1fr; gap: 6px; min-height: 160px; }
+.tpnotes textarea { min-height: 160px; resize: vertical; font-family: var(--mono); }
+.tnotes-md { overflow-wrap: anywhere; }
+.tphist h5 { margin: 0 0 4px; font: 700 12px/1 var(--display); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.tphist ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 12px; max-height: 180px; overflow-y: auto; }
+.tphist .when { color: var(--muted); font-family: var(--mono); margin-right: 8px; }
+.tphist .by { color: var(--muted); }
+.tpfoot { display: flex; gap: 6px; }
+.terr { color: var(--error); min-height: 1em; }
+.tclose { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 40vh; overflow-y: auto; }
+.tclose li { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.tclose .tt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tall { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+
+@media (max-width: 900px) {
+  .tasks.has-panel { grid-template-columns: minmax(0, 1fr); }
+  .tasks.has-panel .tmain { display: none; }
+  .tboard { grid-template-columns: repeat(5, minmax(200px, 1fr)); }
+}
+.trow .tchip, .tclose .tchip { justify-self: start; }

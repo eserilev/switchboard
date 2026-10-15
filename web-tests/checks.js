@@ -739,6 +739,174 @@
   await wait(50);
   check("leader b shows the board", !$("#view-board").hidden);
 
+  // Tasks (SPEC 27)
+  {
+    const reviewMarks = called("review_mark").length;
+    key(" ", { ctrl: true, code: "Space" });
+    key("t");
+    await wait(100);
+    const tv = $("#view-tasks");
+    check("leader t shows the Tasks tab", !tv.hidden && $("#view-board").hidden && $("#view-review").hidden && $('#tabs [data-tab="tasks"]').getAttribute("aria-selected") === "true");
+    check("the board has a column for each status", $$("#view-tasks .tcol").map((c) => c.dataset.status).join() === "todo,doing,blocked,review,done");
+    check("cards sit in their status columns", $('.tcol[data-status="doing"] [data-task="t1"]') && $('.tcol[data-status="blocked"] [data-task="t3"]') && !$('#view-tasks .tboard [data-task="t5"]'));
+    check("a blocked card shows who blocks it", $('[data-task="t3"]').textContent.includes("Blocked by spec PR 4512"));
+    check("the sprint header shows the name, goal, days left and done count", /Sprint 1.*Ship inclusion lists.*11 days left.*0\/3/s.test($(".thead").textContent), $(".thead").textContent);
+    docKey("j");
+    await wait(50);
+    check("j focuses the first task, and review keys stay off", $('[data-task="t2"]').classList.contains("focused") && called("review_mark").length === reviewMarks);
+    docKey("l");
+    await wait(50);
+    check("l moves to the next column", $('[data-task="t1"]').classList.contains("focused"));
+    docKey("3");
+    await wait(50);
+    check("3 asks who blocks the task", !$("#tbox").hidden && !!$("#tb-reason"));
+    $("#tb-reason").value = "Sean's review";
+    $("#tbox .btn.primary").click();
+    await wait(80);
+    check("Blocked sends the reason", called("task_status").some((c) => c[1].id === "t1" && c[1].status === "blocked" && c[1].blockedBy === "Sean's review") && $("#tbox").hidden);
+    check("the card moves to Blocked", !!$('.tcol[data-status="blocked"] [data-task="t1"]'));
+    docKey("Enter");
+    await wait(80);
+    check("Enter opens the panel with the history", $(".tpanel")?.dataset.panel === "t1" && $("#tp-title").value === "Review PR 10071" && $("#tp-hist").textContent.includes("In progress"), $("#tp-hist")?.textContent);
+    $("#tp-title").value = "Review PR 10071 again";
+    $("#tp-title").dispatchEvent(new Event("change", { bubbles: true }));
+    await wait(80);
+    check("a title edit saves all the fields", called("task_edit").some((c) => c[1].id === "t1" && c[1].fields.title === "Review PR 10071 again" && c[1].fields.priority === "high" && c[1].fields.repo === "/c/lighthouse"));
+    document.activeElement?.blur();
+    docKey("Escape");
+    await wait(50);
+    check("Esc closes the panel", !$(".tpanel") && !tv.classList.contains("has-panel"));
+    // The status select: the panel follows the change, and an empty reason goes back.
+    $('[data-task="t1"]').click();
+    await wait(50);
+    $("#tp-status").focus();
+    $("#tp-status").value = "doing";
+    $("#tp-status").dispatchEvent(new Event("change", { bubbles: true }));
+    await wait(80);
+    check("a status change from the select hides Blocked by", $("#tp-blocked").closest("label").hidden && $("#tp-status").value === "doing");
+    $("#tp-status").value = "blocked";
+    $("#tp-status").dispatchEvent(new Event("change", { bubbles: true }));
+    await wait(30);
+    check("Blocked in the select asks for the reason", !$("#tp-blocked").closest("label").hidden && document.activeElement === $("#tp-blocked"));
+    $("#tp-blocked").blur();
+    await wait(50);
+    check("an empty reason puts the status back", $("#tp-status").value === "doing" && !called("task_status").some((c) => c[1].id === "t1" && c[1].status === "blocked" && !c[1].blockedBy));
+    $("#tp-status").value = "blocked";
+    $("#tp-status").dispatchEvent(new Event("change", { bubbles: true }));
+    await wait(30);
+    const nStatus = called("task_status").length;
+    $("#tp-blocked").value = "typed, then Esc";
+    $("#tp-blocked").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await wait(50);
+    check("Esc in the reason field cancels", called("task_status").length === nStatus && !$(".tpanel"));
+    // Back to Blocked for the checks below.
+    await window.SB.call("task_status", { id: "t1", status: "blocked", blockedBy: "Sean's review" });
+    await wait(50);
+    docKey("h"); docKey("h");
+    await wait(50);
+    docKey("o");
+    await wait(50);
+    check("o opens a new-task field in the focused column", $(".tadd")?.dataset.status === "todo" && document.activeElement === $(".tadd"));
+    $(".tadd").value = "Write the IL tests";
+    $(".tadd").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await wait(80);
+    check("Enter adds the task to the sprint", called("task_add").some((c) => c[1].task.title === "Write the IL tests" && c[1].task.sprint === "s1" && c[1].task.status === "todo") && $('.tcol[data-status="todo"]').textContent.includes("Write the IL tests"));
+    // A short drag that ends on the same card changes nothing.
+    {
+      const n = called("task_move").length;
+      const dt = new DataTransfer();
+      const c = $('[data-task="t2"]');
+      c.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: dt }));
+      c.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));
+      c.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
+      c.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: dt }));
+      await wait(50);
+      check("a drop on itself does not move the card", called("task_move").length === n);
+    }
+    // Drag t2 onto the Done column.
+    {
+      const dt = new DataTransfer();
+      $('[data-task="t2"]').dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: dt }));
+      const zone = $('.tdrop[data-status="done"]');
+      zone.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));
+      check("a drag marks the drop column", zone.classList.contains("drop-in"));
+      zone.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
+      await wait(80);
+      check("a drop on a column sets the status", called("task_move").some((c) => c[1].id === "t2" && c[1].to.status === "done" && c[1].to.sprint === "s1") && !!$('.tcol[data-status="done"] [data-task="t2"]'));
+    }
+    // The list view: sprint, backlog, and closed sprints.
+    $('#tview [data-v="list"]').click();
+    await wait(50);
+    const secs = $$("#view-tasks .tsec .tsname").map((x) => x.textContent);
+    check("the list shows the sprint, the backlog and the closed sprint", secs.join("|") === "Sprint 1|Backlog|Sprint 0", secs.join("|"));
+    {
+      const dt = new DataTransfer();
+      $('.trow[data-task="t5"]').dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: dt }));
+      const before = $('.trow[data-task="t1"]');
+      before.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));
+      check("a drag over a row marks the place", before.classList.contains("drop-before"));
+      before.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
+      await wait(80);
+      const mv = called("task_move").slice(-1)[0]?.[1];
+      check("a drop in a sprint plans the task there, before the row", mv?.id === "t5" && mv.to.sprint === "s1" && mv.to.status === "todo" && mv.to.before === "t1", JSON.stringify(mv));
+    }
+    $('[data-closed="s0"]').click();
+    await wait(50);
+    check("a closed sprint opens read-only", $('.trow[data-task="t4"]')?.getAttribute("draggable") === "false");
+    $('.trow[data-task="t4"]').click();
+    await wait(50);
+    check("a closed task has Copy to backlog and no edits", !!$('[data-act="copy"]') && !$('[data-act="delete"]') && $("#tp-title").disabled && $("#tp-status").disabled);
+    $('.trow[data-task="t5"]').click();
+    await wait(50);
+    $('#tp-nseg [data-v="preview"]').click();
+    await wait(50);
+    const notes = $(".tnotes-md");
+    check("notes render Markdown with no script, image or bad link", !!notes?.querySelector("strong") && notes.textContent.includes("<script>") && !notes.querySelector("img, script") && !notes.querySelector('a[href^="javascript"]') && !!notes.querySelector('a[href="https://example.com"]') && window.__xss === undefined, notes?.innerHTML);
+    $('#tp-nseg [data-v="edit"]').click();
+    $('[data-act="panel-close"]').click();
+    // Close the sprint: every open task to the backlog, no next sprint.
+    $('[data-act="sprint-close"]').click();
+    await wait(50);
+    check("close lists each task that is not done", $$("#tbox [data-place]").length === 4, $$("#tbox [data-place]").length);
+    $("#tc-all").value = "backlog";
+    $("#tc-all").dispatchEvent(new Event("change", { bubbles: true }));
+    $("#tc-next").checked = false;
+    $("#tc-next").dispatchEvent(new Event("change", { bubbles: true }));
+    $("#tbox .btn.primary").click();
+    await wait(80);
+    const cl = called("sprint_close")[0]?.[1];
+    check("close sends a place for each task", cl?.id === "s1" && cl.next === null && cl.places.length === 4 && cl.places.every(([, p]) => p === "backlog"), JSON.stringify(cl));
+    $('#tview [data-v="board"]').click();
+    await wait(50);
+    check("with no open sprint the board shows the backlog and New sprint", $(".tsprint").textContent.includes("No sprint is open") && !!$('.tempty [data-act="sprint-new"]') && $$("#view-tasks .tsec .trow").length === 4, $$("#view-tasks .tsec .trow").length);
+    $('.tempty [data-act="sprint-new"]').click();
+    await wait(50);
+    $("#ts-name").value = "";
+    $("#tbox .btn.primary").click();
+    await wait(30);
+    check("a sprint with no name is refused in the dialog", $("#tb-err").textContent.includes("name") && !called("sprint_new").length);
+    $("#ts-name").value = "Sprint 3";
+    $("#tbox .btn.primary").click();
+    await wait(80);
+    const ns = called("sprint_new")[0]?.[1].sprint;
+    check("New sprint sends 14 days from today", ns?.name === "Sprint 3" && /^\d{4}-\d\d-\d\d$/.test(ns.start) && Math.round((new Date(ns.end) - new Date(ns.start)) / 86400000) === 13, JSON.stringify(ns));
+    check("the new sprint shows on the board", $(".tsprint").textContent.includes("Sprint 3") && $$("#view-tasks .tcol").length === 5);
+    {
+      const d = structuredClone(window.__data.tasks);
+      const y = new Date(); y.setDate(y.getDate() - 1);
+      d.sprints.find((x) => x.state === "open").end = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, "0")}-${String(y.getDate()).padStart(2, "0")}`;
+      window.__emit("tasks", d);
+      await wait(30);
+      check("a sprint that ended yesterday says so, in amber", $(".tsdays").textContent === "ended 1 day ago" && $(".tsdays").classList.contains("late"), $(".tsdays").textContent);
+    }
+    $('[data-act="sprint-edit"]').click();
+    await wait(30);
+    key(" ", { ctrl: true, code: "Space" });
+    key("b");
+    await wait(50);
+    check("leaving the tab closes a task dialog", $("#tbox").hidden && !$("#view-board").hidden);
+  }
+
   check("no script errors", window.__errors.length === 0, window.__errors);
   const pre = document.createElement("pre");
   pre.id = "__results";

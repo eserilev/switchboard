@@ -8,6 +8,7 @@ use std::sync::Arc;
 use switchboard_core::hub::{Hub, OpenReq, Sink};
 use switchboard_core::hub_review::{Anchor, NewComment};
 use switchboard_core::paths::Paths;
+use switchboard_core::tasks::{NewSprint, NewTask, Place, TaskFields, TaskMove};
 use tauri::{AppHandle, Emitter, Manager, State, UserAttentionType};
 
 struct AppSink {
@@ -160,6 +161,17 @@ commands! {
     review_retry(id: String) -> () => |h| h.review_retry(&id);
     review_close(id: String, keep: bool, discard: Option<Vec<String>>) -> Value => |h| h.review_close(&id, keep, discard).map(|v| json!(v));
     review_nvim(id: String, path: String, line: u32) -> String => |h| h.review_nvim(&id, &path, line);
+    tasks() -> Value => |h| h.tasks().map(|v| json!(v));
+    task_add(task: NewTask) -> Value => |h| h.task_add(task).map(|v| json!(v));
+    task_edit(id: String, fields: TaskFields) -> Value => |h| h.task_edit(&id, fields).map(|v| json!(v));
+    task_status(id: String, status: String, blocked_by: Option<String>) -> Value => |h| h.task_status(&id, &status, blocked_by.as_deref()).map(|v| json!(v));
+    task_move(id: String, to: TaskMove) -> Value => |h| h.task_move(&id, to).map(|v| json!(v));
+    task_delete(id: String) -> () => |h| h.task_delete(&id);
+    task_copy(id: String) -> Value => |h| h.task_copy(&id).map(|v| json!(v));
+    task_history(id: String) -> Value => |h| h.task_history(&id).map(|v| json!(v));
+    sprint_new(sprint: NewSprint) -> Value => |h| h.sprint_new(sprint).map(|v| json!(v));
+    sprint_edit(id: String, sprint: NewSprint) -> Value => |h| h.sprint_edit(&id, sprint).map(|v| json!(v));
+    sprint_close(id: String, places: Vec<(String, Place)>, next: Option<NewSprint>) -> Value => |h| h.sprint_close(&id, places, next).map(|v| json!(v));
 }
 
 /// Keys from xterm.js. `binary` data (mouse reports) is one byte per char.
@@ -314,6 +326,17 @@ fn main() {
             review_retry,
             review_close,
             review_nvim,
+            tasks,
+            task_add,
+            task_edit,
+            task_status,
+            task_move,
+            task_delete,
+            task_copy,
+            task_history,
+            sprint_new,
+            sprint_edit,
+            sprint_close,
             log,
             open_url,
         ])

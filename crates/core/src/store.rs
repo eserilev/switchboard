@@ -73,10 +73,25 @@ const SCHEMA: &[&str] = &[
     "CREATE TABLE step_seen (review TEXT NOT NULL, step TEXT NOT NULL, at INTEGER NOT NULL);
      CREATE INDEX step_seen_review ON step_seen (review, at);
      CREATE TABLE dismissed (review TEXT NOT NULL, note TEXT NOT NULL, PRIMARY KEY (review, note));",
+    // Version 10: tasks and sprints (SPEC 27). `tags` and `links` are JSON lists.
+    // `task_pane` links a pane to at most one task. `who` in the history is `you`,
+    // `cli` or a pane id.
+    "CREATE TABLE sprint (id TEXT PRIMARY KEY, name TEXT NOT NULL, goal TEXT NOT NULL DEFAULT '',
+       start_day TEXT NOT NULL, end_day TEXT NOT NULL, state TEXT NOT NULL);
+     CREATE TABLE task (id TEXT PRIMARY KEY, title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '',
+       status TEXT NOT NULL, blocked_by TEXT, points INTEGER, priority TEXT NOT NULL DEFAULT 'normal',
+       sprint TEXT, repo TEXT, tags TEXT NOT NULL DEFAULT '[]', links TEXT NOT NULL DEFAULT '[]',
+       rank INTEGER NOT NULL, created INTEGER NOT NULL, changed INTEGER NOT NULL,
+       started INTEGER, done INTEGER, deleted INTEGER);
+     CREATE INDEX task_sprint ON task (sprint, rank);
+     CREATE TABLE task_pane (pane TEXT PRIMARY KEY, task TEXT NOT NULL, session TEXT);
+     CREATE TABLE task_event (id INTEGER PRIMARY KEY, task TEXT NOT NULL, at INTEGER NOT NULL,
+       who TEXT NOT NULL, kind TEXT NOT NULL, value TEXT);
+     CREATE INDEX task_event_task ON task_event (task, id);",
 ];
 
 pub struct Store {
-    db: Connection,
+    pub(crate) db: Connection,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

@@ -45,6 +45,7 @@ const call = (cmd, args) => invoke(cmd, args).catch((e) => { log("warn", cmd, "f
 
 function setTab(tab) {
   if (tab !== "board") window.SB?.term?.blur();
+  if (tab !== "tasks") window.SBTasks?.leave();
   // The terminal lives in a review's Claude column while that review shows.
   if (S.termHost && S.termHost !== tab) {
     S.termHost = null;
@@ -53,14 +54,17 @@ function setTab(tab) {
   }
   S.tab = tab;
   $("#view-board").hidden = tab !== "board";
-  $("#view-review").hidden = tab === "board";
+  $("#view-tasks").hidden = tab !== "tasks";
+  $("#view-review").hidden = tab === "board" || tab === "tasks";
   drawTabs();
   if (tab === "board") requestAnimationFrame(fitLive);
+  else if (tab === "tasks") window.SBTasks?.draw();
   else window.SBReview?.draw(tab);
 }
 
 function drawTabs() {
-  const tabs = [`<button class="tab" role="tab" data-tab="board" aria-selected="${S.tab === "board"}">Board</button>`];
+  const tabs = [`<button class="tab" role="tab" data-tab="board" aria-selected="${S.tab === "board"}">Board</button>`,
+    `<button class="tab" role="tab" data-tab="tasks" aria-selected="${S.tab === "tasks"}">Tasks</button>`];
   for (const r of S.reviews.values()) {
     const busy = ["fetching", "writing", "updating"].includes(r.status) ? '<i class="busy"></i>' : "";
     const label = r.kind === "local" ? `${esc(r.repo)} commits` : `#${esc(r.number)}${r.round > 1 ? ` R${r.round}` : ""}`;
@@ -531,6 +535,7 @@ window.addEventListener("keydown", (e) => {
     case "e": { const p = paneById(focused); return p && openNvim(p.tree); }
     case "n": return openLauncher();
     case "b": return setTab("board");
+    case "t": return setTab("tasks");
     case "r": { const ids = [...S.reviews.keys()]; return ids.length && setTab(ids[(ids.indexOf(S.tab) + 1) % ids.length]); }
     case "a": return cycleConnection();
     case "<": return nudgeTile(-1);

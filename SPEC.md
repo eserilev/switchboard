@@ -182,6 +182,7 @@ A live pane gets every key you type. Esc in Claude Code stops the agent. So app 
 | Leader, `n` | Launcher. |
 | Leader, `r` | Review tab. |
 | Leader, `b` | Board tab. |
+| Leader, `t` | Tasks tab (27). |
 | Leader, `a` | Switch the active connection. |
 | Leader, `<` / `>` | Move the focused tile one place left or right. |
 | Review: `j` / `k` | Next or previous step. |
@@ -1021,7 +1022,7 @@ Not checked: the full state space, because Apalache needs Java, which is not ins
 
 ## 27. Tasks
 
-Status: planned, not built. 27.13 gives the build phases.
+Status: phase 1 is built (27.13). Phases 2 and 3 are not built.
 
 A list of the tasks you work on, as in sprint planning. You write them in Switchboard, set their status, and start agents from them. Tasks live only in the local store. Switchboard never reads them from or writes them to an issue tracker (27.10).
 
@@ -1090,7 +1091,7 @@ A filter field at the top filters by text, tag, repo and priority. The filter ap
 
 ### 27.5 Keys
 
-The Tasks keys work only on the Tasks tab, and only when no text field and no terminal has focus. The review keys (7) work only on a review tab.
+The Tasks keys work only on the Tasks tab, and only when no text field and no terminal has focus. The review keys (7) work only on a review tab. The arrow keys do the same as `h`, `j`, `k` and `l`.
 
 | Keys | Action |
 |---|---|
@@ -1175,21 +1176,23 @@ The task panel shows the history. A sprint shows its done points for each day as
 Store version 10 adds these tables. `tags` and `links` are JSON lists.
 
 ```sql
-CREATE TABLE sprint (id TEXT PRIMARY KEY, name TEXT NOT NULL, goal TEXT,
-  start TEXT NOT NULL, end TEXT NOT NULL, state TEXT NOT NULL);       -- planned | open | closed
+CREATE TABLE sprint (id TEXT PRIMARY KEY, name TEXT NOT NULL, goal TEXT NOT NULL DEFAULT '',
+  start_day TEXT NOT NULL, end_day TEXT NOT NULL, state TEXT NOT NULL);   -- planned | open | closed
 CREATE TABLE task (id TEXT PRIMARY KEY, title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL, blocked_by TEXT, points INTEGER, priority TEXT NOT NULL DEFAULT 'normal',
-  sprint TEXT REFERENCES sprint(id), repo TEXT, tags TEXT NOT NULL DEFAULT '[]', links TEXT NOT NULL DEFAULT '[]',
+  sprint TEXT, repo TEXT, tags TEXT NOT NULL DEFAULT '[]', links TEXT NOT NULL DEFAULT '[]',
   rank INTEGER NOT NULL, created INTEGER NOT NULL, changed INTEGER NOT NULL,
   started INTEGER, done INTEGER, deleted INTEGER);
 CREATE TABLE task_pane (pane TEXT PRIMARY KEY, task TEXT NOT NULL, session TEXT);
 CREATE TABLE task_event (id INTEGER PRIMARY KEY, task TEXT NOT NULL, at INTEGER NOT NULL,
-  by TEXT NOT NULL, kind TEXT NOT NULL, value TEXT);                  -- by: you | cli | a pane id
+  who TEXT NOT NULL, kind TEXT NOT NULL, value TEXT);                 -- who: you | cli | a pane id
 ```
 
-Ranks are unique in each sprint and in the backlog. Gaps are allowed. A move sets the rank between the new neighbors. When there is no gap, the sprint renumbers in one transaction.
+`start_day` and `end_day` are not `start` and `end`, because `END` is an SQL keyword. `who` is not `by` for the same reason.
 
-The window gets `task_*` commands and a `task_changed` event (13.4). The socket `Request` gets the `Task*` requests of 27.7.
+Ranks are unique in each sprint and in the backlog. Each add and each move renumbers its list in the same transaction, with a step of 1024. A list holds tens of tasks, so the renumber is cheap.
+
+The window gets the commands `tasks`, `task_add`, `task_edit`, `task_status`, `task_move`, `task_delete`, `task_copy`, `task_history`, `sprint_new`, `sprint_edit` and `sprint_close`. After each change, the hub sends the whole list as a `tasks` event. A refused change sends nothing. The socket `Request` gets the `Task*` requests of 27.7.
 
 ```toml
 [tasks]
@@ -1216,6 +1219,13 @@ branch_prefix = "sb/"
 
 ### 27.13 Build phases
 
-1. **Tasks and one sprint.** Tasks with title, notes, status, Blocked by, priority, repo and rank. The backlog. One open sprint, with New and Close. The board and list views. Leader `t` and the keys except `s` and `Shift+J`/`Shift+K`. The status history. Delete with no archive. Store version 10.
+1. **Tasks and one sprint.** Built.
+   - Tasks with title, notes, status, Blocked by, priority, repo and rank. The backlog. One open sprint, with New, Edit and Close. Copy to backlog.
+   - The board and list views. Leader `t`, and the keys except `s`, `/` and `Shift+J`/`Shift+K`.
+   - The history. Delete with no archive. Store version 10, with the tables of phases 2 and 3.
+   - A new task in the Blocked column asks who or what blocks it, as a move to Blocked does.
+   - A new sprint lasts 14 days. The `[tasks]` config of 27.11 comes in phase 3.
+   - The store does not check that `task.sprint` names a sprint. SQLite foreign keys are off. The rules in `tasks.rs` check it.
+   - Tests: 5 unit and property tests in `tasks.rs` (3,000 random steps; a mutant with the closed-sprint guard off fails them), a hub test (`crates/sb/tests/tasks.rs`), and 36 window checks.
 2. **Agents.** Start agent, Link pane, the task title on the tile, lamp dots on cards, the "Agent finished" hint, and `sb task` with the rule of 27.7.
 3. **Planning.** Points, the burndown, planned sprints, Copy as Markdown, tags and the filter, the archive, the PR-merged poll, Review from a task, and `Shift+J`/`Shift+K`.

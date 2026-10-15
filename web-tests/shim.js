@@ -45,6 +45,78 @@ window.__data = {
     { kind: "+", old: null, new: 12, text: "let b = 2;" },
   ] }] },
 };
+// Tasks (SPEC 27): a small copy of the hub rules, and a `tasks` event after each change.
+const pad2 = (n) => String(n).padStart(2, "0");
+const dayOff = (n) => { const x = new Date(); x.setDate(x.getDate() + n); return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`; };
+const tk = (o) => Object.assign({ notes: "", status: "todo", blocked_by: null, priority: "normal", sprint: "s1", repo: null, created: 1, changed: 1, started: null, done: null }, o);
+window.__data.tasks = {
+  sprints: [{ id: "s0", name: "Sprint 0", goal: "", start: dayOff(-30), end: dayOff(-17), state: "closed" }, { id: "s1", name: "Sprint 1", goal: "Ship inclusion lists", start: dayOff(-3), end: dayOff(10), state: "open" }],
+  tasks: [
+    tk({ id: "t1", title: "Review PR 10071", rank: 1024, priority: "high", repo: "/c/lighthouse", status: "doing" }),
+    tk({ id: "t2", title: "Fix the slot 0 test", rank: 2048 }),
+    tk({ id: "t3", title: "Wait for the spec", rank: 3072, status: "blocked", blocked_by: "spec PR 4512" }),
+    tk({ id: "t4", title: "Old done task", rank: 1024, sprint: "s0", status: "done", done: 5 }),
+    tk({ id: "t5", title: "Write the design doc", rank: 1024, sprint: null, notes: "See **this**. <script>window.__xss = 2</script> ![img](https://evil.example/x.png) [bad](javascript:window.__xss=3) [good](https://example.com)" }),
+  ],
+};
+window.__data.history = { t1: [{ at: 1760000000, by: "you", kind: "created", value: "todo" }, { at: 1760000100, by: "you", kind: "status", value: "doing" }] };
+function taskShim(cmd, a) {
+  const d = window.__data.tasks;
+  const find = (id) => d.tasks.find((t) => t.id === id);
+  const closed = (t) => d.sprints.find((s) => s.id === t.sprint)?.state === "closed";
+  const renumber = (sprint, id, before) => {
+    const ids = d.tasks.filter((t) => (t.sprint || null) === (sprint || null) && t.id !== id).sort((x, y) => x.rank - y.rank).map((t) => t.id);
+    const at = before && ids.includes(before) ? ids.indexOf(before) : ids.length;
+    ids.splice(at, 0, id);
+    ids.forEach((x, i) => (find(x).rank = (i + 1) * 1024));
+  };
+  const status = (t, s, why) => {
+    if (s === "blocked" && !why) throw "a blocked task needs who or what blocks it";
+    t.blocked_by = s === "blocked" ? why : null;
+    t.done = s === "done" ? (t.done || 9) : null;
+    t.status = s;
+  };
+  let out = null;
+  switch (cmd) {
+    case "task_add": {
+      if (!a.task.title.trim()) throw "a task needs a title";
+      const t = tk({ id: `t${d.tasks.length + 10}`, title: a.task.title.trim(), status: a.task.status || "todo", sprint: a.task.sprint || null, rank: 0 });
+      d.tasks.push(t);
+      renumber(t.sprint, t.id, null);
+      out = t;
+      break;
+    }
+    case "task_status": { const t = find(a.id); if (closed(t)) throw "closed"; status(t, a.status, a.blockedBy); out = t; break; }
+    case "task_move": {
+      const t = find(a.id);
+      if (closed(t)) throw "closed";
+      if (a.to.status) status(t, a.to.status, a.to.blocked_by || t.blocked_by);
+      t.sprint = a.to.sprint;
+      renumber(t.sprint, t.id, a.to.before);
+      out = t;
+      break;
+    }
+    case "task_edit": { const t = find(a.id); Object.assign(t, a.fields); out = t; break; }
+    case "task_delete": d.tasks = d.tasks.filter((t) => t.id !== a.id); break;
+    case "task_copy": { const t = find(a.id); out = tk({ id: `t${d.tasks.length + 10}`, title: t.title, sprint: null, rank: 99999 }); d.tasks.push(out); break; }
+    case "sprint_new": out = Object.assign({ id: `s${d.sprints.length}`, state: "open" }, a.sprint); d.sprints.push(out); break;
+    case "sprint_edit": out = Object.assign(d.sprints.find((s) => s.id === a.id), a.sprint); break;
+    case "sprint_close": {
+      d.sprints.find((s) => s.id === a.id).state = "closed";
+      const next = a.next && Object.assign({ id: `s${d.sprints.length}`, state: "open" }, a.next);
+      if (next) d.sprints.push(next);
+      for (const [id, p] of a.places) {
+        const t = find(id);
+        if (p === "done") status(t, "done");
+        else { t.sprint = p === "next" ? next.id : null; renumber(t.sprint, t.id, null); }
+      }
+      out = next;
+      break;
+    }
+  }
+  setTimeout(() => window.__emit("tasks", structuredClone(d)), 0);
+  return structuredClone(out);
+}
 window.__calls = [];
 const handlers = {};
 window.__emit = (event, payload) => (handlers[event] || []).forEach((h) => h({ payload }));
@@ -109,6 +181,10 @@ window.__TAURI__ = {
           outside: [{ draft: 2, at: "beacon_node/gloas.rs:40", reason: "the line is outside GitHub's diff", text: "far away" }] } };
         case "review_post": return "https://github.com/sigp/lighthouse/pull/10071#pullrequestreview-1";
         case "log": return null;
+        case "tasks": return structuredClone(d.tasks);
+        case "task_history": return d.history[args.id] || [];
+        case "task_add": case "task_status": case "task_move": case "task_edit": case "task_delete": case "task_copy":
+        case "sprint_new": case "sprint_edit": case "sprint_close": return taskShim(cmd, args);
         default: return null;
       }
     },

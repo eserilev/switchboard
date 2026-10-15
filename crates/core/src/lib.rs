@@ -10,6 +10,7 @@ pub mod diff;
 pub mod hooks;
 pub mod hub;
 pub mod hub_review;
+pub mod hub_tasks;
 pub mod lamp;
 pub mod memory;
 pub mod nvim;
@@ -20,6 +21,7 @@ pub mod repos;
 pub mod review;
 pub mod store;
 pub mod take;
+pub mod tasks;
 pub mod tmux;
 
 /// Seconds since the Unix epoch.
