@@ -182,10 +182,29 @@ pub struct Hub {
     /// True while the nvim poll runs, so two never overlap.
     nvim_polling: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) me: Weak<Hub>,
+    /// The lock on `hub.lock`. It lives as long as the hub.
+    _lock: std::fs::File,
 }
 
 type Res<T> = Result<T, String>;
 type Env = Vec<(String, String)>;
+
+/// Takes the lock that keeps a second hub away from the same home. With two hubs,
+/// both would reattach tmux, sweep worktrees and take the socket.
+fn take_lock(path: &Path) -> Res<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .map_err(|err| format!("{}: {err}", path.display()))?;
+    // SAFETY: flock on a file descriptor that `f` owns.
+    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(format!("another Switchboard runs with {}", path.parent().unwrap_or(path).display()));
+    }
+    Ok(f)
+}
 
 /// True when tmux names a shell as the program in front, so a shell pane waits at
 /// its prompt.
@@ -219,6 +238,8 @@ impl Hub {
     pub fn start(paths: Paths, sb: PathBuf, sink: Arc<dyn Sink>) -> Res<Arc<Hub>> {
         tracing::info!(target: "sb::hub", home = %paths.home.display(), sock = %paths.sock().display(), "hub starting");
         paths.create_all().map_err(e)?;
+        // One hub for each home, before any change to tmux, the store or the socket.
+        let lock = take_lock(&paths.home.join("hub.lock"))?;
         std::fs::write(paths.tmux_conf(), tmux::CONF).map_err(e)?;
         let (config, config_error) = match Config::load(&paths.config) {
             Ok(c) => (c, None),
@@ -266,6 +287,7 @@ impl Hub {
             polling: std::sync::atomic::AtomicBool::new(false),
             nvim_polling: Arc::default(),
             me: me.clone(),
+            _lock: lock,
         });
         hub.keep_session()?;
         hub.reattach()?;

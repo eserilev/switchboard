@@ -58,7 +58,8 @@ impl AppSink {
             });
         let body = pane["summary"].as_str().unwrap_or("");
         let _ = std::process::Command::new("notify-send")
-            .args(["--app-name=Switchboard", &format!("{title}: {label}"), body])
+            // `--`: a title from a pane that starts with `-` is not a flag.
+            .args(["--app-name=Switchboard", "--", &format!("{title}: {label}"), body])
             .stdin(std::process::Stdio::null())
             .spawn();
     }
