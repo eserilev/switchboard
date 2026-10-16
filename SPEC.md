@@ -175,10 +175,14 @@ A live pane gets every key you type. Esc in Claude Code stops the agent. So app 
 | Keys | Action |
 |---|---|
 | `Ctrl+Space` | Leader. The next key goes to the app. The leader times out after 1.5 s. |
-| Leader, `x` | Expand the focused tile, or collapse the live pane. |
+| Leader, `x` | Expand the focused tile, or collapse the live pane. With a zoomed part (28), take the zoom back first. |
 | Leader, `j` / `k` | Next or previous unseen tile. |
 | Leader, `H` `J` `K` `L` | Move focus between tiles. |
-| Leader, `e` | nvim in the worktree of the focused pane. |
+| Leader, `e` | Show or hide nvim next to the focused agent (28). On another pane, nvim in its worktree. |
+| Leader, `s` | Show or hide the shell under the focused agent (28). |
+| Leader, `o` | The keys go to the next part of the live pane: claude, term, nvim (28). |
+| Leader, `h` / `l` | The keys go to the part on the left or the right (28). |
+| Leader, `z` | Zoom the part with the keys to the whole live pane, or take the zoom back (28). |
 | Leader, `n` | Launcher. |
 | Leader, `r` | Review tab. |
 | Leader, `b` | Board tab. |
@@ -288,8 +292,8 @@ Opening a layout starts all its panes. Panes that already run are not started ag
 
 ## 10. nvim
 
-- Every agent tile has an nvim action. Leader, `e` does the same.
-- There is one nvim for each worktree. It runs in its own pane next to the agent.
+- With `nvim` on PATH, every agent tile has an nvim chip. Leader, `e` does the same. nvim opens as a part of the live pane, next to the agent (28).
+- There is one nvim for each worktree. It runs in its own tmux pane. While an agent runs in the worktree, nvim has no tile.
 - The first open runs `nvim --listen $XDG_RUNTIME_DIR/switchboard/nvim/<tree-hash>.sock`.
 - Later opens use msgpack-RPC `nvim_cmd` with `edit +<line> <file>`. RPC works in every mode.
 - At start, the app removes sockets with no live nvim.
@@ -868,6 +872,9 @@ Where the build differs from the text above:
 - Tasks (27): Copy as Markdown lists Done, In review, In progress, Blocked and To do, in that order. When the copy fails, a dialog shows the text.
 - `--allowedTools`, `--disallowedTools` and `--mcp-config` take lists. The prompt of a `claude -p` run goes first, or one of them takes it.
 - Every `nvim --server` call times out after 3 s. An nvim that waits at "Press ENTER" never answers.
+- Parts (28): each part has its own tmux window size, from `refresh-client -C @window:WxH`. tmux 3.2 or newer has it. The live pane also gets its window size, so an old part size never stays on it.
+- Parts (28): the layout memory and the divider sizes are in the window's local storage, not in the store.
+- Parts (28): a chip of a part that does not run shows on the focused tile and the open tile, not on hover. A board redraw drops the hover, and the info line then jumps.
 - tmux `%pane:off` stops tmux from reading the pane. Tiles use `pause`.
 - A hidden keeper pane (`@sb_keep`) keeps the tmux session alive when every tile closes.
 - `remain-on-exit` is on for the whole server, so a pane that fails at once still shows its error.
@@ -1264,3 +1271,52 @@ branch_prefix = "sb/"
    - `Shift+J` and `Shift+K`, also Shift with the arrow keys. `sb task show` prints the points, the tags and the links.
    - The window gets `task_restore`. The `tasks` event has `archive`, `burn` (the status changes of the open sprint) and `merged`.
    - Tests: unit tests for points, tags, links and their history rows, the archive and the prune, planned sprints, the burn, and PR URLs. The random test adds restore and planned sprints; a mutant with two planned sprints and one with a restore into a closed sprint fail it. A hub test for the prune at start and Restore. A hub test (`crates/sb/tests/task_poll.rs`) with a stand-in `gh`: only `gh pr view --json state`, no read of a merged PR again, none for a done task. 48 more window checks; they run in America/New_York, so the burndown check crosses a DST change.
+
+## 28. Parts of the live pane
+
+Status: built.
+
+An agent pane gets nvim and a shell next to it, in its worktree, when you ask. It is not a fixed layout: you open only the part you want.
+
+### 28.1 What a part is
+
+- A part is the nvim or the shell of a worktree. Each worktree has at most one of each. Two agents in one worktree share them, so they never edit the same file in two nvims.
+- A part is a normal tmux pane of kind `nvim` or `shell`. While a claude pane that has not ended is in its worktree, it has no tile. When no such agent is left there, it gets its tile back. When a part is the live pane itself, for example from a review file:line with no agent, it keeps its tile.
+- The first shell of a worktree is its part. More shells there keep their tiles.
+
+### 28.2 The live pane with parts
+
+- nvim shows on the right at full height. The shell shows under the agent, on the left. They start at half the width and 220 px.
+- Drag a divider to change a size. A double-click resets it. The sizes stay for each worktree.
+- With a part, each part gets a header: its name, the worktree, zoom, and for nvim and the shell also stop and ×.
+- The part with the keys has a gold line on its header and a brighter header.
+- × hides a part. Its process keeps running. Stop ends it. When nvim has a buffer that is not saved, Stop asks first.
+- Zoom fills the live pane with one part. Leader, `x` takes the zoom back first, then collapses.
+- After an agent edit, nvim reloads the files with no changes (10), and its header shows "changed on disk, reloaded" for 6 s.
+- A window narrower than 1100 px shows one part at a time, in place of the agent.
+- The next open of the agent shows the parts that showed the last time, when they still run.
+- In a review tab, the live pane has no parts.
+
+### 28.3 Tiles and the top bar
+
+- An agent tile has an nvim chip and a term chip. A chip of a part that runs is filled, with a dot. It always shows.
+- `[+]` on the nvim chip: a buffer is not saved. It has no lamp color, so it does not look like an alert.
+- `▸` on the term chip: a command runs in the shell. When it ends, the chip shows `✓ term done` for 10 s.
+- The tooltip of a chip gives the rust-analyzer memory of that pane.
+- A click on a chip expands the agent with that part. The live title has an nvim and a term switch.
+- The top bar counts the parts that run but do not show.
+
+### 28.4 Hub
+
+- The hub streams a list of panes: the live pane first, then its parts. Output goes to the window with the pane id.
+- `pane_expand` makes one pane live and takes the old parts off the screen. `pane_attach(id, cols, rows)` adds a part at its own size and returns its screen. `pane_detach(id)` takes a part off; it never takes the live pane. `part_resize(id, cols, rows)` sizes one part. `pane_collapse` takes all off.
+- `shell_open(tree)` gives the shell of a worktree, or starts one.
+- A pane view has `busy` (a shell runs a command: tmux names a program in front that is not a shell) and `modified` (nvim has a listed buffer that is not saved). The tick reads `busy`. Every 2 s a thread asks each nvim for `modified`, so an nvim at a prompt never stops the tick. Such an nvim takes 3 s to fail, so the nvims after it get their answer later.
+- `pane_attach` names the live pane the window shows. When that is no longer the live pane, the attach fails, so a late attach never adds a part to another agent.
+- A close of the live pane takes its parts off the screen too.
+- The `nvim_reloaded` event names the worktree after a `checktime`.
+
+### 28.5 Tests
+
+- A hub test (`crates/sb/tests/parts.rs`) on a real tmux: one shell for each worktree, no part with no live pane or for another live pane, a resize right after an expand stays, a close of the live pane takes its parts, each window at its own size, output with the part's id, `busy` on and off, no output after a detach, a detach never takes the live pane, an expand and a close take parts off, and `modified` from a real nvim.
+- 30 window checks: Leader `e`, `s`, `z`, `x`, `h`, `l` and `o`; output and keys go to the right terminal; × keeps the pane; the hidden count; the layout memory; `[+]`; Stop asks; `▸` and `✓ done`; a part gets its tile back when no agent is left or the agent ended; Leader `z` does nothing in a narrow window.

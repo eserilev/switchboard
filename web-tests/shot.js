@@ -1,9 +1,18 @@
 // For screenshots: shows a view by the URL hash: #board, #live, #review, #tasks,
-// #tasks-panel, #tasks-list, #tasks-p3, #tasks-p3-list, #tasks-p3-panel or #launcher-task.
+// #tasks-panel, #tasks-list, #tasks-p3, #tasks-p3-list, #tasks-p3-panel, #launcher-task
+// or #parts.
 (async () => {
   await new Promise((r) => setTimeout(r, 400));
   const v = location.hash.slice(1);
   if (v === "live") window.SB.expand("p1");
+  if (v === "parts") {
+    await window.SB.expand("p1");
+    await window.SBParts.show("nvim", "p1");
+    await window.SBParts.show("term", "p1");
+    await new Promise((r) => setTimeout(r, 100));
+    window.__emit("pane_output", { pane: "pn1", data: btoa("  1 fn main() {\r\n  2     println!(\"hi\");\r\n  3 }\r\n") });
+    window.__emit("pane_output", { pane: "ps1", data: btoa("~/lighthouse $ cargo check\r\n    Finished dev\r\n~/lighthouse $ ") });
+  }
   if (v === "review") {
     window.SB.setTab("r1");
     await new Promise((r) => setTimeout(r, 200));

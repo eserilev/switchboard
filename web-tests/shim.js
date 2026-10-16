@@ -183,7 +183,17 @@ window.__TAURI__ = {
         case "review_step_note": return 'I am on step s2 "Proposal path passes slot - 1" (beacon_node/gloas.rs:11-12 (new)).';
         case "pane_expand": return btoa("\x1b[H\x1b[2Jhello from the live pane\r\n$ ");
         case "pane_open": return pane({ id: "p9", tree: args.req.repo });
-        case "nvim_open": case "review_nvim": return "p3";
+        case "review_nvim": return "p3";
+        // One nvim and one shell for each worktree (SPEC 28).
+        case "nvim_open": case "shell_open": {
+          const kind = cmd === "nvim_open" ? "nvim" : "shell";
+          const have = d.panes.find((x) => x.kind === kind && x.tree === args.tree);
+          if (have) return have.id;
+          const id = cmd === "nvim_open" ? "pn1" : "ps1";
+          d.panes.push(pane({ id, kind, tree: args.tree, lamp: "none", session: null, busy: false, modified: false }));
+          return id;
+        }
+        case "pane_attach": return btoa(`\x1b[H\x1b[2Jpart ${args.id}\r\n`);
         case "review_drafts_text": return "beacon_node/gloas.rs:11: nit: use safe_sub";
         case "review_open": return "r1";
         // A review of the unpushed commits of pane p1.

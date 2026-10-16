@@ -265,6 +265,17 @@ impl Tmux {
         .map(drop)
     }
 
+    /// Sets the size of the window of one pane, apart from the client size. Each
+    /// part of the live pane (SPEC 28) has its own size.
+    pub fn set_window_size(&self, pane: &str, cols: u16, rows: u16) -> Result<(), Error> {
+        let win = first_line(self.cmd(&format!("display -p -t {} '#{{window_id}}'", quote(pane)))?)?;
+        self.cmd(&format!(
+            "refresh-client -C {}",
+            quote(&format!("{win}:{}x{}", cols.max(2), rows.max(2)))
+        ))
+        .map(drop)
+    }
+
     /// Every pane id in the session.
     pub fn panes(&self) -> Result<Vec<String>, Error> {
         self.cmd(&format!("list-panes -s -t {SESSION} -F '#{{pane_id}}'"))

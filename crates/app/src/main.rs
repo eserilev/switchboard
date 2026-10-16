@@ -107,6 +107,10 @@ commands! {
     pane_expand(id: String) -> String => |h| h.expand(&id).map(|s| B64.encode(s));
     pane_collapse() -> () => |h| { h.collapse(); Ok(()) };
     pane_resize(cols: u16, rows: u16) -> () => |h| h.resize(cols, rows);
+    pane_attach(id: String, owner: String, cols: u16, rows: u16) -> String => |h| h.attach(&id, &owner, cols, rows).map(|s| B64.encode(s));
+    pane_detach(id: String) -> () => |h| { h.detach(&id); Ok(()) };
+    part_resize(id: String, cols: u16, rows: u16) -> () => |h| h.part_resize(&id, cols, rows);
+    shell_open(tree: String) -> String => |h| h.shell_open(std::path::Path::new(&tree));
     pane_seen(id: String) -> () => |h| h.seen(&id);
     pane_close(id: String) -> () => |h| h.close(&id);
     pane_rename(id: String, title: Option<String>) -> () => |h| h.rename(&id, title);
@@ -283,6 +287,10 @@ fn main() {
             pane_collapse,
             pane_input,
             pane_resize,
+            pane_attach,
+            pane_detach,
+            part_resize,
+            shell_open,
             pane_seen,
             pane_close,
             pane_rename,

@@ -56,6 +56,10 @@ pub struct PaneView {
     pub permit: Option<PermitView>,
     pub trust: bool,
     pub live: bool,
+    /// A shell runs a command, not its prompt (SPEC 28).
+    pub busy: bool,
+    /// nvim has a buffer that is not saved (SPEC 28).
+    pub modified: bool,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -93,6 +97,8 @@ pub(crate) struct Pane {
     pub started: u64,
     /// The tick saw this process exit. It stops a second alert for the same exit.
     pub dead: bool,
+    pub busy: bool,
+    pub modified: bool,
 }
 
 impl Pane {
@@ -135,7 +141,9 @@ pub struct ConnItem {
     pub limit_until: Option<u64>,
 }
 
-type Live = Arc<Mutex<Option<(String, String)>>>;
+/// (our id, tmux id) of each pane on screen. The first is the live pane; the
+/// others are its parts, nvim and the shell (SPEC 28).
+type Live = Arc<Mutex<Vec<(String, String)>>>;
 
 pub struct Hub {
     pub paths: Paths,
@@ -143,7 +151,7 @@ pub struct Hub {
     pub(crate) tmux: Arc<Tmux>,
     pub(crate) store: Mutex<Store>,
     pub(crate) panes: Mutex<Vec<Pane>>,
-    /// (our id, tmux id) of the live pane. The tmux reader thread reads it.
+    /// The panes on screen. The tmux reader thread reads it.
     live: Live,
     /// Waiting `sb permit` requests: permit id -> (pane id, reply channel).
     /// Lock order: `permits`, then `panes`, then `store`. `on_permit`,
@@ -163,16 +171,33 @@ pub struct Hub {
     pub(crate) trees: Mutex<()>,
     /// The last size the window asked for.
     size: Mutex<(u16, u16)>,
+    /// The size of each window on screen, by tmux id. The redraw after a show
+    /// reads it again, so a resize in the meantime stays (SPEC 28).
+    sizes: Arc<Mutex<HashMap<String, (u16, u16)>>>,
     /// The task PR links that GitHub reports as merged (SPEC 27.6). Merged is final,
     /// so a link in it is not read again.
     pub(crate) merged: Mutex<Vec<String>>,
     /// True while a PR poll runs, so two never overlap.
     pub(crate) polling: std::sync::atomic::AtomicBool,
+    /// True while the nvim poll runs, so two never overlap.
+    nvim_polling: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) me: Weak<Hub>,
 }
 
 type Res<T> = Result<T, String>;
 type Env = Vec<(String, String)>;
+
+/// True when tmux names a shell as the program in front, so a shell pane waits at
+/// its prompt.
+fn is_shell(command: &str) -> bool {
+    let own = std::env::var("SHELL").unwrap_or_default();
+    let own = own.rsplit('/').next().unwrap_or("");
+    // Nix runs a shell as `.zsh-wrapped`, and a login shell shows as `-zsh`.
+    let name = command.trim_start_matches(['.', '-']).trim_end_matches("-wrapped");
+    command.is_empty()
+        || name == own
+        || matches!(name, "bash" | "zsh" | "fish" | "sh" | "dash" | "ksh" | "nu" | "tcsh" | "csh")
+}
 
 /// `text` as one bracketed paste, with no control characters but newline and tab.
 /// So a text from an agent (a task note, a draft) can never end the paste early or
@@ -207,11 +232,14 @@ impl Hub {
         let socket = std::env::var("SB_TMUX_SOCKET").unwrap_or_else(|_| "switchboard".into());
         let tmux = Tmux::start(&socket, &paths.tmux_conf(), move |ev| match ev {
             tmux::Event::Output { pane, data } => {
-                let live = reader_live.lock().unwrap().clone();
-                if let Some((id, t)) = live {
-                    if t == pane {
-                        reader_sink.output(&id, &data);
-                    }
+                let id = reader_live
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|(_, t)| *t == pane)
+                    .map(|(id, _)| id.clone());
+                if let Some(id) = id {
+                    reader_sink.output(&id, &data);
                 }
             }
             tmux::Event::Exit(reason) => reader_sink.emit("tmux_exit", json!(reason)),
@@ -232,9 +260,11 @@ impl Hub {
             sb,
             reviews: Mutex::default(),
             size: Mutex::new((200, 50)),
+            sizes: Arc::default(),
             trees: Mutex::new(()),
             merged: Mutex::default(),
             polling: std::sync::atomic::AtomicBool::new(false),
+            nvim_polling: Arc::default(),
             me: me.clone(),
         });
         hub.keep_session()?;
@@ -415,19 +445,15 @@ impl Hub {
             trust: false,
             started: now(),
             dead: false,
+            busy: false,
+            modified: false,
         }
     }
 
     // ---------- views ----------
 
     fn view(&self, p: &Pane) -> PaneView {
-        let live = self
-            .live
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|(id, _)| id == &p.row.id)
-            .unwrap_or(false);
+        let live = self.live.lock().unwrap().iter().any(|(id, _)| id == &p.row.id);
         PaneView {
             id: p.row.id.clone(),
             kind: p.row.kind.clone(),
@@ -445,6 +471,8 @@ impl Hub {
             permit: p.permit.clone(),
             trust: p.trust,
             live,
+            busy: p.busy,
+            modified: p.modified,
         }
     }
 
@@ -662,11 +690,18 @@ impl Hub {
         if let Some(t) = tid {
             let _ = self.tmux.kill_pane(&t);
         }
-        {
+        // The live pane takes its parts with it. A part goes alone.
+        let off: Vec<(String, String)> = {
             let mut live = self.live.lock().unwrap();
-            if live.as_ref().map(|(l, _)| l == id).unwrap_or(false) {
-                *live = None;
+            if live.first().map(|(l, _)| l == id).unwrap_or(false) {
+                std::mem::take(&mut *live)
+            } else {
+                live.retain(|(l, _)| l != id);
+                vec![]
             }
+        };
+        for (_, t) in off.iter().skip(1) {
+            let _ = self.tmux.set_streaming(t, false);
         }
         self.store
             .lock()
@@ -721,33 +756,81 @@ impl Hub {
     // ---------- the live pane ----------
 
     /// Makes a pane live and returns its screen: the scrollback, then the cursor.
+    /// The parts of the old live pane leave the screen too.
     pub fn expand(&self, id: &str) -> Res<Vec<u8>> {
         tracing::info!(target: "sb::hub", pane = id, "expand");
         let tid = self.tmux_id(id)?;
-        let old = self
-            .live
-            .lock()
-            .unwrap()
-            .replace((id.to_owned(), tid.clone()));
-        if let Some((_, t)) = old.filter(|(_, t)| *t != tid) {
+        let old = std::mem::replace(&mut *self.live.lock().unwrap(), vec![(id.to_owned(), tid.clone())]);
+        for (_, t) in old.iter().filter(|(_, t)| *t != tid) {
+            let _ = self.tmux.set_streaming(t, false);
+        }
+        let (cols, rows) = *self.size.lock().unwrap();
+        self.show(id, &tid, cols, rows)
+    }
+
+    /// Adds a part (nvim or the shell) to the screen, at its own size, and returns
+    /// its screen (SPEC 28). The window sizes its terminal first.
+    /// `owner` is the live pane the window shows, so a late attach never adds a
+    /// part to another agent.
+    pub fn attach(&self, id: &str, owner: &str, cols: u16, rows: u16) -> Res<Vec<u8>> {
+        tracing::info!(target: "sb::hub", pane = id, owner, cols, rows, "attach");
+        let tid = self.tmux_id(id)?;
+        {
+            let mut live = self.live.lock().unwrap();
+            if live.first().map(|(l, _)| l != owner).unwrap_or(true) {
+                return Err(format!("{owner} is not the live pane"));
+            }
+            if !live.iter().any(|(l, _)| l == id) {
+                live.push((id.to_owned(), tid.clone()));
+            }
+        }
+        self.show(id, &tid, cols, rows)
+    }
+
+    /// Takes a part off the screen. Its process keeps running.
+    pub fn detach(&self, id: &str) {
+        tracing::info!(target: "sb::hub", pane = id, "detach");
+        let taken: Vec<(String, String)> = {
+            let mut live = self.live.lock().unwrap();
+            // The live pane itself goes only with a collapse.
+            let keep_first = live.first().map(|(l, _)| l == id).unwrap_or(false);
+            if keep_first {
+                return;
+            }
+            let (out, keep): (Vec<_>, Vec<_>) = live.drain(..).partition(|(l, _)| l == id);
+            *live = keep;
+            out
+        };
+        for (_, t) in taken {
             let _ = self.tmux.set_streaming(&t, false);
         }
-        let lines = self.tmux.capture(&tid, "-").map_err(e)?;
-        let (x, y) = self.tmux.cursor(&tid).map_err(e)?;
-        self.tmux.set_streaming(&tid, true).map_err(e)?;
+    }
+
+    /// The screen of a pane that goes on screen, and its stream on.
+    fn show(&self, id: &str, tid: &str, cols: u16, rows: u16) -> Res<Vec<u8>> {
+        self.sizes.lock().unwrap().insert(tid.to_owned(), (cols, rows));
+        let _ = self.tmux.set_window_size(tid, cols, rows);
+        let lines = self.tmux.capture(tid, "-").map_err(e)?;
+        let (x, y) = self.tmux.cursor(tid).map_err(e)?;
+        self.tmux.set_streaming(tid, true).map_err(e)?;
         let mut screen = b"\x1b[H\x1b[2J\x1b[3J".to_vec();
         screen.extend(lines.join("\r\n").into_bytes());
         screen.extend(format!("\x1b[{};{}H", y + 1, x + 1).into_bytes());
         self.seen(id)?;
         // Output in the gap between the capture and `continue` is lost. A size
         // change makes the program in the pane draw its whole screen again.
-        let (cols, rows) = *self.size.lock().unwrap();
+        // The size is read again before each step: the window can resize meanwhile.
         let tmux = Arc::clone(&self.tmux);
+        let sizes = Arc::clone(&self.sizes);
+        let tid = tid.to_owned();
         std::thread::spawn(move || {
+            let now = || sizes.lock().unwrap().get(&tid).copied().unwrap_or((cols, rows));
             std::thread::sleep(Duration::from_millis(80));
-            let _ = tmux.set_size(cols, rows.saturating_sub(1).max(2));
+            let (c, r) = now();
+            let _ = tmux.set_window_size(&tid, c, r.saturating_sub(1).max(2));
             std::thread::sleep(Duration::from_millis(80));
-            let _ = tmux.set_size(cols, rows);
+            let (c, r) = now();
+            let _ = tmux.set_window_size(&tid, c, r);
         });
         Ok(screen)
     }
@@ -755,11 +838,13 @@ impl Hub {
     pub fn collapse(&self) {
         tracing::info!(target: "sb::hub", "collapse");
         // Take the value first: an `if let` on the guard keeps the lock for the whole block.
-        let taken = self.live.lock().unwrap().take();
-        if let Some((id, t)) = taken {
-            let _ = self.tmux.set_streaming(&t, false);
+        let taken = std::mem::take(&mut *self.live.lock().unwrap());
+        for (_, t) in &taken {
+            let _ = self.tmux.set_streaming(t, false);
+        }
+        if let Some((id, _)) = taken.first() {
             if let Ok(panes) = self.panes.lock() {
-                if let Some(p) = panes.iter().find(|p| p.row.id == id) {
+                if let Some(p) = panes.iter().find(|p| p.row.id == *id) {
                     self.emit_pane(p, false);
                 }
             }
@@ -788,10 +873,25 @@ impl Hub {
         Ok(())
     }
 
+    /// The size of the live pane's terminal. New windows take it too.
     pub fn resize(&self, cols: u16, rows: u16) -> Res<()> {
         tracing::debug!(target: "sb::hub", cols, rows, "resize");
         *self.size.lock().unwrap() = (cols, rows);
-        self.tmux.set_size(cols, rows).map_err(e)
+        self.tmux.set_size(cols, rows).map_err(e)?;
+        let first = self.live.lock().unwrap().first().map(|(_, t)| t.clone());
+        if let Some(t) = first {
+            self.sizes.lock().unwrap().insert(t.clone(), (cols, rows));
+            self.tmux.set_window_size(&t, cols, rows).map_err(e)?;
+        }
+        Ok(())
+    }
+
+    /// The size of a part's terminal (SPEC 28).
+    pub fn part_resize(&self, id: &str, cols: u16, rows: u16) -> Res<()> {
+        tracing::debug!(target: "sb::hub", pane = id, cols, rows, "part resize");
+        let tid = self.tmux_id(id)?;
+        self.sizes.lock().unwrap().insert(tid.clone(), (cols, rows));
+        self.tmux.set_window_size(&tid, cols, rows).map_err(e)
     }
 
     pub fn seen(&self, id: &str) -> Res<()> {
@@ -1001,13 +1101,7 @@ impl Hub {
                 t
             }
         };
-        let live = self
-            .live
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|(l, _)| l == id)
-            .unwrap_or(false);
+        let live = self.live.lock().unwrap().iter().any(|(l, _)| l == id);
         let _ = self.tmux.set_streaming(&tid, live);
         let pid = self
             .tmux
@@ -1015,7 +1109,9 @@ impl Hub {
             .ok()
             .and_then(|p| p.parse().ok());
         if live {
-            *self.live.lock().unwrap() = Some((id.to_owned(), tid.clone()));
+            for l in self.live.lock().unwrap().iter_mut().filter(|(l, _)| l == id) {
+                l.1 = tid.clone();
+            }
         }
         self.with_pane(id, false, |p| {
             p.tmux = Some(tid);
@@ -1216,9 +1312,67 @@ impl Hub {
 
     fn nvim_checktime(&self, tree: &Path) {
         let sock = nvim::socket(&self.paths.nvim_dir(), tree);
-        if sock.exists() {
-            let _ = nvim::expr(&sock, nvim::CHECKTIME);
+        if sock.exists() && nvim::expr(&sock, nvim::CHECKTIME).is_ok() {
+            // The window says so in the nvim part (SPEC 28).
+            self.sink.emit("nvim_reloaded", json!(tree.to_string_lossy()));
         }
+    }
+
+    /// Asks each nvim if it has a buffer that is not saved, on its own thread: an
+    /// nvim at a prompt takes 3 s to fail (SPEC 28).
+    fn poll_nvim(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        let list: Vec<(String, String)> = self
+            .panes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.row.kind == "nvim" && p.tmux.is_some() && !p.dead)
+            .map(|p| (p.row.id.clone(), p.row.tree.clone()))
+            .collect();
+        if list.is_empty() || self.nvim_polling.swap(true, SeqCst) {
+            return;
+        }
+        let hub = self.arc();
+        let flag = Arc::clone(&self.nvim_polling);
+        std::thread::spawn(move || {
+            struct Done(Arc<std::sync::atomic::AtomicBool>);
+            impl Drop for Done {
+                fn drop(&mut self) {
+                    self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            let _done = Done(flag);
+            for (id, tree) in list {
+                let sock = nvim::socket(&hub.paths.nvim_dir(), Path::new(&tree));
+                let Ok(n) = nvim::expr(&sock, nvim::MODIFIED) else { continue };
+                let modified = n.trim().parse::<u32>().map(|n| n > 0).unwrap_or(false);
+                let mut panes = hub.panes.lock().unwrap();
+                if let Some(p) = panes.iter_mut().find(|p| p.row.id == id && p.modified != modified) {
+                    p.modified = modified;
+                    hub.emit_pane(p, false);
+                }
+            }
+        });
+    }
+
+    /// The shell of a worktree (SPEC 28): the one that runs there, or a new one.
+    pub fn shell_open(&self, tree: &Path) -> Res<String> {
+        tracing::info!(target: "sb::hub", tree = %tree.display(), "shell open");
+        let existing = self
+            .panes
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|p| p.row.kind == "shell" && Path::new(&p.row.tree) == tree && p.tmux.is_some() && !p.dead)
+            .map(|p| p.row.id.clone());
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+        let repo = repos::main_checkout(tree)
+            .and_then(|m| m.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "shell".into());
+        Ok(self.spawn("shell", &repo, tree, None, Start::default())?.id)
     }
 
     // ---------- repos and layouts ----------
@@ -1420,11 +1574,14 @@ impl Hub {
     fn tick(&self, n: u64) {
         let Ok(lines) = self
             .tmux
-            .list("#{pane_id}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_pid}")
+            .list("#{pane_id}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_pid}\t#{pane_current_command}")
         else {
             return;
         };
-        let state: HashMap<String, (bool, i32, Option<u32>)> = lines
+        if n.is_multiple_of(2) {
+            self.poll_nvim();
+        }
+        let state: HashMap<String, (bool, i32, Option<u32>, String)> = lines
             .iter()
             .filter_map(|l| {
                 let f: Vec<&str> = l.split('\t').collect();
@@ -1434,6 +1591,7 @@ impl Hub {
                         f.get(1) == Some(&"1"),
                         f.get(2).and_then(|s| s.parse().ok()).unwrap_or(0),
                         f.get(3).and_then(|s| s.parse().ok()),
+                        f.get(4).copied().unwrap_or("").to_owned(),
                     ),
                 ))
             })
@@ -1450,10 +1608,11 @@ impl Hub {
         let mut ended = vec![];
         for (id, tid) in ids {
             let Some(tid) = tid else { continue };
-            let Some(&(dead, status, pid)) = state.get(&tid) else {
+            let Some((dead, status, pid, command)) = state.get(&tid) else {
                 gone.push(id);
                 continue;
             };
+            let (dead, status, pid) = (*dead, *status, *pid);
             let tail = self
                 .tmux
                 .capture(&tid, &format!("-{}", TAIL_LINES * 3))
@@ -1480,6 +1639,11 @@ impl Hub {
                 changed = true;
             }
             p.pid = pid.or(p.pid);
+            let busy = p.row.kind == "shell" && !dead && !is_shell(command);
+            if p.busy != busy {
+                p.busy = busy;
+                changed = true;
+            }
             if dead && !p.dead {
                 p.dead = true;
                 if p.row.kind == "claude" {
@@ -1628,6 +1792,16 @@ fn request_kind(r: &Request) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_names_mean_the_prompt() {
+        for c in ["bash", "zsh", "-zsh", ".zsh-wrapped", "fish", ""] {
+            assert!(is_shell(c), "{c}");
+        }
+        for c in ["cargo", "sleep", "nvim", "python3"] {
+            assert!(!is_shell(c), "{c}");
+        }
+    }
 
     #[test]
     fn permit_ids_never_repeat() {

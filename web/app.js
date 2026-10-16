@@ -100,6 +100,10 @@ function nextConnection(current) {
   return free[0]?.name;
 }
 
+// The tiles on the board. The nvim and shell of an agent are its parts (SPEC 28).
+// A part that is the live pane itself keeps its tile, as every live pane does.
+const tiles = () => S.panes.filter((p) => p.id === S.live || !window.SBParts?.isPart(p));
+
 function meta(p) {
   const parts = [p.repo];
   if (p.branch) parts.push(p.branch);
@@ -109,7 +113,7 @@ function meta(p) {
 }
 
 function tile(p) {
-  const nvimBtn = p.kind !== "nvim" && S.settings.nvim ? `<button class="tool" data-nvim>nvim</button>` : "";
+  const nvimBtn = p.kind === "claude" && window.SBParts ? SBParts.chips(p) : p.kind !== "nvim" && S.settings.nvim ? `<button class="tool" data-nvim>nvim</button>` : "";
   const state = p.lamp === "none" ? p.kind : LABEL[p.lamp] || p.lamp;
   const reviewBtn = p.kind === "claude" ? `<button class="tool" data-lreview title="Review the commits that are not pushed">review</button>` : "";
   const taskBtn = p.kind !== "nvim" ? `<button class="tool" data-ptaskmenu title="Link this pane to a task">task</button>` : "";
@@ -142,7 +146,7 @@ function drawBoardNow() {
   // A redraw in the middle of a drag throws away the tile under the pointer.
   if (drag?.on) { drawLater = true; return; }
   // The open pane keeps its tile, so the other tiles do not move (SPEC 6).
-  $("#board").innerHTML = S.panes.map(tile).join("");
+  $("#board").innerHTML = tiles().map(tile).join("");
   $("#view-board").classList.toggle("has-live", !!S.live);
   $("#bgutter").hidden = !S.live || S.termHost !== null;
   drawTally();
@@ -155,8 +159,10 @@ function drawTally() {
   $("#tally").innerHTML = URGENT.filter((s) => n[s])
     .map((s) => `<b style="color:${COLOR[s]}" data-jump="${s}"><i class="dot"></i>${n[s]} ${LABEL[s].toLowerCase()}</b>`)
     .join("");
+  const hidden = window.SBParts?.hiddenCount() || 0;
+  if (hidden) $("#tally").insertAdjacentHTML("beforeend", `<span class="phidden" title="nvim and shells that run but do not show">${hidden} hidden</span>`);
 }
-$("#tally").addEventListener("click", () => nextUnseen(1));
+$("#tally").addEventListener("click", (e) => { if (e.target.closest("b")) nextUnseen(1); });
 
 function upsert(p) {
   const i = S.panes.findIndex((x) => x.id === p.id);
@@ -224,7 +230,7 @@ function moveTile(id, target, after) {
 
 /// Moves the focused tile one place left (-1) or right (+1).
 function nudgeTile(d) {
-  const ids = S.panes.map((p) => p.id);
+  const ids = tiles().map((p) => p.id);
   const i = ids.indexOf(S.focus);
   const j = i + d;
   if (i < 0 || j < 0 || j >= ids.length) return;
@@ -243,6 +249,7 @@ $("#board").addEventListener("click", (e) => {
   e.stopPropagation();
   if (b.dataset.close !== undefined) return call("pane_close", { id });
   if (b.dataset.nvim !== undefined) return openNvim(paneById(id).tree);
+  if (b.dataset.part) return window.SBParts?.show(b.dataset.part, id);
   if (b.dataset.lreview !== undefined) return openLocalReview(id);
   if (b.dataset.ptask) return window.SBTasks?.open(b.dataset.ptask);
   if (b.dataset.ptaskmenu !== undefined) return window.SBTasks?.menu(id, b);
@@ -335,7 +342,7 @@ let drawn = false;
 let held = [];
 let firstOutput = null;
 listen("pane_output", (e) => {
-  if (e.payload.pane !== S.live) return;
+  if (e.payload.pane !== S.live) return window.SBParts?.output(e.payload.pane, bytes(e.payload.data));
   if (firstOutput === S.live) { firstOutput = null; log("info", "first output reached the window for", S.live); }
   const b = bytes(e.payload.data);
   drawn ? term.write(b) : held.push(b);
@@ -349,6 +356,8 @@ function fitLive() {
 let fitTimer;
 const fitSoon = () => { clearTimeout(fitTimer); fitTimer = setTimeout(fitLive, 60); };
 new ResizeObserver(fitSoon).observe($("#live"));
+// A part that shows or hides changes the size of the agent's terminal only.
+new ResizeObserver(fitSoon).observe($("#term"));
 // Full screen and back also fires a window resize: fit then too.
 window.addEventListener("resize", fitSoon);
 
@@ -404,6 +413,7 @@ async function expand(id, host) {
   if (host) {
     // A host of a tab that no longer shows: do nothing.
     if (S.tab === "board" || !host.isConnected) return;
+    window.SBParts?.reset();
     S.termHost = S.tab;
     if ($("#live").parentElement !== host) host.appendChild($("#live"));
   } else {
@@ -430,6 +440,7 @@ async function expand(id, host) {
     held.splice(0).forEach((b) => term.write(b));
     drawn = true;
     term.focus();
+    if (!host) window.SBParts?.afterExpand(id);
     log("info", "expanded", id, "cols", term.cols, "rows", term.rows, "focus in terminal:", document.activeElement === term.textarea);
   } catch (e) {
     toast(e);
@@ -440,6 +451,7 @@ async function expand(id, host) {
 function collapse() {
   const was = S.live;
   S.live = null;
+  window.SBParts?.reset();
   $("#live").hidden = true;
   invoke("pane_collapse").catch(() => {});
   drawBoardNow();
@@ -452,7 +464,7 @@ function drawLiveTitle() {
   const p = S.live && paneById(S.live);
   if (!p || renaming) return;
   const state = p.lamp === "none" ? p.kind : LABEL[p.lamp] || p.lamp;
-  const nvimBtn = p.kind !== "nvim" && S.settings.nvim ? `<button class="tool" data-nvim>nvim</button>` : "";
+  const nvimBtn = window.SBParts?.toggles(p) ?? (p.kind !== "nvim" && S.settings.nvim ? `<button class="tool" data-nvim>nvim</button>` : "");
   const reviewBtn = p.kind === "claude" && !S.termHost ? `<button class="tool" data-lreview title="Review the commits that are not pushed">review</button>` : "";
   $("#livetitle").innerHTML = `<span class="name">${esc(paneName(p))}</span><span class="state" style="color:var(--muted)">${esc(state)}</span>
     ${taskLine(p)}<span class="psum meta" style="border:0;padding:0;font:500 11px/1 var(--mono);color:var(--muted)">${esc(meta(p))}</span>${actions(p).replace('class="tact"', 'class="tact" style="margin:0"')}
@@ -464,6 +476,7 @@ $("#livetitle").addEventListener("click", (e) => {
   if (!b || !p) return;
   if (b.dataset.collapse !== undefined) return collapse();
   if (b.dataset.nvim !== undefined) return openNvim(p.tree);
+  if (b.dataset.ptoggle) return window.SBParts?.toggle(b.dataset.ptoggle, p.id);
   if (b.dataset.lreview !== undefined) return openLocalReview(p.id);
   if (b.dataset.ptask) return window.SBTasks?.open(b.dataset.ptask);
   if (b.dataset.allow) return call("permit_answer", { permit: b.dataset.allow, allow: true });
@@ -484,9 +497,13 @@ async function openLocalReview(pane) {
   }
 }
 
+// nvim in a worktree, at a file and line when given. With an agent in the worktree,
+// nvim opens next to it (SPEC 28). Else it gets its own tile.
 async function openNvim(tree, file, line) {
   const id = await call("nvim_open", { tree, file: file ?? null, line: line ?? null });
   await refreshPanes();
+  const agent = S.panes.find((p) => p.kind === "claude" && p.tree === tree);
+  if (agent && window.SBParts) return SBParts.show("nvim", agent.id);
   expand(id);
 }
 
@@ -497,7 +514,7 @@ function nextUnseen(dir) {
 }
 
 function moveFocus(d) {
-  const ids = S.panes.map((p) => p.id);
+  const ids = tiles().map((p) => p.id);
   if (!ids.length) return;
   const i = Math.max(0, ids.indexOf(S.focus));
   S.focus = ids[(i + d + ids.length) % ids.length];
@@ -539,12 +556,24 @@ window.addEventListener("keydown", (e) => {
   e.stopPropagation();
   const focused = document.activeElement?.closest?.(".pane")?.dataset.id || S.focus || S.live;
   switch (e.key) {
-    case "x": return S.live && (!focused || focused === S.live) ? collapse() : focused && expand(focused);
+    case "x":
+      if (S.live && (!focused || focused === S.live) && window.SBParts?.unzoom()) return;
+      return S.live && (!focused || focused === S.live) ? collapse() : focused && expand(focused);
     case "j": return nextUnseen(1);
     case "k": return nextUnseen(-1);
     case "J": case "L": return moveFocus(1);
     case "K": case "H": return moveFocus(-1);
-    case "e": { const p = paneById(focused); return p && openNvim(p.tree); }
+    case "e": case "s": {
+      // An agent shows nvim or its shell as a part (SPEC 28). Another pane opens nvim.
+      const p = paneById(focused);
+      const kind = e.key === "e" ? "nvim" : "term";
+      if (p?.kind === "claude" && window.SBParts) return SBParts.toggle(kind, p.id);
+      return p && kind === "nvim" && openNvim(p.tree);
+    }
+    case "o": return window.SBParts?.cycle();
+    case "h": return window.SBParts?.side(-1);
+    case "l": return window.SBParts?.side(1);
+    case "z": return window.SBParts?.zoom();
     case "n": return openLauncher();
     case "b": return setTab("board");
     case "t": return setTab("tasks");
@@ -787,12 +816,14 @@ listen("panes", (e) => {
   S.panes = e.payload;
   if (S.live && !paneById(S.live)) collapse();
   else drawBoard();
+  window.SBParts?.panes();
   window.SBReview?.panes?.();
   window.SBTasks?.panes();
 });
 listen("pane", (e) => {
   upsert(e.payload);
   drawBoard();
+  window.SBParts?.panes();
   window.SBReview?.panes?.();
   window.SBTasks?.panes();
 });
@@ -831,7 +862,7 @@ function copyText(text) {
   return ok;
 }
 
-window.SB = { S, invoke, call, listen, esc, toast, setTab, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, openLauncher, paneName, copyText, LABEL, term, $ };
+window.SB = { S, invoke, call, listen, esc, toast, setTab, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, openLauncher, paneName, copyText, LABEL, term, isLeader, bytes, $ };
 
 (async function start() {
   try {

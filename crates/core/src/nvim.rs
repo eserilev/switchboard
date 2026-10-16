@@ -80,6 +80,9 @@ pub fn edit_expr(file: &str, line: u32) -> String {
 /// Reloads every loaded buffer with no unsaved changes. A changed buffer stays as is.
 pub const CHECKTIME: &str = "execute('lua for _, b in ipairs(vim.api.nvim_list_bufs()) do if vim.api.nvim_buf_is_loaded(b) and not vim.bo[b].modified then vim.cmd(\"checktime \" .. b) end end')";
 
+/// The number of listed buffers with changes that are not saved.
+pub const MODIFIED: &str = "len(getbufinfo({'bufmodified': 1, 'buflisted': 1}))";
+
 pub fn installed() -> bool {
     Command::new("nvim")
         .arg("--version")

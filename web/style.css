@@ -122,6 +122,35 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
    pane draws for the old width. */
 .live { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; margin: 12px 12px 0; border: 1px solid var(--accent); border-radius: 8px; overflow: hidden; }
 .live .term { min-height: 0; min-width: 0; overflow: hidden; padding: 6px 0 0 8px; background: var(--bg); }
+/* The parts of the live pane (SPEC 28): the agent and the shell on the left, nvim
+   on the right at full height. A part header shows only when a part shows. */
+.lparts { display: flex; min-height: 0; min-width: 0; }
+.lleft { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.part { display: grid; grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); min-width: 0; min-height: 0; }
+#pagent { flex: 1 1 0; }
+#pterm { flex: 0 0 var(--term-h, 220px); }
+#pnvim { flex: 0 0 var(--nvim-w, 50%); }
+#pterm.fill, #pnvim.fill { flex: 1 1 0; }
+.lparts > .gutter.gx { width: 9px; flex: none; }
+.lleft > .gutter.gy { margin: 0; flex: none; }
+.parthead { display: none; align-items: center; gap: 10px; height: 30px; padding: 0 8px 0 12px; font: 500 11px/1 var(--mono); color: color-mix(in srgb, var(--muted) 80%, var(--bg)); background: color-mix(in srgb, var(--panel) 70%, var(--bg)); border-bottom: 1px solid var(--line); min-width: 0; }
+.lparts.split .parthead { display: flex; }
+.parthead.on { color: var(--fg); background: var(--panel-2); box-shadow: inset 0 3px 0 var(--accent); }
+.parthead .pn { font-weight: 700; }
+.parthead .pp { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.parthead .sp { flex: 1; }
+.parthead .tool { height: 22px; }
+.parthead .prel { color: var(--live); white-space: nowrap; }
+.parthead .pmod { color: var(--muted); white-space: nowrap; }
+.parthead .pask { color: var(--fg); white-space: nowrap; }
+.ptoggles { display: inline-flex; gap: 4px; flex: none; }
+.ptog[aria-pressed="true"], .pchip.on { border-color: color-mix(in srgb, var(--muted) 60%, var(--line)); background: #2a3a4a; color: var(--fg); }
+.pchip .pplus { color: var(--muted); }
+/* A chip of a part that does not run shows only on the focused or open tile, so
+   the info line keeps its room. Not on hover: a board redraw drops the hover. */
+.pchip.off { display: none; }
+.pane.focused .pchip.off, .pane.is-live .pchip.off { display: inline-block; }
+.phidden { color: var(--muted); }
 
 /* ---------- launcher ---------- */
 .launcher { position: fixed; inset: 0; z-index: 30; display: grid; place-items: start center; padding: 70px 16px 16px; background: color-mix(in srgb, var(--bg) 70%, transparent); }

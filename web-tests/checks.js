@@ -27,7 +27,7 @@
     // the info line, so a long name keeps its room.
     const row = $('.pane[data-id="p1"] .ptitle');
     check("the title row holds only the name, the state and Close", [...row.querySelectorAll("button")].map((b) => b.getAttribute("aria-label")).join() === "Close"
-      && $$('.pane[data-id="p1"] .pmeta .ptools [data-ptaskmenu], .pane[data-id="p1"] .pmeta .ptools [data-lreview], .pane[data-id="p1"] .pmeta .ptools [data-nvim]').length === 3);
+      && $$('.pane[data-id="p1"] .pmeta .ptools [data-ptaskmenu], .pane[data-id="p1"] .pmeta .ptools [data-lreview], .pane[data-id="p1"] .pmeta .ptools [data-part="nvim"]').length === 3);
     const name = $('.pane[data-id="p1"] .name');
     check("the name takes most of the title row", name.getBoundingClientRect().width > row.getBoundingClientRect().width * 0.6, `${name.getBoundingClientRect().width} of ${row.getBoundingClientRect().width}`);
     check("the task button shows with no hover", getComputedStyle($('.pane[data-id="p2"] [data-ptaskmenu]')).display !== "none");
@@ -1335,6 +1335,114 @@
     await wait(30);
   }
     window.SB.setTab("board");
+  }
+
+  // Parts of the live pane (SPEC 28): nvim and the shell next to an agent.
+  {
+    const PT = window.SBParts;
+    const leader = (k) => { key(" ", { ctrl: true }); key(k); };
+    const text = (t) => { const b = t.buffer.active; let s = ""; for (let i = 0; i < b.length; i++) s += b.getLine(i).translateToString(true) + "\n"; return s; };
+    if (window.SB.S.live) window.SB.collapse();
+    await window.SB.expand("p1");
+    await wait(60);
+    check("a lone agent shows no part headers", !$("#lparts").classList.contains("split") && $("#pnvim").hidden && $("#pterm").hidden);
+    leader("e");
+    await wait(150);
+    check("Leader e opens nvim in the agent's worktree, next to it", called("nvim_open").at(-1)?.[1].tree === "/c/lighthouse" && called("pane_attach").at(-1)?.[1].id === "pn1" && !$("#pnvim").hidden && !$("#pagent").hidden && $("#lparts").classList.contains("split"));
+    check("the hub gets the size of the nvim terminal", [...called("pane_attach"), ...called("part_resize")].filter((c) => c[1].id === "pn1").length && [...window.__calls].reverse().find((c) => (c[0] === "pane_attach" || c[0] === "part_resize") && c[1].id === "pn1")?.[1].cols === PT.T.nvim.term.cols && PT.T.nvim.term.cols > 10, JSON.stringify(called("pane_attach").at(-1)?.[1]) + " " + PT.T.nvim.term.cols);
+    check("nvim draws its screen in its own terminal", text(PT.T.nvim.term).includes("part pn1") && !screen().includes("part pn1"));
+    check("the nvim of an agent has no tile", !$('#board .pane[data-id="pn1"]') && !!$('#board .pane[data-id="p3"]'));
+    check("the agent tile shows a running nvim chip", /● nvim/.test($('.pane[data-id="p1"] [data-part="nvim"]')?.textContent || ""), $('.pane[data-id="p1"] .ptools')?.innerHTML);
+    check("the live title shows nvim pressed", $('#livetitle [data-ptoggle="nvim"]')?.getAttribute("aria-pressed") === "true" && $('#livetitle [data-ptoggle="term"]')?.getAttribute("aria-pressed") === "false");
+    check("the nvim header has the keys", $("#pnvim .parthead").classList.contains("on") && !$("#pagent .parthead").classList.contains("on"));
+    leader("s");
+    await wait(150);
+    check("Leader s opens the shell under the agent", called("shell_open").at(-1)?.[1].tree === "/c/lighthouse" && !$("#pterm").hidden && !$("#pnvim").hidden && $("#pterm").parentElement === $("#lleft"));
+    window.__emit("pane_output", { pane: "ps1", data: btoa("shell-bytes-1") });
+    window.__emit("pane_output", { pane: "pn1", data: btoa("nvim-bytes-1") });
+    await wait(90);
+    check("output goes to the terminal of its part", text(PT.T.term.term).includes("shell-bytes-1") && text(PT.T.nvim.term).includes("nvim-bytes-1") && !screen().includes("shell-bytes-1"));
+    {
+      // Keys in a part go to its pane.
+      const n = called("pane_input").length;
+      PT.T.term.term.input("ls");
+      await wait(90);
+      check("keys in the shell part go to the shell pane", called("pane_input").slice(n).some((c) => c[1].id === "ps1" && c[1].data === "ls"));
+    }
+    {
+      // A narrow window has no zoom to change.
+      const w = Object.getOwnPropertyDescriptor(window, "innerWidth");
+      Object.defineProperty(window, "innerWidth", { value: 900, configurable: true });
+      const before = PT.P.zoom;
+      const r = PT.zoom("nvim");
+      Object.defineProperty(window, "innerWidth", w || { value: 1600, configurable: true });
+      check("Leader z does nothing in a narrow window", r === false && PT.P.zoom === before);
+    }
+    leader("z");
+    await wait(60);
+    check("Leader z zooms the part with the keys", PT.P.zoom === "term" && $("#pagent").hidden && $("#pnvim").hidden && !$("#pterm").hidden);
+    leader("x");
+    await wait(60);
+    check("Leader x takes the zoom back first", PT.P.zoom === null && window.SB.S.live === "p1" && !$("#pagent").hidden && !$("#pnvim").hidden);
+    leader("l");
+    await wait(30);
+    check("Leader l moves the keys to nvim", PT.P.focus === "nvim");
+    leader("h");
+    await wait(30);
+    check("Leader h moves the keys back left", PT.P.focus === "term");
+    leader("o");
+    await wait(30);
+    check("Leader o goes to the next part", PT.P.focus === "nvim");
+    $('#pnvim [data-hide="nvim"]').click();
+    await wait(60);
+    check("× hides nvim and it keeps running", $("#pnvim").hidden && called("pane_detach").at(-1)?.[1].id === "pn1" && !called("pane_close").some((c) => c[1].id === "pn1"));
+    check("the top bar counts the hidden parts", $("#tally .phidden")?.textContent === "1 hidden", $("#tally").innerHTML);
+    window.SB.collapse();
+    await wait(90);
+    check("a collapse hides the parts", $("#pterm").hidden && !$("#lparts").classList.contains("split") && PT.T.term.id === null);
+    {
+      const n = called("pane_attach").length;
+      await window.SB.expand("p1");
+      await wait(120);
+      const again = called("pane_attach").slice(n).map((c) => c[1].id);
+      check("the next open shows the parts of the last time", again.join() === "ps1" && !$("#pterm").hidden && $("#pnvim").hidden, again.join());
+    }
+    $('#livetitle [data-ptoggle="nvim"]').click();
+    await wait(150);
+    check("the nvim switch in the title shows nvim", !$("#pnvim").hidden && PT.T.nvim.id === "pn1");
+    window.__emit("pane", Object.assign(structuredClone(window.__data.panes.find((x) => x.id === "pn1")), { modified: true }));
+    await wait(90);
+    check("a buffer that is not saved shows [+] on the chip and in the header", /\[\+\]/.test($('.pane[data-id="p1"] [data-part="nvim"]')?.textContent || "") && $("#pnvim .parthead .pmod")?.textContent === "[+]");
+    $('#pnvim [data-stop="nvim"]').click();
+    await wait(30);
+    check("Stop asks first when a buffer is not saved", !!$("#pnvim [data-stopyes]") && !called("pane_close").some((c) => c[1].id === "pn1"));
+    $("#pnvim [data-stopyes]").click();
+    await wait(90);
+    check("Stop anyway closes nvim", called("pane_close").some((c) => c[1].id === "pn1") && $("#pnvim").hidden);
+    window.__emit("nvim_reloaded", "/c/lighthouse");
+    window.__emit("pane", Object.assign(structuredClone(window.__data.panes.find((x) => x.id === "ps1")), { busy: true }));
+    await wait(90);
+    check("a busy shell shows ▸ on the chip", /▸ term/.test($('.pane[data-id="p1"] [data-part="term"]')?.textContent || ""), $('.pane[data-id="p1"] .ptools')?.innerHTML);
+    window.__emit("pane", Object.assign(structuredClone(window.__data.panes.find((x) => x.id === "ps1")), { busy: false }));
+    await wait(90);
+    check("an ended command shows ✓ done for a short time", /✓ term done/.test($('.pane[data-id="p1"] [data-part="term"]')?.textContent || ""));
+    // Without an agent, the shell gets its tile back.
+    window.SB.collapse();
+    window.__data.panes = window.__data.panes.filter((x) => x.id !== "pn1");
+    const p1 = window.__data.panes.find((x) => x.id === "p1");
+    window.__emit("panes", window.__data.panes.filter((x) => x.id !== "p1"));
+    await wait(90);
+    check("a shell with no agent in its worktree has its own tile", !!$('#board .pane[data-id="ps1"]'));
+    {
+      // An ended agent gives its shell the tile back.
+      window.__emit("panes", window.__data.panes.map((x) => x.id === "p1" ? Object.assign(structuredClone(x), { lamp: "ended" }) : x));
+      await wait(90);
+      check("an ended agent gives its shell its tile back", !!$('#board .pane[data-id="ps1"]') && !!$('#board .pane[data-id="p1"]'));
+    }
+    window.__data.panes = window.__data.panes.filter((x) => x.id !== "ps1");
+    window.__emit("panes", window.__data.panes);
+    await wait(90);
+    check("the agent is back", !!$('#board .pane[data-id="p1"]') && !!p1);
   }
 
   check("no script errors", window.__errors.length === 0, window.__errors);
