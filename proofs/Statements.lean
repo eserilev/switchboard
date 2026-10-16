@@ -1,4 +1,5 @@
 import GuideCheck
+import OutQ
 
 /-!
 # The theorems, stated
@@ -176,6 +177,72 @@ def S5_step_cut_never_panics : Prop :=
       (res.1.val.filter (fun r => !isHeader r)).Sublist rows.val ∧
       HeadersGood rows.val res.1.val ∧ res.2.val.Sublist rows.val ⦄
 
+/-! ## The output queue of a remote window (SPEC 29)
+
+`push q key data` adds the bytes of pane `key`. `idx q key` is the place of that pane in
+the list, and `cur q key` is the pane before the push (a new pane is live and empty).
+The bound on the pane count is always true in practice: a pane takes 32 bytes, so a list
+has fewer than `Usize.max` panes.
+-/
+
+/-- **Q1.** A push never panics, and it never makes a live pane hold more than `budget` bytes. -/
+def Q1_push_keeps_the_budget : Prop :=
+  ∀ (q : outq.Queue) (key : U32) (data : Slice U8), q.panes.val.length < Usize.max →
+    outq.push q key data ⦃ q' => ∀ p', q'.panes.val[OutQ.Queue.idx q key]? = some p' →
+      p'.state = outq.LIVE → p'.bytes.val.length ≤ q.budget.val ⦄
+
+/-- **Q2.** A live pane holds its bytes in the order of the pushes: after a push, its bytes
+are the old bytes and then the new ones. -/
+def Q2_push_keeps_the_order : Prop :=
+  ∀ (q : outq.Queue) (key : U32) (data : Slice U8), q.panes.val.length < Usize.max →
+    outq.push q key data ⦃ q' => ∀ p', q'.panes.val[OutQ.Queue.idx q key]? = some p' →
+      p'.state = outq.LIVE → p'.bytes.val = (OutQ.Queue.cur q key).bytes.val ++ data.val ⦄
+
+/-- **Q3.** A push drops only when the bytes do not fit: when they fit, the pane stays live. -/
+def Q3_drop_only_when_full : Prop :=
+  ∀ (q : outq.Queue) (key : U32) (data : Slice U8), q.panes.val.length < Usize.max →
+    (OutQ.Queue.cur q key).state = outq.LIVE →
+    (OutQ.Queue.cur q key).bytes.val.length + data.val.length ≤ q.budget.val →
+    outq.push q key data ⦃ q' => ∃ p', q'.panes.val[OutQ.Queue.idx q key]? = some p' ∧ p'.state = outq.LIVE ⦄
+
+/-- **Q4.** No gap: a pane that waits for a fresh screen takes no bytes. A push changes nothing. -/
+def Q4_no_bytes_before_the_screen : Prop :=
+  ∀ (q : outq.Queue) (key : U32) (data : Slice U8), q.panes.val.length < Usize.max →
+    (OutQ.Queue.cur q key).state ≠ outq.LIVE →
+    outq.push q key data ⦃ q' => q'.panes.val = q.panes.val ⦄
+
+/-- **Q5.** A push changes no other pane, and not the budget. -/
+def Q5_push_touches_one_pane : Prop :=
+  ∀ (q : outq.Queue) (key : U32) (data : Slice U8), q.panes.val.length < Usize.max →
+    outq.push q key data ⦃ q' => q'.budget = q.budget ∧
+      ∀ j, j ≠ OutQ.Queue.idx q key → q'.panes.val[j]? = q.panes.val[j]? ⦄
+
+/-- **Q6.** The fresh screen goes first: a pane that waits gets exactly the screen as its
+bytes, and is live again. A pane that does not wait does not change. -/
+def Q6_the_screen_goes_first : Prop :=
+  ∀ (q : outq.Queue) (key : U32) (screen : alloc.vec.Vec U8),
+    outq.fill q key screen ⦃ q' => q'.budget = q.budget ∧
+      q'.panes.val = (if OutQ.Queue.idx q key < q.panes.val.length ∧ (OutQ.Queue.cur q key).state = outq.RESYNC
+        then q.panes.val.set (OutQ.Queue.idx q key) { key, state := outq.LIVE, bytes := screen }
+        else q.panes.val) ⦄
+
+/-- **Q7.** `take` gives the writer the waiting bytes of a pane and leaves it empty, with
+its state. -/
+def Q7_take_gives_all_bytes : Prop :=
+  ∀ (q : outq.Queue) (i : Usize) (h : i.val < q.panes.val.length),
+    outq.take q i ⦃ r => r.1.val = (q.panes.val[i.val]'h).bytes.val ∧ r.2.budget = q.budget ∧
+      r.2.panes.val = q.panes.val.set i.val { q.panes.val[i.val]'h with bytes := alloc.vec.Vec.new U8 } ⦄
+
+/-- **Q8.** `want_screen` says yes exactly for a pane that dropped, and the pane then waits
+for its screen. So the writer asks once for each drop. -/
+def Q8_want_screen_once : Prop :=
+  ∀ (q : outq.Queue) (i : Usize) (h : i.val < q.panes.val.length),
+    outq.want_screen q i ⦃ r =>
+      (r.1 = true ↔ (q.panes.val[i.val]'h).state = outq.DROPPING) ∧ r.2.budget = q.budget ∧
+      r.2.panes.val = q.panes.val.set i.val
+        (if (q.panes.val[i.val]'h).state = outq.DROPPING then { q.panes.val[i.val]'h with state := outq.RESYNC }
+         else q.panes.val[i.val]'h) ⦄
+
 theorem check_G1 : G1_check_decides_accept := GuideCheck.Check.check_spec
 
 theorem check_G2 : G2_every_change_is_covered :=
@@ -209,5 +276,21 @@ theorem check_S3 : S3_step_headers := GuideCheck.Step.S3_proof
 theorem check_S4 : S4_hidden_changes := GuideCheck.Step.S4_proof
 
 theorem check_S5 : S5_step_cut_never_panics := GuideCheck.Step.S5_proof
+
+theorem check_Q1 : Q1_push_keeps_the_budget := OutQ.Queue.Q1_proof
+
+theorem check_Q2 : Q2_push_keeps_the_order := OutQ.Queue.Q2_proof
+
+theorem check_Q3 : Q3_drop_only_when_full := OutQ.Queue.Q3_proof
+
+theorem check_Q4 : Q4_no_bytes_before_the_screen := OutQ.Queue.Q4_proof
+
+theorem check_Q5 : Q5_push_touches_one_pane := OutQ.Queue.Q5_proof
+
+theorem check_Q6 : Q6_the_screen_goes_first := OutQ.Queue.fill_spec
+
+theorem check_Q7 : Q7_take_gives_all_bytes := OutQ.Queue.take_spec
+
+theorem check_Q8 : Q8_want_screen_once := OutQ.Queue.want_screen_spec
 
 end Statements

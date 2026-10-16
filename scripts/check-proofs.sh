@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# Check that the proofs match the Rust code of crates/guide-check and hold.
+# Check that the proofs match the Rust code of crates/guide-check and crates/outq and hold.
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
 
 # The generated Lean must match the current Rust.
 "$root/scripts/extract.sh" > /dev/null
-if ! git -C "$root" diff --quiet -- proofs/GuideCheck/Code; then
-    echo "error: proofs/GuideCheck/Code is out of date. Run scripts/extract.sh and commit." >&2
-    exit 1
-fi
+for code in proofs/GuideCheck/Code proofs/OutQ/Code; do
+    if ! git -C "$root" diff --quiet -- "$code" || [ -n "$(git -C "$root" ls-files --others --exclude-standard -- "$code")" ]; then
+        echo "error: $code is out of date. Run scripts/extract.sh and commit." >&2
+        exit 1
+    fi
+done
 
 cd "$root/proofs"
-if grep -rnw 'sorry\|admit\|native_decide\|bv_decide' GuideCheck/*.lean Statements.lean; then
+if grep -rnw 'sorry\|admit\|native_decide\|bv_decide' GuideCheck/*.lean OutQ/*.lean Statements.lean; then
     echo "error: a proof uses sorry, admit, or native code" >&2
     exit 1
 fi

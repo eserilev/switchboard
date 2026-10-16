@@ -9,5 +9,7 @@ package guidecheck
 
 @[default_target] lean_lib GuideCheck {}
 
+@[default_target] lean_lib OutQ {}
+
 -- The approved theorem statements, checked against the proofs on every build.
 @[default_target] lean_lib Statements {}

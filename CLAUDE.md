@@ -15,11 +15,12 @@ A desktop app for many AI agents on one screen, plus a guided PR review. `SPEC.m
 
 ## Proofs
 
-`crates/guide-check` is proved in Lean with Aeneas (`proofs/`, SPEC 24). It stays in the Aeneas subset:
+`crates/guide-check` (SPEC 24) and `crates/outq` (SPEC 29) are proved in Lean with Aeneas (`proofs/`). They stay in the Aeneas subset:
 - `while` loops and small functions. No `?`, no closures, no `&&` or `||` in a loop condition, no iterators.
 - A `return` inside a loop only when the loop is the last statement.
 - No add that can overflow: loop with an index `k < bound`, not `l <= to`.
-After a change to `guide-check`, run `scripts/check-proofs.sh`. It regenerates `proofs/GuideCheck/Code`; commit that too. Never weaken a statement in `proofs/Statements.lean` to make a proof pass.
+- No `VecDeque`, `HashMap`, `pop` or `remove`: Aeneas has no model of them. Use a `Vec` and an index.
+After a change to `guide-check` or `outq`, run `scripts/check-proofs.sh`. It regenerates `proofs/GuideCheck/Code` and `proofs/OutQ/Code`; commit them too. Never weaken a statement in `proofs/Statements.lean` to make a proof pass.
 
 After a change to the permission flow (`sb permit`, `on_permit`, `permit_answer`, `answer_permits`), run `scripts/check-models.sh` and keep `models/permit.qnt` true (SPEC 25).
 After a change to review close or worktree cleanup (`review_close`, `clean_after`, `sweep_closed`, `fetch`, `cleanup::verdict`), run it too and keep `models/review_close.qnt` true (SPEC 26).

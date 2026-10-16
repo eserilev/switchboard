@@ -16,3 +16,11 @@ import Statements
 #print axioms Statements.check_S3
 #print axioms Statements.check_S4
 #print axioms Statements.check_S5
+#print axioms Statements.check_Q1
+#print axioms Statements.check_Q2
+#print axioms Statements.check_Q3
+#print axioms Statements.check_Q4
+#print axioms Statements.check_Q5
+#print axioms Statements.check_Q6
+#print axioms Statements.check_Q7
+#print axioms Statements.check_Q8
