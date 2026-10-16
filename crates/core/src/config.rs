@@ -15,6 +15,12 @@ pub struct Config {
     pub connections: BTreeMap<String, ConnectionCfg>,
     pub review: ReviewCfg,
     pub tasks: TasksCfg,
+    /// Remote mode (SPEC 29): the ssh host of the hub, for example `me@box`. With
+    /// none, the hub runs here.
+    pub remote: Option<String>,
+    /// The program that links the window to the remote hub. With none,
+    /// `ssh -T <remote> sb attach`, with `~/.local/bin` and `~/.cargo/bin` on its PATH.
+    pub remote_command: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -67,11 +73,32 @@ impl Default for Config {
             connections: BTreeMap::new(),
             review: ReviewCfg::default(),
             tasks: TasksCfg::default(),
+            remote: None,
+            remote_command: None,
         }
     }
 }
 
 impl Config {
+    /// The argv of the remote link, or `None` when the hub runs here. `SB_REMOTE`
+    /// sets the host for one run.
+    pub fn remote_argv(&self) -> Option<(String, Vec<String>)> {
+        let host = std::env::var("SB_REMOTE").ok().filter(|h| !h.is_empty()).or_else(|| self.remote.clone())?;
+        let argv = self.remote_command.clone().unwrap_or_else(|| {
+            vec![
+                "ssh".into(),
+                "-T".into(),
+                "-o".into(),
+                "ServerAliveInterval=15".into(),
+                "-o".into(),
+                "ServerAliveCountMax=3".into(),
+                host.clone(),
+                "PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\" exec sb attach".into(),
+            ]
+        });
+        Some((host, argv))
+    }
+
     pub fn load(path: &Path) -> Result<Config, String> {
         match std::fs::read_to_string(path) {
             Ok(text) => Config::parse(&text).map_err(|e| format!("{}: {e}", path.display())),

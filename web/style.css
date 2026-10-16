@@ -35,7 +35,11 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
-body { background: var(--bg); color: var(--fg); font: 14px/1.5 var(--body); display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.5 var(--body); display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; }
+/* The link banner has a row of its own: hidden, the row has no height. */
+body > header { grid-row: 1; }
+body > .link { grid-row: 2; }
+body > main { grid-row: 3; }
 button { font: inherit; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -571,3 +575,10 @@ tr.noted-nit td.ln::after { color: var(--muted); }
 .tplinks li .tool { margin-left: auto; }
 #tp-link { width: 100%; }
 .tcnext { color: var(--muted); }
+
+/* The link to a remote hub (SPEC 29) */
+.host { font: 600 11px/1 var(--mono); color: var(--muted); padding: 5px 8px; border: 1px solid var(--line); border-radius: 5px; white-space: nowrap; }
+.host::before { content: "● "; color: var(--done); }
+.host.down::before { color: var(--error); }
+.link { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: color-mix(in srgb, var(--error) 18%, var(--panel)); border-bottom: 1px solid var(--line); font-size: 13px; }
+.link span { flex: 1; min-width: 0; }

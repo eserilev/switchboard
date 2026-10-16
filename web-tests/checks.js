@@ -1445,6 +1445,47 @@
     check("the agent is back", !!$('#board .pane[data-id="p1"]') && !!p1);
   }
 
+  // The link to a remote hub (SPEC 29).
+  {
+    window.SB.setTab("board");
+    await window.SB.expand("p1");
+    await wait(60);
+    window.__emit("link", { up: false, host: "box", why: "ssh: connect to host box port 22: Connection timed out", taken: false });
+    await wait(30);
+    check("a lost link shows a banner with the host and the reason", !$("#link").hidden && $("#linktext").textContent.includes("box") && $("#linktext").textContent.includes("timed out") && $("#linkgo").textContent === "Reconnect");
+    check("the top bar names the host, marked down", !$("#host").hidden && $("#host").textContent === "box" && $("#host").classList.contains("down"));
+    check("the banner keeps the board in its place", $("#view-board").getBoundingClientRect().top >= $("#link").getBoundingClientRect().bottom - 1);
+    {
+      // A command while the link is down: the banner says it, no toast.
+      $("#toast").hidden = true;
+      window.__failNext = "the link to the server is down";
+      await window.SB.call("pane_seen", { id: "p1" }).catch(() => {});
+      check("no toast while the link is down", $("#toast").hidden);
+    }
+    window.__linkFail = "ssh: Could not resolve hostname box";
+    $("#linkgo").click();
+    await wait(60);
+    check("a failed reconnect says why", !$("#link").hidden && $("#linktext").textContent.includes("Could not resolve") && called("link_reconnect").length === 1);
+    window.__linkFail = null;
+    const n = { settings: called("settings").length, panes: called("panes").length, reviews: called("reviews").length, tasks: called("tasks").length, expand: called("pane_expand").length };
+    $("#linkgo").click();
+    await wait(30);
+    window.__emit("link", { up: true, host: "box" });
+    await wait(200);
+    check("a reconnect hides the banner", $("#link").hidden && !$("#host").classList.contains("down"));
+    check("a reconnect loads everything again", called("settings").length > n.settings && called("panes").length > n.panes && called("reviews").length > n.reviews && called("tasks").length > n.tasks,
+      JSON.stringify(n) + " " + called("panes").length);
+    check("a reconnect opens the live pane again", called("pane_expand").length > n.expand && window.SB.S.live === "p1");
+    window.__emit("link", { up: false, host: "box", why: "another window took over", taken: true });
+    await wait(30);
+    check("a takeover says so and offers to take it back", $("#linktext").textContent.includes("took over") && $("#linkgo").textContent === "Take it back");
+    window.__emit("link", { up: true, host: "box" });
+    await wait(200);
+    window.SB.collapse();
+    Object.assign(window.SB.LINK, { remote: false, up: true });
+    $("#host").hidden = true;
+  }
+
   check("no script errors", window.__errors.length === 0, window.__errors);
   const pre = document.createElement("pre");
   pre.id = "__results";

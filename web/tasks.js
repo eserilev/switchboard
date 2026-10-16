@@ -913,6 +913,8 @@
   listen("tasks", (e) => setData(e.payload));
 
   window.SBTasks = {
+    // After a reconnect to a remote hub (SPEC 29).
+    refresh,
     draw: () => {
       // The repo list loads with the launcher too; the panel needs it first here.
       if (!S.repos.length) invoke("repos").then((r) => { S.repos = r; if (T.sel) draw(); }).catch(() => {});

@@ -4,12 +4,13 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::sync::Arc;
-use switchboard_core::hub::{Hub, OpenReq, Sink};
-use switchboard_core::hub_review::{Anchor, NewComment};
+use std::sync::{Arc, Mutex};
+use switchboard_core::config::Config;
+use switchboard_core::dispatch;
+use switchboard_core::hub::{Hub, Sink};
 use switchboard_core::paths::Paths;
-use switchboard_core::tasks::{NewSprint, NewTask, Place, TaskFields, TaskMove};
-use tauri::{AppHandle, Emitter, Manager, State, UserAttentionType};
+use switchboard_core::remote::{Client, News};
+use tauri::{AppHandle, Emitter, Manager, UserAttentionType};
 
 struct AppSink {
     handle: AppHandle,
@@ -66,138 +67,111 @@ impl AppSink {
 }
 
 type Res<T> = Result<T, String>;
-type H<'a> = State<'a, Arc<Hub>>;
 
-/// Runs blocking hub work off the async runtime. Errors and slow calls go to the log.
-async fn run<T: Send + 'static>(
-    name: &'static str,
-    hub: &Arc<Hub>,
-    f: impl FnOnce(&Hub) -> Res<T> + Send + 'static,
-) -> Res<T> {
-    let hub = Arc::clone(hub);
+/// Where the commands go: the hub in this process, or a remote hub (SPEC 29).
+enum Backend {
+    Local(Arc<Hub>),
+    Remote(Remote),
+}
+
+/// The link to a remote hub, and what the window needs to know about it.
+struct Remote {
+    host: String,
+    argv: Vec<String>,
+    client: Mutex<Option<Arc<Client>>>,
+    /// Why the link is down, or `None` while it is up.
+    down: Arc<Mutex<Option<String>>>,
+    sink: Arc<AppSink>,
+    /// The leader key of this computer's config, not the server's.
+    leader: String,
+}
+
+impl Remote {
+    /// Connects, and tells the window. On an error the link stays down with the reason.
+    fn connect(&self) -> Res<()> {
+        if let Some(old) = self.client.lock().unwrap().take() {
+            old.close();
+        }
+        let (sink, down, host) = (Arc::clone(&self.sink), Arc::clone(&self.down), self.host.clone());
+        let news = move |n: News| match n {
+            News::Event(ev, payload) => sink.emit(&ev, payload),
+            News::Down { why, taken } => {
+                tracing::warn!(target: "sb::remote", %why, taken, "the link is down");
+                *down.lock().unwrap() = Some(why.clone());
+                let _ = sink.handle.emit("link", json!({ "up": false, "host": host, "why": why, "taken": taken }));
+            }
+        };
+        match Client::connect(&self.argv, news) {
+            Ok(c) => {
+                *self.client.lock().unwrap() = Some(c);
+                *self.down.lock().unwrap() = None;
+                let _ = self.sink.handle.emit("link", json!({ "up": true, "host": self.host }));
+                Ok(())
+            }
+            Err(why) => {
+                tracing::warn!(target: "sb::remote", %why, "connect failed");
+                *self.down.lock().unwrap() = Some(why.clone());
+                let _ = self.sink.handle.emit("link", json!({ "up": false, "host": self.host, "why": why, "taken": false }));
+                Err(why)
+            }
+        }
+    }
+
+    fn call(&self, cmd: &str, args: Value) -> Res<Value> {
+        let c = self.client.lock().unwrap().clone();
+        match c {
+            Some(c) => c.call(cmd, args),
+            None => Err("the link to the server is down".into()),
+        }
+    }
+}
+
+impl Backend {
+    /// One command of the window. It blocks: run it off the async runtime.
+    fn call(&self, cmd: &str, args: Value) -> Res<Value> {
+        match self {
+            Backend::Local(hub) => dispatch::dispatch(hub, cmd, &args),
+            Backend::Remote(r) => {
+                let mut v = r.call(cmd, args)?;
+                // The keys are of this computer.
+                if cmd == "settings" {
+                    v["leader"] = json!(r.leader);
+                }
+                Ok(v)
+            }
+        }
+    }
+
+    fn link_state(&self) -> Value {
+        match self {
+            Backend::Local(_) => json!({ "remote": false, "up": true }),
+            Backend::Remote(r) => {
+                let why = r.down.lock().unwrap().clone();
+                json!({ "remote": true, "host": r.host, "up": why.is_none(), "why": why })
+            }
+        }
+    }
+}
+
+/// Runs blocking work off the async runtime. Errors and slow calls go to the log.
+async fn run(name: String, backend: Arc<Backend>, args: Value) -> Res<Value> {
     let t0 = std::time::Instant::now();
-    let out = tauri::async_runtime::spawn_blocking(move || f(&hub))
+    let n = name.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || backend.call(&n, args))
         .await
         .map_err(|e| e.to_string())?;
     let ms = t0.elapsed().as_millis() as u64;
     match &out {
-        Err(err) => tracing::warn!(target: "sb::cmd", cmd = name, ms, %err, "command failed"),
-        Ok(_) if ms > 1000 => tracing::warn!(target: "sb::cmd", cmd = name, ms, "slow command"),
-        Ok(_) if name == "pane_input" => {
-            tracing::trace!(target: "sb::cmd", cmd = name, ms, "command")
-        }
-        Ok(_) => tracing::debug!(target: "sb::cmd", cmd = name, ms, "command"),
+        Err(err) => tracing::warn!(target: "sb::cmd", cmd = %name, ms, %err, "command failed"),
+        Ok(_) if ms > 1000 => tracing::warn!(target: "sb::cmd", cmd = %name, ms, "slow command"),
+        Ok(_) if name == "pane_input" => tracing::trace!(target: "sb::cmd", cmd = %name, ms, "command"),
+        Ok(_) => tracing::debug!(target: "sb::cmd", cmd = %name, ms, "command"),
     }
     out
 }
 
-macro_rules! commands {
-    ($( $name:ident ( $($arg:ident : $ty:ty),* ) -> $ret:ty => |$h:ident| $body:expr; )*) => {
-        $(
-            #[tauri::command]
-            async fn $name(hub: H<'_>, $($arg: $ty),*) -> Res<$ret> {
-                run(stringify!($name), &hub, move |$h: &Hub| $body).await
-            }
-        )*
-    };
-}
-
-commands! {
-    panes() -> Value => |h| Ok(json!(h.views()));
-    pane_open(req: OpenReq) -> Value => |h| h.open(req).map(|v| json!(v));
-    pane_expand(id: String) -> String => |h| h.expand(&id).map(|s| B64.encode(s));
-    pane_collapse() -> () => |h| { h.collapse(); Ok(()) };
-    pane_resize(cols: u16, rows: u16) -> () => |h| h.resize(cols, rows);
-    pane_attach(id: String, owner: String, cols: u16, rows: u16) -> String => |h| h.attach(&id, &owner, cols, rows).map(|s| B64.encode(s));
-    pane_detach(id: String) -> () => |h| { h.detach(&id); Ok(()) };
-    part_resize(id: String, cols: u16, rows: u16) -> () => |h| h.part_resize(&id, cols, rows);
-    shell_open(tree: String) -> String => |h| h.shell_open(std::path::Path::new(&tree));
-    pane_seen(id: String) -> () => |h| h.seen(&id);
-    pane_close(id: String) -> () => |h| h.close(&id);
-    pane_rename(id: String, title: Option<String>) -> () => |h| h.rename(&id, title);
-    pane_reorder(ids: Vec<String>) -> () => |h| h.reorder(&ids);
-    pane_resume(id: String) -> () => |h| h.resume(&id);
-    permit_answer(permit: String, allow: bool) -> () => |h| h.permit_answer(&permit, allow);
-    trust_answer(id: String, yes: bool) -> () => |h| h.trust(&id, yes);
-    connections() -> Value => |h| Ok(json!(h.connection_view()));
-    connection_set(name: String) -> () => |h| h.connection_set(&name);
-    connection_resume(id: String) -> String => |h| h.connection_resume(&id);
-    nvim_open(tree: String, file: Option<String>, line: Option<u32>) -> String => |h| {
-        let f = file.as_deref().map(|f| (f, line.unwrap_or(1)));
-        h.nvim_open(std::path::Path::new(&tree), f)
-    };
-    repos() -> Value => |h| Ok(json!(h.repos()));
-    layouts() -> Vec<String> => |h| Ok(h.layouts());
-    layout_save(name: String) -> () => |h| h.layout_save(&name);
-    layout_open(name: String) -> () => |h| h.layout_open(&name);
-    settings() -> Value => |h| {
-        let c = h.config();
-        Ok(json!({ "leader": c.leader, "nvim": switchboard_core::nvim::installed(), "sprint_days": c.tasks.sprint_days }))
-    };
-    reviews() -> Value => |h| Ok(json!(h.reviews()));
-    review_open(url: String, round_of: Option<String>) -> String => |h| h.review_open(&url, round_of.as_deref());
-    review_prior(url: String) -> Value => |h| h.review_prior(&url).map(|v| json!(v));
-    review_open_local(pane: String) -> String => |h| h.review_open_local(&pane);
-    review_chat(id: String) -> Value => |h| h.review_chat(&id).map(|v| json!(v));
-    review_step_seen(id: String, step: String) -> () => |h| h.review_step_seen(&id, &step);
-    review_dismiss(id: String, note: String, on: bool) -> () => |h| h.review_dismiss(&id, &note, on);
-    review_retake(id: String, step: Option<String>) -> () => |h| h.review_retake(&id, step.as_deref());
-    review_send_agent(id: String, note: String) -> usize => |h| h.review_send_agent(&id, &note);
-    review_view(id: String) -> Value => |h| h.review_view(&id).map(|v| json!(v));
-    review_diff(id: String, step: String) -> Value => |h| h.review_diff(&id, &step).map(|v| json!(v));
-    review_file_rows(id: String, path: String) -> Value => |h| h.review_file_rows(&id, &path).map(|v| json!(v));
-    review_files(id: String) -> Value => |h| h.review_files(&id).map(|v| json!(v));
-    review_file_diff(id: String, path: String) -> Value => |h| h.review_file_diff(&id, &path).map(|v| json!(v));
-    review_mark(id: String, step: String, checked: bool) -> () => |h| h.review_mark(&id, &step, checked);
-    review_ask(id: String, step: String, anchor: Option<Anchor>, thread: Option<String>, text: String) -> String => |h| h.review_ask(&id, &step, anchor, thread, &text);
-    review_pin(id: String, thread: String) -> () => |h| h.review_pin(&id, &thread);
-    review_draft(id: String, thread: String) -> () => |h| h.review_draft(&id, &thread);
-    review_pin_edit(id: String, pin: i64, text: Option<String>) -> () => |h| h.review_pin_edit(&id, pin, text);
-    review_draft_edit(id: String, draft: i64, text: Option<String>) -> () => |h| h.review_draft_edit(&id, draft, text);
-    review_drafts_text(id: String) -> String => |h| h.review_drafts_text(&id);
-    review_comment(id: String, comment: NewComment) -> () => |h| h.review_comment(&id, comment);
-    review_summary(id: String, text: String) -> () => |h| h.review_summary(&id, &text);
-    review_post_preview(id: String) -> Value => |h| h.review_post_preview(&id).map(|v| json!(v));
-    review_post(id: String, event: String, summary: String, token: String) -> String => |h| h.review_post(&id, &event, &summary, &token);
-    review_update(id: String) -> () => |h| h.review_update(&id);
-    review_round(id: String) -> String => |h| h.review_round(&id);
-    review_term(id: String, step: Option<String>, start: bool) -> Option<String> => |h| h.review_term(&id, step.as_deref(), start);
-    review_step_note(id: String, step: String) -> String => |h| h.review_step_note(&id, &step);
-    review_retry(id: String) -> () => |h| h.review_retry(&id);
-    review_close(id: String, keep: bool, discard: Option<Vec<String>>) -> Value => |h| h.review_close(&id, keep, discard).map(|v| json!(v));
-    review_nvim(id: String, path: String, line: u32) -> String => |h| h.review_nvim(&id, &path, line);
-    tasks() -> Value => |h| h.tasks().map(|v| json!(v));
-    task_add(task: NewTask) -> Value => |h| h.task_add(task).map(|v| json!(v));
-    task_edit(id: String, fields: TaskFields) -> Value => |h| h.task_edit(&id, fields).map(|v| json!(v));
-    task_status(id: String, status: String, blocked_by: Option<String>) -> Value => |h| h.task_status(&id, &status, blocked_by.as_deref()).map(|v| json!(v));
-    task_move(id: String, to: TaskMove) -> Value => |h| h.task_move(&id, to).map(|v| json!(v));
-    task_delete(id: String) -> () => |h| h.task_delete(&id);
-    task_copy(id: String) -> Value => |h| h.task_copy(&id).map(|v| json!(v));
-    task_restore(id: String) -> Value => |h| h.task_restore(&id).map(|v| json!(v));
-    task_history(id: String) -> Value => |h| h.task_history(&id).map(|v| json!(v));
-    sprint_new(sprint: NewSprint) -> Value => |h| h.sprint_new(sprint).map(|v| json!(v));
-    sprint_edit(id: String, sprint: NewSprint) -> Value => |h| h.sprint_edit(&id, sprint).map(|v| json!(v));
-    task_start_plan(id: String) -> Value => |h| h.task_start_plan(&id).map(|v| json!(v));
-    task_link(task: String, pane: String) -> () => |h| h.task_link(&task, &pane);
-    task_unlink(pane: String) -> () => |h| h.task_unlink(&pane);
-    task_resume(pane: String) -> String => |h| h.task_resume(&pane);
-    sprint_close(id: String, places: Vec<(String, Place)>, next: Option<NewSprint>) -> Value => |h| h.sprint_close(&id, places, next).map(|v| json!(v));
-}
-
-/// Keys from xterm.js. `binary` data (mouse reports) is one byte per char.
-#[tauri::command]
-async fn pane_input(hub: H<'_>, id: String, data: String, binary: bool) -> Res<()> {
-    let bytes: Vec<u8> = if binary {
-        data.chars().map(|c| c as u8).collect()
-    } else {
-        data.into_bytes()
-    };
-    run("pane_input", &hub, move |h| h.input(&id, &bytes)).await
-}
-
-/// Opens an http(s) link in the browser.
-#[tauri::command]
-fn open_url(url: String) -> Res<()> {
+/// Opens an http(s) link in the browser. It runs here, in remote mode too.
+fn open_url(url: &str) -> Res<()> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("only http and https links open".into());
     }
@@ -207,7 +181,7 @@ fn open_url(url: String) -> Res<()> {
     #[cfg(not(target_os = "macos"))]
     let opener = "xdg-open";
     std::process::Command::new(opener)
-        .arg(&url)
+        .arg(url)
         .stdin(std::process::Stdio::null())
         .spawn()
         .map(drop)
@@ -215,14 +189,57 @@ fn open_url(url: String) -> Res<()> {
 }
 
 /// Log lines from the window.
-#[tauri::command]
-fn log(level: String, message: String) {
-    match level.as_str() {
+fn log(level: &str, message: &str) {
+    match level {
         "error" => tracing::error!(target: "sb::web", "{message}"),
         "warn" => tracing::warn!(target: "sb::web", "{message}"),
         "debug" => tracing::debug!(target: "sb::web", "{message}"),
         _ => tracing::info!(target: "sb::web", "{message}"),
     }
+}
+
+/// The commands that run in the app, in remote mode too. Every other command goes
+/// to the backend. A test keeps this list short (SPEC 29).
+const LOCAL: &[&str] = &["log", "open_url", "link_state", "link_reconnect"];
+
+/// The one handler of every `invoke` of the window.
+fn handle(invoke: tauri::ipc::Invoke) -> bool {
+    let cmd = invoke.message.command().to_owned();
+    let args = match invoke.message.payload() {
+        tauri::ipc::InvokeBody::Json(v) => v.clone(),
+        _ => json!({}),
+    };
+    let webview = invoke.message.webview();
+    let Some(backend) = webview.try_state::<Arc<Backend>>().map(|s| Arc::clone(s.inner())) else {
+        invoke.resolver.reject("the app is starting");
+        return true;
+    };
+    if !LOCAL.contains(&cmd.as_str()) {
+        invoke.resolver.respond_async(async move { run(cmd, backend, args).await.map_err(Into::into) });
+        return true;
+    }
+    let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+    match cmd.as_str() {
+        "log" => {
+            log(&text("level"), &text("message"));
+            invoke.resolver.resolve(Value::Null);
+        }
+        "open_url" => invoke.resolver.respond(open_url(&text("url")).map(|_| Value::Null).map_err(Into::into)),
+        "link_state" => invoke.resolver.resolve(backend.link_state()),
+        "link_reconnect" => invoke.resolver.respond_async(async move {
+            let b = Arc::clone(&backend);
+            let r = tauri::async_runtime::spawn_blocking(move || match &*b {
+                Backend::Remote(r) => r.connect(),
+                Backend::Local(_) => Ok(()),
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+            r.map(|_| backend.link_state()).map_err(Into::into)
+        }),
+        _ => invoke.resolver.reject(format!("unknown command {cmd}")),
+    }
+    true
 }
 
 /// Logs go to `~/.switchboard/logs/switchboard.log` and to stderr.
@@ -275,99 +292,78 @@ fn main() {
             let sink = Arc::new(AppSink {
                 handle: app.handle().clone(),
             });
-            let hub = Hub::start(Paths::from_env(), sb_path(), sink).inspect_err(
-                |err| tracing::error!(target: "sb::app", %err, "the hub did not start"),
-            )?;
-            app.manage(hub);
+            let paths = Paths::from_env();
+            let config = Config::load(&paths.config).unwrap_or_default();
+            let backend = match config.remote_argv() {
+                Some((host, argv)) => {
+                    tracing::info!(target: "sb::app", %host, ?argv, "remote mode");
+                    let remote = Remote {
+                        host,
+                        argv,
+                        client: Mutex::default(),
+                        down: Arc::new(Mutex::new(Some("connecting".into()))),
+                        sink,
+                        leader: config.leader.clone(),
+                    };
+                    Arc::new(Backend::Remote(remote))
+                }
+                None => {
+                    let hub = Hub::start(paths, sb_path(), sink).inspect_err(
+                        |err| tracing::error!(target: "sb::app", %err, "the hub did not start"),
+                    )?;
+                    Arc::new(Backend::Local(hub))
+                }
+            };
+            app.manage(Arc::clone(&backend));
+            // The link comes up in the background: the window shows while ssh connects.
+            if matches!(*backend, Backend::Remote(_)) {
+                std::thread::spawn(move || {
+                    if let Backend::Remote(r) = &*backend {
+                        let _ = r.connect();
+                    }
+                });
+            }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            panes,
-            pane_open,
-            pane_expand,
-            pane_collapse,
-            pane_input,
-            pane_resize,
-            pane_attach,
-            pane_detach,
-            part_resize,
-            shell_open,
-            pane_seen,
-            pane_close,
-            pane_rename,
-            pane_reorder,
-            pane_resume,
-            permit_answer,
-            trust_answer,
-            connections,
-            connection_set,
-            connection_resume,
-            nvim_open,
-            repos,
-            layouts,
-            layout_save,
-            layout_open,
-            settings,
-            reviews,
-            review_open,
-            review_view,
-            review_diff,
-            review_file_rows,
-            review_files,
-            review_file_diff,
-            review_mark,
-            review_ask,
-            review_pin,
-            review_draft,
-            review_pin_edit,
-            review_draft_edit,
-            review_drafts_text,
-            review_comment,
-            review_summary,
-            review_post_preview,
-            review_post,
-            review_update,
-            review_round,
-            review_prior,
-            review_open_local,
-            review_chat,
-            review_step_seen,
-            review_dismiss,
-            review_retake,
-            review_send_agent,
-            review_term,
-            review_step_note,
-            review_retry,
-            review_close,
-            review_nvim,
-            tasks,
-            task_add,
-            task_edit,
-            task_status,
-            task_move,
-            task_delete,
-            task_copy,
-            task_restore,
-            task_history,
-            sprint_new,
-            sprint_edit,
-            sprint_close,
-            task_start_plan,
-            task_link,
-            task_unlink,
-            task_resume,
-            log,
-            open_url,
-        ])
+        .invoke_handler(handle)
         .build(tauri::generate_context!())
         .expect("the window failed to start")
         .run(|app, event| {
             // Review runs have process groups of their own: no terminal signal and
-            // no watchdog reaches them after a quit.
+            // no watchdog reaches them after a quit. A remote hub keeps its runs.
             if let tauri::RunEvent::Exit = event {
-                if let Some(hub) = app.try_state::<Arc<Hub>>() {
-                    hub.stop_runs();
+                if let Some(b) = app.try_state::<Arc<Backend>>() {
+                    match &**b {
+                        Backend::Local(hub) => hub.stop_runs(),
+                        Backend::Remote(r) => {
+                            if let Some(c) = r.client.lock().unwrap().take() {
+                                c.close();
+                            }
+                        }
+                    }
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// In remote mode only these run on this computer. A server can make the app do
+    /// nothing else here (SPEC 29).
+    #[test]
+    fn the_local_commands_stay_few() {
+        assert_eq!(LOCAL, &["log", "open_url", "link_state", "link_reconnect"]);
+        for c in LOCAL {
+            assert!(!dispatch::COMMANDS.contains(c), "{c} is a hub command too");
+        }
+    }
+
+    #[test]
+    fn open_url_takes_only_web_links() {
+        assert!(open_url("file:///etc/passwd").is_err());
+        assert!(open_url("javascript:alert(1)").is_err());
+        assert!(open_url("-x").is_err());
+    }
 }

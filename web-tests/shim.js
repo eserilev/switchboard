@@ -159,6 +159,8 @@ window.__TAURI__ = {
   core: {
     invoke: async (cmd, args) => {
       window.__calls.push([cmd, args || {}]);
+      // A check can make the next command fail, as a down link does.
+      if (window.__failNext) { const e = window.__failNext; window.__failNext = null; throw e; }
       const d = window.__data;
       switch (cmd) {
         case "panes": return structuredClone(d.panes);
@@ -183,6 +185,7 @@ window.__TAURI__ = {
         case "review_step_note": return 'I am on step s2 "Proposal path passes slot - 1" (beacon_node/gloas.rs:11-12 (new)).';
         case "pane_expand": return btoa("\x1b[H\x1b[2Jhello from the live pane\r\n$ ");
         case "pane_open": return pane({ id: "p9", tree: args.req.repo });
+        case "link_reconnect": if (window.__linkFail) throw window.__linkFail; return { remote: true, host: "box", up: true, why: null };
         case "review_nvim": return "p3";
         // One nvim and one shell for each worktree (SPEC 28).
         case "nvim_open": case "shell_open": {

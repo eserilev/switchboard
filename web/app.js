@@ -39,7 +39,61 @@ function toast(msg) {
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => (t.hidden = true), 7000);
 }
-const call = (cmd, args) => invoke(cmd, args).catch((e) => { log("warn", cmd, "failed:", e); toast(e); throw e; });
+// With the link to a remote hub down, the banner says so: no toast for each command.
+const call = (cmd, args) => invoke(cmd, args).catch((e) => { log("warn", cmd, "failed:", e); if (LINK.up) toast(e); throw e; });
+
+// ---------- the link to a remote hub (SPEC 29) ----------
+
+// `synced`: the window has loaded everything from the hub since the link came up.
+const LINK = { remote: false, up: true, host: "", why: null, taken: false, synced: true };
+// Once for each time the link comes up, from the event or from Reconnect.
+function linkChanged() {
+  if (!LINK.up) LINK.synced = false;
+  else if (!LINK.synced) { LINK.synced = true; resync(); }
+  drawLink();
+}
+function drawLink() {
+  $("#host").hidden = !LINK.remote;
+  $("#host").textContent = LINK.host;
+  $("#host").classList.toggle("down", !LINK.up);
+  $("#link").hidden = LINK.up;
+  if (LINK.up) return;
+  const connecting = LINK.why === "connecting";
+  $("#linktext").textContent = connecting ? `Connecting to ${LINK.host}…`
+    : LINK.taken ? `Another window took over the hub on ${LINK.host}. Your agents run on there.`
+    : `No link to ${LINK.host}: ${LINK.why || "the link is down"}. Your agents run on there.`;
+  $("#linkgo").hidden = connecting;
+  $("#linkgo").textContent = LINK.taken ? "Take it back" : "Reconnect";
+}
+async function reconnect() {
+  $("#linkgo").disabled = true;
+  Object.assign(LINK, { why: "connecting", taken: false });
+  drawLink();
+  try {
+    Object.assign(LINK, await invoke("link_reconnect"));
+  } catch (e) {
+    Object.assign(LINK, { up: false, why: String(e) });
+  }
+  $("#linkgo").disabled = false;
+  linkChanged();
+}
+// Everything again from the hub. The hub dropped the screen of the old link, so
+// the live pane and its parts open again.
+async function resync() {
+  const live = S.live;
+  if (live) collapse();
+  try {
+    S.settings = await invoke("settings");
+    S.conn = await invoke("connections");
+    drawConn();
+    await refreshPanes();
+    await refreshReviews();
+    window.SBTasks?.refresh();
+    if (live && paneById(live)) expand(live);
+  } catch (e) {
+    log("warn", "resync failed:", e);
+  }
+}
 
 // ---------- tabs ----------
 
@@ -833,6 +887,12 @@ listen("paste_failed", (e) => window.SBTasks?.showText("The first message did no
 listen("connections", (e) => { S.conn = e.payload; drawConn(); drawBoard(); });
 listen("focus", (e) => refreshPanes().then(() => expand(e.payload)));
 listen("tmux_exit", () => toast("The Switchboard tmux server ended. Restart the app to start it again."));
+listen("link", (e) => {
+  Object.assign(LINK, { remote: true, why: null, taken: false }, e.payload);
+  linkChanged();
+  if (!LINK.up) $("#toast").hidden = true;
+});
+$("#linkgo").addEventListener("click", reconnect);
 listen("error", (e) => toast(e.payload.message || e.payload));
 listen("review", (e) => {
   const was = S.reviews.has(e.payload.id);
@@ -862,10 +922,15 @@ function copyText(text) {
   return ok;
 }
 
-window.SB = { S, invoke, call, listen, esc, toast, setTab, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, openLauncher, paneName, copyText, LABEL, term, isLeader, bytes, $ };
+window.SB = { S, LINK, invoke, call, listen, esc, toast, setTab, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, openLauncher, paneName, copyText, LABEL, term, isLeader, bytes, $ };
 
 (async function start() {
   try {
+    Object.assign(LINK, await invoke("link_state"));
+    // A remote hub that is not linked yet: the `link` event loads everything.
+    LINK.synced = !LINK.remote || LINK.up;
+    drawLink();
+    if (LINK.remote && !LINK.up) return;
     S.settings = await invoke("settings");
     S.conn = await invoke("connections");
     drawConn();

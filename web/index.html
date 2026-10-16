@@ -10,6 +10,7 @@
   <header class="bar">
     <nav class="tabs" id="tabs" role="tablist"></nav>
     <div class="tally" id="tally"></div>
+    <span class="host" id="host" hidden title="The hub runs on this server (SPEC 29)"></span>
     <span class="leader" id="leader" hidden>Ctrl+Space</span>
     <div class="conn">
       <button class="btn small" id="conn" aria-haspopup="menu"></button>
@@ -17,6 +18,8 @@
     </div>
     <button class="btn plus" id="newpane" aria-label="New pane">+</button>
   </header>
+
+  <div class="link" id="link" role="status" hidden><span id="linktext"></span><button class="btn small" id="linkgo" type="button">Reconnect</button></div>
 
   <main id="view-board" class="board-wrap">
     <section class="live" id="live" hidden>
