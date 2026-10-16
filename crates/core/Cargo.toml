@@ -13,3 +13,5 @@ toml = "0.8"
 tracing = "0.1"
 guide-check = { path = "../guide-check" }
 libc = "0.2"
+base64 = "0.22"
+outq = { path = "../outq" }

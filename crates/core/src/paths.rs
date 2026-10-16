@@ -102,6 +102,10 @@ impl Paths {
     pub fn tmux_conf(&self) -> PathBuf {
         self.runtime.join("tmux.conf")
     }
+    /// The socket of remote windows (SPEC 29). `sb attach` connects to it.
+    pub fn window_sock(&self) -> PathBuf {
+        self.runtime.join("window.sock")
+    }
     pub fn nvim_dir(&self) -> PathBuf {
         self.runtime.join("nvim")
     }

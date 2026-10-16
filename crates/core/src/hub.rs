@@ -31,6 +31,8 @@ pub trait Sink: Send + Sync + 'static {
     fn emit(&self, event: &str, payload: Value);
     /// Bytes from the live pane.
     fn output(&self, pane: &str, data: &[u8]);
+    /// A pane goes on screen with a full screen: bytes that wait for it are old.
+    fn reset(&self, _pane: &str) {}
 }
 
 /// The text of Claude's folder trust dialog. A test pins it (SPEC 6.6).
@@ -830,6 +832,7 @@ impl Hub {
 
     /// The screen of a pane that goes on screen, and its stream on.
     fn show(&self, id: &str, tid: &str, cols: u16, rows: u16) -> Res<Vec<u8>> {
+        self.sink.reset(id);
         self.sizes.lock().unwrap().insert(tid.to_owned(), (cols, rows));
         let _ = self.tmux.set_window_size(tid, cols, rows);
         let lines = self.tmux.capture(tid, "-").map_err(e)?;
@@ -855,6 +858,38 @@ impl Hub {
             let _ = tmux.set_window_size(&tid, c, r);
         });
         Ok(screen)
+    }
+
+    /// A fresh screen of a pane on screen, for a remote window that lost bytes
+    /// (SPEC 29). It pauses the pane first. tmux sends the reply to the pause after
+    /// all output of the pane before it, and the reader thread passes output on
+    /// before it reads the next line. So every byte before the pause is in the queue
+    /// already, and the capture holds every byte after it. Call [`Hub::resume`] next.
+    pub fn screen_for_resync(&self, id: &str) -> Res<Vec<u8>> {
+        let tid = self.on_screen(id).ok_or("not on screen")?;
+        self.tmux.set_streaming(&tid, false).map_err(e)?;
+        let lines = self.tmux.capture(&tid, "0").map_err(e)?;
+        let (x, y) = self.tmux.cursor(&tid).map_err(e)?;
+        let mut screen = b"\x1b[H\x1b[2J".to_vec();
+        screen.extend(lines.join("\r\n").into_bytes());
+        screen.extend(format!("\x1b[{};{}H", y + 1, x + 1).into_bytes());
+        Ok(screen)
+    }
+
+    /// The stream of a pane again after [`Hub::screen_for_resync`], when it is still
+    /// on screen. A size change makes the program draw what the gap lost.
+    pub fn resume_stream(&self, id: &str) {
+        let Some(tid) = self.on_screen(id) else { return };
+        let _ = self.tmux.set_streaming(&tid, true);
+        let size = self.sizes.lock().unwrap().get(&tid).copied();
+        if let Some((cols, rows)) = size {
+            let _ = self.tmux.set_window_size(&tid, cols, rows.saturating_sub(1).max(2));
+            let _ = self.tmux.set_window_size(&tid, cols, rows);
+        }
+    }
+
+    fn on_screen(&self, id: &str) -> Option<String> {
+        self.live.lock().unwrap().iter().find(|(l, _)| l == id).map(|(_, t)| t.clone())
     }
 
     pub fn collapse(&self) {

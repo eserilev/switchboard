@@ -2617,6 +2617,8 @@ dependencies = [
 name = "sb"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "libc",
  "serde_json",
  "switchboard-core",
  "tracing",
@@ -3042,8 +3044,10 @@ dependencies = [
 name = "switchboard-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "guide-check",
  "libc",
+ "outq",
  "rusqlite",
  "serde",
  "serde_json",

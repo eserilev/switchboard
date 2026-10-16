@@ -14,14 +14,15 @@ use switchboard_core::{connections, hooks, now};
 
 mod mcp;
 
-/// `sb` logs to `~/.switchboard/logs/sb.log`. `SB_LOG` sets the filter; the default is `info`.
-fn init_logs() {
+/// `sb` logs to `~/.switchboard/logs/sb.log`, and `sb serve` to `serve.log`. `SB_LOG`
+/// sets the filter; the default is `info`.
+fn init_logs(name: &str) {
     let dir = Paths::from_env().home.join("logs");
     let _ = std::fs::create_dir_all(&dir);
     let Ok(file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(dir.join("sb.log"))
+        .open(dir.join(name))
     else {
         return;
     };
@@ -37,7 +38,7 @@ fn init_logs() {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // The MCP server talks on stdout, so it never logs there; the file is fine.
-    init_logs();
+    init_logs(if args.first().map(String::as_str) == Some("serve") { "serve.log" } else { "sb.log" });
     let t0 = std::time::Instant::now();
     let code = match args.first().map(String::as_str) {
         Some("state") => state(args.get(1).map(String::as_str).unwrap_or("")),
@@ -45,6 +46,8 @@ fn main() {
         Some("open") => open(&args[1..]),
         Some("task") => task(&args[1..]),
         Some("mcp") => mcp::serve(),
+        Some("serve") => serve(),
+        Some("attach") => attach(),
         Some("connect") if args.get(1).map(String::as_str) == Some("add") => {
             connect_add(&args[2..])
         }
@@ -53,12 +56,157 @@ fn main() {
             0
         }
         _ => {
-            eprintln!("usage: sb open [path] [-w branch] [--nvim|--shell]\n       {TASK_USAGE}\n       sb connect add <name> [--endpoint <url> --model <m> --token <keyring:name>]");
+            eprintln!("usage: sb open [path] [-w branch] [--nvim|--shell]\n       {TASK_USAGE}\n       sb connect add <name> [--endpoint <url> --model <m> --token <keyring:name>]\n       sb serve      (the hub for remote windows)\n       sb attach     (a remote window's link; starts sb serve when none runs)");
             2
         }
     };
     tracing::info!(target: "sb::cli", args = ?args, code, ms = t0.elapsed().as_millis() as u64, pane = ?std::env::var("SB_PANE").ok(), "sb");
     std::process::exit(code);
+}
+
+// ---------- remote mode (SPEC 29) ----------
+
+static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_stop(_: libc::c_int) {
+    STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The hub with no window, for remote windows. It runs until SIGTERM or SIGINT.
+fn serve() -> i32 {
+    use std::sync::Arc;
+    use switchboard_core::hub::Hub;
+    use switchboard_core::remote::{self, RemoteSink};
+    let paths = Paths::from_env();
+    let sink = Arc::new(RemoteSink::default());
+    let sb = std::env::current_exe().unwrap_or_else(|_| "sb".into());
+    let hub = match Hub::start(paths.clone(), sb, sink.clone()) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("sb serve: {e}");
+            return 1;
+        }
+    };
+    // The hub lock is ours, so an old socket file belongs to a hub that is gone.
+    let wsock = paths.window_sock();
+    let _ = std::fs::remove_file(&wsock);
+    let listener = match std::os::unix::net::UnixListener::bind(&wsock) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("sb serve: {}: {e}", wsock.display());
+            return 1;
+        }
+    };
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&wsock, std::fs::Permissions::from_mode(0o600));
+    }
+    // SAFETY: the handler only stores to an atomic.
+    unsafe {
+        libc::signal(libc::SIGTERM, on_stop as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGINT, on_stop as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGHUP, libc::SIG_IGN);
+    }
+    let pid = paths.runtime.join("serve.pid");
+    let _ = std::fs::write(&pid, std::process::id().to_string());
+    tracing::info!(target: "sb::serve", sock = %wsock.display(), "sb serve listens");
+    eprintln!("sb serve: listening on {}", wsock.display());
+    {
+        let (hub, sink) = (Arc::downgrade(&hub), sink.clone());
+        std::thread::spawn(move || remote::serve(listener, hub, sink));
+    }
+    while !STOP.load(std::sync::atomic::Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    tracing::info!(target: "sb::serve", "sb serve stops");
+    // Review runs have process groups of their own: stop them, as the app does on quit.
+    hub.stop_runs();
+    let _ = std::fs::remove_file(&wsock);
+    let _ = std::fs::remove_file(&pid);
+    0
+}
+
+/// The link of a remote window: stdin and stdout to the window socket. With no
+/// `sb serve`, it starts one that keeps running after the link ends.
+fn attach() -> i32 {
+    let wsock = Paths::from_env().window_sock();
+    let stream = match UnixStream::connect(&wsock) {
+        Ok(s) => s,
+        Err(_) => {
+            if let Err(e) = start_serve() {
+                eprintln!("sb attach: {e}");
+                return 1;
+            }
+            let mut got = None;
+            for _ in 0..150 {
+                if let Ok(s) = UnixStream::connect(&wsock) {
+                    got = Some(s);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            match got {
+                Some(s) => s,
+                None => {
+                    eprintln!("sb attach: sb serve did not start. See ~/.switchboard/logs/serve.log.");
+                    return 1;
+                }
+            }
+        }
+    };
+    let Ok(mut up) = stream.try_clone() else { return 1 };
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        relay(&mut stdin.lock(), &mut up);
+        let _ = up.shutdown(std::net::Shutdown::Write);
+    });
+    let mut down = stream;
+    relay(&mut down, &mut std::io::stdout().lock());
+    0
+}
+
+/// Copies bytes as they come. Not `io::copy`: on Linux it can splice, and a splice
+/// from a pipe can hold bytes back.
+fn relay(from: &mut impl Read, to: &mut impl Write) {
+    let mut buf = vec![0u8; 64 << 10];
+    loop {
+        match from.read(&mut buf) {
+            Ok(0) => return,
+            Ok(n) => {
+                if to.write_all(&buf[..n]).and_then(|_| to.flush()).is_err() {
+                    return;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return,
+        }
+    }
+}
+
+/// `sb serve` in a session of its own, so the end of the ssh link does not stop it.
+fn start_serve() -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let log = Paths::from_env().home.join("logs");
+    let _ = std::fs::create_dir_all(&log);
+    let err = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log.join("serve.out"))
+        .map_err(|e| e.to_string())?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("serve")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(err);
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    cmd.spawn().map(drop).map_err(|e| format!("start sb serve: {e}"))
 }
 
 fn stdin_json() -> Value {
