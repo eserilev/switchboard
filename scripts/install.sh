@@ -318,7 +318,10 @@ do_install() {
     printf 'Exec=%s\n' "$(desktop_exec "$bin_dir/switchboard")" >> "$tmp"
     put "$tmp" "$desktop" 644
     rm -f "$tmp"
-    put "$out/switchboard.png" "$data_home/icons/hicolor/256x256/apps/switchboard.png" 644
+    put "$out/switchboard.png" "$data_home/icons/hicolor/512x512/apps/switchboard.png" 644
+    # Up to 0.1 the icon went in the 256x256 folder. That old file wins at small sizes.
+    rm -f "$data_home/icons/hicolor/256x256/apps/switchboard.png"
+    command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t "$data_home/icons/hicolor" 2>/dev/null || true
   fi
   [ "$os" = Darwin ] || say "Installed: ${installed[*]+"${installed[*]}"}"
   mkdir -p "$(dirname "$manifest")"

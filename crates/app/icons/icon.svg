@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Switchboard: a jack panel with lamps in the lamp colors, and a gold patch cord. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262e3c"/>
+      <stop offset="1" stop-color="#11151c"/>
+    </linearGradient>
+    <linearGradient id="cord" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f0d08e"/>
+      <stop offset="1" stop-color="#c79a4c"/>
+    </linearGradient>
+    <radialGradient id="jack" cx="0.5" cy="0.4" r="0.6">
+      <stop offset="0" stop-color="#1b212b"/>
+      <stop offset="1" stop-color="#090c11"/>
+    </radialGradient>
+    <filter id="glow" x="-1" y="-1" width="3" height="3">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <filter id="shadow" x="-0.2" y="-0.2" width="1.4" height="1.4">
+      <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#000" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+
+  <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#bg)"/>
+  <rect x="33.5" y="33.5" width="957" height="957" rx="214.5" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="3"/>
+
+  <!-- Lamp glows -->
+  <circle cx="742" cy="282" r="70" fill="#5aa880" opacity="0.55" filter="url(#glow)"/>
+  <circle cx="282" cy="512" r="70" fill="#d4a256" opacity="0.55" filter="url(#glow)"/>
+  <circle cx="512" cy="742" r="70" fill="#7cc4f0" opacity="0.5" filter="url(#glow)"/>
+
+  <!-- Jacks: 3 by 3 -->
+  <g stroke="#323b4b" stroke-width="10" fill="url(#jack)">
+    <circle cx="282" cy="282" r="78"/><circle cx="512" cy="282" r="78"/><circle cx="742" cy="282" r="78"/>
+    <circle cx="282" cy="512" r="78"/><circle cx="512" cy="512" r="78"/><circle cx="742" cy="512" r="78"/>
+    <circle cx="282" cy="742" r="78"/><circle cx="512" cy="742" r="78"/><circle cx="742" cy="742" r="78"/>
+  </g>
+  <!-- Lamps: off, then the lit ones -->
+  <g fill="#262d39">
+    <circle cx="512" cy="282" r="36"/><circle cx="512" cy="512" r="36"/><circle cx="742" cy="512" r="36"/>
+    <circle cx="282" cy="742" r="36"/>
+  </g>
+  <circle cx="742" cy="282" r="38" fill="#6fc497"/>
+  <circle cx="282" cy="512" r="38" fill="#e6b465"/>
+  <circle cx="512" cy="742" r="38" fill="#8fd0f5"/>
+  <g fill="#ffffff" opacity="0.35">
+    <circle cx="730" cy="268" r="11"/><circle cx="270" cy="498" r="11"/><circle cx="500" cy="728" r="11"/>
+  </g>
+
+  <!-- The patch cord from the top-left jack to the bottom-right jack -->
+  <g filter="url(#shadow)">
+    <path d="M282 282 C 300 620, 560 520, 742 742" fill="none" stroke="#8a6a32" stroke-width="54" stroke-linecap="round"/>
+    <path d="M282 282 C 300 620, 560 520, 742 742" fill="none" stroke="url(#cord)" stroke-width="40" stroke-linecap="round"/>
+    <circle cx="282" cy="282" r="52" fill="url(#cord)" stroke="#8a6a32" stroke-width="8"/>
+    <circle cx="742" cy="742" r="52" fill="url(#cord)" stroke="#8a6a32" stroke-width="8"/>
+    <circle cx="282" cy="282" r="18" fill="#6b5226"/>
+    <circle cx="742" cy="742" r="18" fill="#6b5226"/>
+  </g>
+</svg>
