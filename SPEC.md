@@ -180,8 +180,8 @@ A live pane gets every key you type. Esc in Claude Code stops the agent. So app 
 | Leader, `H` `J` `K` `L` | Move focus between tiles. |
 | Leader, `e` | Show or hide nvim next to the focused agent (28). On another pane, nvim in its worktree. |
 | Leader, `s` | Show or hide the shell under the focused agent (28). |
-| Leader, `o` | The keys go to the next part of the live pane: claude, term, nvim (28). |
-| Leader, `h` / `l` | The keys go to the part on the left or the right (28). |
+| Leader, `o` | The keys go to the next part of the live pane: nvim, claude, term (28). |
+| Leader, `h` / `l` | The keys go to nvim on the left, or to the agent or its shell on the right (28). |
 | Leader, `z` | Zoom the part with the keys to the whole live pane, or take the zoom back (28). |
 | Leader, `n` | Launcher. |
 | Leader, `r` | Review tab. |
@@ -1286,7 +1286,7 @@ An agent pane gets nvim and a shell next to it, in its worktree, when you ask. I
 
 ### 28.2 The live pane with parts
 
-- nvim shows on the right at full height. The shell shows under the agent, on the left. They start at half the width and 220 px.
+- nvim shows on the left at full height. The shell shows under the agent, on the right. They start at half the width and 220 px.
 - Drag a divider to change a size. A double-click resets it. The sizes stay for each worktree.
 - With a part, each part gets a header: its name, the worktree, zoom, and for nvim and the shell also stop and ×.
 - The part with the keys has a gold line on its header and a brighter header.
@@ -1319,4 +1319,4 @@ An agent pane gets nvim and a shell next to it, in its worktree, when you ask. I
 ### 28.5 Tests
 
 - A hub test (`crates/sb/tests/parts.rs`) on a real tmux: one shell for each worktree, no part with no live pane or for another live pane, a resize right after an expand stays, a close of the live pane takes its parts, each window at its own size, output with the part's id, `busy` on and off, no output after a detach, a detach never takes the live pane, an expand and a close take parts off, and `modified` from a real nvim.
-- 30 window checks: Leader `e`, `s`, `z`, `x`, `h`, `l` and `o`; output and keys go to the right terminal; × keeps the pane; the hidden count; the layout memory; `[+]`; Stop asks; `▸` and `✓ done`; a part gets its tile back when no agent is left or the agent ended; Leader `z` does nothing in a narrow window.
+- 31 window checks: Leader `e`, `s`, `z`, `x`, `h`, `l` and `o`; output and keys go to the right terminal; × keeps the pane; the hidden count; the layout memory; `[+]`; Stop asks; `▸` and `✓ done`; a part gets its tile back when no agent is left or the agent ended; Leader `z` does nothing in a narrow window.
