@@ -1357,7 +1357,7 @@
     check("the nvim header has the keys", $("#pnvim .parthead").classList.contains("on") && !$("#pagent .parthead").classList.contains("on"));
     leader("s");
     await wait(150);
-    check("Leader s opens the shell under the agent", called("shell_open").at(-1)?.[1].tree === "/c/lighthouse" && !$("#pterm").hidden && !$("#pnvim").hidden && $("#pterm").parentElement === $("#lmain"));
+    check("Leader s opens the shell under the agent", called("shell_open").at(-1)?.[1].tree === "/c/lighthouse" && !$("#pterm").hidden && !$("#pnvim").hidden && $("#pterm").parentElement === $("#lleft"));
     window.__emit("pane_output", { pane: "ps1", data: btoa("shell-bytes-1") });
     window.__emit("pane_output", { pane: "pn1", data: btoa("nvim-bytes-1") });
     await wait(90);
@@ -1384,13 +1384,12 @@
     leader("x");
     await wait(60);
     check("Leader x takes the zoom back first", PT.P.zoom === null && window.SB.S.live === "p1" && !$("#pagent").hidden && !$("#pnvim").hidden);
-    check("nvim is on the left of the agent", $("#pnvim").getBoundingClientRect().right <= $("#pagent").getBoundingClientRect().left && $("#pterm").getBoundingClientRect().left >= $("#pnvim").getBoundingClientRect().right);
-    leader("h");
-    await wait(30);
-    check("Leader h moves the keys to nvim, on the left", PT.P.focus === "nvim");
     leader("l");
     await wait(30);
-    check("Leader l moves the keys back right", PT.P.focus === "term");
+    check("Leader l moves the keys to nvim", PT.P.focus === "nvim");
+    leader("h");
+    await wait(30);
+    check("Leader h moves the keys back left", PT.P.focus === "term");
     leader("o");
     await wait(30);
     check("Leader o goes to the next part", PT.P.focus === "nvim");

@@ -1,6 +1,5 @@
 // The parts of the live pane (SPEC 28): nvim and a shell next to an agent, in its
-// worktree: nvim on the left, the agent and its shell on the right. While an
-// agent runs in a worktree, its nvim and its shell have no tile.
+// worktree. While an agent runs in a worktree, its nvim and its shell have no tile.
 // app.js calls in here through `SBParts`.
 (() => {
   const { S, invoke, call, esc, paneById, toast, bytes } = window.SB;
@@ -90,7 +89,7 @@
     $("#pagent").hidden = !showA;
     $("#pnvim").hidden = !showN;
     $("#pterm").hidden = !showT;
-    $("#lmain").hidden = !showA && !showT;
+    $("#lleft").hidden = !showA && !showT;
     $("#gnvim").hidden = !(showN && (showA || showT));
     $("#gterm").hidden = !(showA && showT);
     $("#pterm").classList.toggle("fill", !showA);
@@ -215,17 +214,17 @@
     (part === "agent" ? window.SB.term : T[part].term).focus();
     heads();
   }
-  // Leader o: the next part, in the order nvim, claude, term.
+  // Leader o: the next part, in the order claude, term, nvim.
   function cycle() {
-    const list = ["nvim", "agent", "term"].filter(visible);
+    const list = ["agent", "term", "nvim"].filter(visible);
     if (list.length < 2) return;
     focusPart(list[(list.indexOf(P.focus) + 1) % list.length]);
   }
-  // Leader h and l: the part on the left (nvim) or the right (the agent or its shell).
-  let lastRight = "agent";
+  // Leader h and l: the part on the left or the right.
+  let lastLeft = "agent";
   function side(d) {
-    if (d < 0 && P.focus !== "nvim") { lastRight = P.focus; focusPart("nvim"); }
-    else if (d > 0 && P.focus === "nvim") focusPart(visible(lastRight) ? lastRight : visible("agent") ? "agent" : "term");
+    if (d > 0 && P.focus !== "nvim") { lastLeft = P.focus; focusPart("nvim"); }
+    else if (d < 0 && P.focus === "nvim") focusPart(visible(lastLeft) ? lastLeft : visible("agent") ? "agent" : "term");
   }
   // Leader z. False when there is nothing to zoom.
   function zoom(part = P.focus) {
@@ -334,7 +333,7 @@
 
   // The divider sizes, for each worktree. A double-click resets them.
   SBSplit.bind($("#gnvim"), {
-    axis: "x", dir: 1, controls: "pnvim",
+    axis: "x", dir: -1, controls: "pnvim",
     size: () => $("#pnvim").getBoundingClientRect().width,
     limits: () => [240, Math.max(240, $("#lparts").getBoundingClientRect().width - 240)],
     apply: (v) => {
@@ -350,9 +349,9 @@
   SBSplit.bind($("#gterm"), {
     axis: "y", dir: -1, controls: "pterm",
     size: () => $("#pterm").getBoundingClientRect().height,
-    limits: () => [100, Math.max(100, $("#lmain").getBoundingClientRect().height - 120)],
+    limits: () => [100, Math.max(100, $("#lleft").getBoundingClientRect().height - 120)],
     apply: (v) => {
-      const h = $("#lmain").getBoundingClientRect().height;
+      const h = $("#lleft").getBoundingClientRect().height;
       $("#lparts").style.setProperty("--term-h", `${Math.round(Math.max(100, Math.min(v, h - 120)))}px`);
     },
     reset: () => { remember({ termH: null }); sizes(); },
