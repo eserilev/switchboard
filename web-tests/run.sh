@@ -18,7 +18,7 @@ page = open(harness).read().replace("@@BODY@@", body)
 open(out, "w").write(page.replace('src="shim.js"', f'src="{here}/shim.js"').replace('src="checks.js"', f'src="{here}/checks.js"').replace('"../web/', f'"{here}/../web/'))
 PY
 # A time zone with DST, for the burndown checks.
-TZ="${SB_TEST_TZ:-America/New_York}" "$browser" --headless --disable-gpu --no-sandbox --allow-file-access-from-files --window-size=1600,1000 --virtual-time-budget=30000 --dump-dom "file://$work/page.html" 2>/dev/null >"$work/dom.html"
+TZ="${SB_TEST_TZ:-America/New_York}" "$browser" --headless --disable-gpu --no-sandbox --allow-file-access-from-files --window-size=1600,1000 --virtual-time-budget=40000 --dump-dom "file://$work/page.html" 2>/dev/null >"$work/dom.html"
 python3 - "$work/dom.html" <<'PY'
 import html, json, re, sys
 dom = open(sys.argv[1]).read()

@@ -20,6 +20,8 @@ const S = {
   tab: "board",
   // The review tab whose Claude column holds the live terminal.
   termHost: null,
+  // The pane open on the board. It opens again when the board shows after a review took the terminal.
+  boardLive: null,
   reviews: new Map(),
   conn: { active: "default", list: [] },
   settings: { nvim: true },
@@ -97,22 +99,26 @@ async function resync() {
 
 // ---------- tabs ----------
 
-function setTab(tab) {
+// `quiet`: the caller opens a pane itself, so the board does not open its own again.
+function setTab(tab, quiet) {
   if (tab !== "board") window.SB?.term?.blur();
   if (tab !== "tasks") window.SBTasks?.leave();
   // The terminal lives in a review's Claude column while that review shows.
   if (S.termHost && S.termHost !== tab) {
     S.termHost = null;
     parkLive();
-    if (S.live) collapse();
+    if (S.live) collapse(true);
   }
   S.tab = tab;
   $("#view-board").hidden = tab !== "board";
   $("#view-tasks").hidden = tab !== "tasks";
   $("#view-review").hidden = tab === "board" || tab === "tasks";
   drawTabs();
-  if (tab === "board") requestAnimationFrame(fitLive);
-  else if (tab === "tasks") window.SBTasks?.draw();
+  if (tab === "board") {
+    const back = S.boardLive;
+    if (!quiet && back && !S.live && paneById(back)) expand(back);
+    else requestAnimationFrame(fitLive);
+  } else if (tab === "tasks") window.SBTasks?.draw();
   else window.SBReview?.draw(tab);
 }
 
@@ -473,7 +479,8 @@ async function expand(id, host) {
   } else {
     parkLive();
     S.termHost = null;
-    if (S.tab !== "board") setTab("board");
+    S.boardLive = id;
+    if (S.tab !== "board") setTab("board", true);
   }
   S.live = id;
   S.focus = id;
@@ -502,9 +509,11 @@ async function expand(id, host) {
   }
 }
 
-function collapse() {
+// `keep`: a tab change took the terminal, so the board keeps its pane for later.
+function collapse(keep) {
   const was = S.live;
   S.live = null;
+  if (!keep && !S.termHost) S.boardLive = null;
   window.SBParts?.reset();
   $("#live").hidden = true;
   invoke("pane_collapse").catch(() => {});
