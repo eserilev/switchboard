@@ -216,9 +216,14 @@ fn window(hub: Arc<Hub>, sink: Arc<RemoteSink>, stream: UnixStream) {
     if let Some(old) = old {
         tracing::info!(target: "sb::remote", old = old.epoch, new = conn.epoch, "a window takes over");
         old.line(&json!({ "event": "taken_over", "payload": null }));
-        // The writer sends the event, then shuts the socket.
+        // The writer sends the event, then shuts the socket. A writer that blocks on
+        // a dead link never does: shut it after a while anyway.
         old.ending.store(true, Ordering::SeqCst);
         old.ring();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(5));
+            old.close();
+        });
     }
     tracing::info!(target: "sb::remote", epoch = conn.epoch, "a window attached");
 
@@ -234,18 +239,30 @@ fn window(hub: Arc<Hub>, sink: Arc<RemoteSink>, stream: UnixStream) {
             for key in screen_rx {
                 let Some(hub) = hub.upgrade() else { break };
                 let pane = sink.pane_of(key);
-                let screen = pane.as_deref().and_then(|p| hub.screen_for_resync(p).ok());
-                tracing::info!(target: "sb::remote", pane = ?pane, ok = screen.is_some(), "fresh screen");
+                // Under the owner lock, as a screen command: no collapse comes between
+                // the check of `resume_stream` and its stream on, and a window that
+                // lost a takeover never pauses a pane of the new one (models/remote.qnt, R6).
+                let owner = sink.owner.lock().unwrap();
+                let mine = *owner == conn.epoch;
+                let screen = match &pane {
+                    Some(p) if mine => hub.screen_for_resync(p).ok(),
+                    _ => None,
+                };
+                tracing::info!(target: "sb::remote", pane = ?pane, mine, ok = screen.is_some(), "fresh screen");
                 // Always fill: a pane that left the screen is live again, not stuck.
                 outq::fill(&mut conn.out.lock().unwrap(), key, screen.unwrap_or_default());
                 conn.ring();
-                if let Some(p) = &pane {
-                    hub.resume_stream(p);
+                match &pane {
+                    Some(p) if mine => hub.resume_stream(p),
+                    _ => {}
                 }
+                drop(owner);
             }
         });
     }
 
+    // The end of the window, also after a panic in a command of the read loop.
+    let _leave = Leave { hub: &hub, sink: &sink, conn: &conn };
     let mut line = String::new();
     loop {
         line.clear();
@@ -253,40 +270,64 @@ fn window(hub: Arc<Hub>, sink: Arc<RemoteSink>, stream: UnixStream) {
             Ok(0) | Err(_) => break,
             Ok(_) => {}
         }
-        if conn.closed.load(Ordering::SeqCst) {
+        // After a takeover, no more lines of this window run: no late keys.
+        if conn.closed.load(Ordering::SeqCst) || conn.ending.load(Ordering::SeqCst) {
             break;
         }
         let Ok(req) = serde_json::from_str::<Value>(&line) else {
             tracing::warn!(target: "sb::remote", "a bad line from the window");
             continue;
         };
-        let (hub, sink, conn) = (Arc::clone(&hub), Arc::clone(&sink), Arc::clone(&conn));
-        std::thread::spawn(move || {
-            let id = req["id"].clone();
-            let cmd = req["cmd"].as_str().unwrap_or("").to_owned();
-            let args = req.get("args").cloned().unwrap_or(json!({}));
-            let out = run(&hub, &sink, conn.epoch, &cmd, &args);
-            if let Err(err) = &out {
-                tracing::warn!(target: "sb::remote", cmd, %err, "command failed");
-            }
-            conn.line(&match out {
-                Ok(v) => json!({ "id": id, "ok": v }),
-                Err(e) => json!({ "id": id, "err": e }),
-            });
-        });
-    }
-    tracing::info!(target: "sb::remote", epoch = conn.epoch, "a window left");
-    conn.close();
-    // The hub keeps running. Its screen goes with the window that owned it.
-    let owner = sink.owner.lock().unwrap();
-    if *owner == conn.epoch {
-        let mut cur = sink.current.lock().unwrap();
-        if cur.as_ref().map(|c| c.epoch) == Some(conn.epoch) {
-            *cur = None;
+        // A command that changes the screen or types runs here, in the order of the
+        // lines: in a thread of its own, a collapse can run after the expand that
+        // the window sent next (models/remote.qnt, R5).
+        if dispatch::ORDERED.contains(&req["cmd"].as_str().unwrap_or("")) {
+            answer(&hub, &sink, &conn, &req);
+            continue;
         }
-        drop(cur);
-        hub.collapse();
+        let (hub, sink, conn) = (Arc::clone(&hub), Arc::clone(&sink), Arc::clone(&conn));
+        std::thread::spawn(move || answer(&hub, &sink, &conn, &req));
     }
+}
+
+/// Ends a window when its read loop ends. The hub keeps running. Its screen goes
+/// with the window that owned it.
+struct Leave<'a> {
+    hub: &'a Hub,
+    sink: &'a RemoteSink,
+    conn: &'a Conn,
+}
+
+impl Drop for Leave<'_> {
+    fn drop(&mut self) {
+        tracing::info!(target: "sb::remote", epoch = self.conn.epoch, "a window left");
+        self.conn.close();
+        // A panic under the owner lock poisons it: the value is still good.
+        let owner = self.sink.owner.lock().unwrap_or_else(|e| e.into_inner());
+        if *owner == self.conn.epoch {
+            let mut cur = self.sink.current.lock().unwrap_or_else(|e| e.into_inner());
+            if cur.as_ref().map(|c| c.epoch) == Some(self.conn.epoch) {
+                *cur = None;
+            }
+            drop(cur);
+            self.hub.collapse();
+        }
+    }
+}
+
+/// Runs one command line and queues its answer.
+fn answer(hub: &Hub, sink: &RemoteSink, conn: &Conn, req: &Value) {
+    let id = req["id"].clone();
+    let cmd = req["cmd"].as_str().unwrap_or("");
+    let args = req.get("args").cloned().unwrap_or(json!({}));
+    let out = run(hub, sink, conn.epoch, cmd, &args);
+    if let Err(err) = &out {
+        tracing::warn!(target: "sb::remote", cmd, %err, "command failed");
+    }
+    conn.line(&match out {
+        Ok(v) => json!({ "id": id, "ok": v }),
+        Err(e) => json!({ "id": id, "err": e }),
+    });
 }
 
 /// One command. A screen command runs only while its window owns the screen.
@@ -381,6 +422,38 @@ fn why_ended(errs: &Mutex<VecDeque<String>>) -> String {
     }
 }
 
+/// How long a window waits for the hello answer.
+const HELLO_WAIT: Duration = Duration::from_secs(20);
+
+/// The hello answer of the hub. A login shell can print a banner first: lines
+/// that are not a hello are skipped, up to 100. `None`: the link ended.
+fn hello_answer(lines: &mut impl BufRead) -> Result<Option<Value>, String> {
+    let mut line = String::new();
+    for _ in 0..100 {
+        line.clear();
+        if lines.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
+            return Ok(None);
+        }
+        match serde_json::from_str::<Value>(&line) {
+            Ok(v) if v.get("hello").is_some() => return Ok(Some(v)),
+            _ => tracing::info!(target: "sb::remote", "not a hello: {}", line.trim_end()),
+        }
+    }
+    Err("the server sent no hello in its first 100 lines".into())
+}
+
+/// Kills and reaps a child when it goes out of scope.
+struct KillOnDrop(Option<std::process::Child>);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if let Some(mut c) = self.0.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
 /// A window's link to a remote hub, through a program such as `ssh host sb attach`.
 pub struct Client {
     input: Mutex<Box<dyn Write + Send>>,
@@ -396,16 +469,19 @@ impl Client {
     pub fn connect(argv: &[String], news: impl Fn(News) + Send + 'static) -> Result<Arc<Client>, String> {
         let (prog, rest) = argv.split_first().ok_or("no remote command")?;
         tracing::info!(target: "sb::remote", ?argv, "connect");
-        let mut child = std::process::Command::new(prog)
+        let child = std::process::Command::new(prog)
             .args(rest)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| format!("{prog}: {e}"))?;
-        let mut stdin = child.stdin.take().ok_or("no stdin")?;
-        let stdout = child.stdout.take().ok_or("no stdout")?;
-        let stderr = child.stderr.take().ok_or("no stderr")?;
+        // Until the hello is good, any way out kills the program.
+        let mut child = KillOnDrop(Some(child));
+        let c = child.0.as_mut().ok_or("no child")?;
+        let mut stdin = c.stdin.take().ok_or("no stdin")?;
+        let stdout = c.stdout.take().ok_or("no stdout")?;
+        let stderr = c.stderr.take().ok_or("no stderr")?;
         writeln!(stdin, "{}", hello()).map_err(|e| e.to_string())?;
         let _ = stdin.flush();
         // The last stderr lines tell why ssh failed.
@@ -423,16 +499,21 @@ impl Client {
                 }
             });
         }
-        let mut lines = BufReader::new(stdout);
-        let mut first = String::new();
-        let n = lines.read_line(&mut first).map_err(|e| e.to_string())?;
-        if n == 0 {
-            let _ = child.kill();
+        // The hello answer, in a thread: a server that never answers ends in a
+        // timeout. The kill on the way out ends that thread too.
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut lines = BufReader::new(stdout);
+            let got = hello_answer(&mut lines);
+            let _ = tx.send((got, lines));
+        });
+        let Ok((got, mut lines)) = rx.recv_timeout(HELLO_WAIT) else {
+            return Err(format!("no answer from the server in {} s", HELLO_WAIT.as_secs()));
+        };
+        let Some(answer) = got? else {
             return Err(why_ended(&errs));
-        }
-        let answer: Value = serde_json::from_str(&first).map_err(|_| format!("not a Switchboard answer: {}", first.trim()))?;
+        };
         if answer["hello"]["ok"] != true {
-            let _ = child.kill();
             return Err(answer["hello"]["why"].as_str().unwrap_or("the hub refused the window").to_owned());
         }
         let client = Arc::new(Client {
@@ -440,7 +521,7 @@ impl Client {
             waiting: Arc::default(),
             next: AtomicU64::new(1),
             up: Arc::new(AtomicBool::new(true)),
-            child: Mutex::new(Some(child)),
+            child: Mutex::new(child.0.take()),
         });
         let (waiting, up) = (Arc::clone(&client.waiting), Arc::clone(&client.up));
         let errs = Arc::clone(&errs);
@@ -487,12 +568,25 @@ impl Client {
 
     /// One command, and its answer. It blocks until the answer or the end of the link.
     pub fn call(&self, cmd: &str, args: Value) -> Result<Value, String> {
+        let rx = self.send(cmd, args)?;
+        rx.recv().unwrap_or_else(|_| Err("the link to the server is down".into()))
+    }
+
+    /// Writes one command and returns at once. The answer comes on the receiver.
+    /// Lines go out in the order of the calls.
+    pub fn send(&self, cmd: &str, args: Value) -> Result<mpsc::Receiver<Result<Value, String>>, String> {
         if !self.is_up() {
             return Err("the link to the server is down".into());
         }
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel();
         self.waiting.lock().unwrap().insert(id, tx);
+        // The reader can end and drain the waiters before the insert: then no
+        // answer ever comes. It marks the link down first, so look again.
+        if !self.is_up() {
+            self.waiting.lock().unwrap().remove(&id);
+            return Err("the link to the server is down".into());
+        }
         let line = json!({ "id": id, "cmd": cmd, "args": args }).to_string();
         let sent = {
             let mut i = self.input.lock().unwrap();
@@ -502,7 +596,7 @@ impl Client {
             self.waiting.lock().unwrap().remove(&id);
             return Err("the link to the server is down".into());
         }
-        rx.recv().unwrap_or_else(|_| Err("the link to the server is down".into()))
+        Ok(rx)
     }
 
     /// Ends the link.
@@ -534,8 +628,40 @@ mod tests {
     }
 
     #[test]
+    fn a_banner_before_the_hello_is_skipped() {
+        let mut r = std::io::Cursor::new(b"Welcome to box\n{\"not\":1}\n{\"hello\":{\"ok\":true}}\n".to_vec());
+        assert_eq!(hello_answer(&mut r).unwrap().unwrap()["hello"]["ok"], true);
+        let mut r = std::io::Cursor::new(b"only a banner\n".to_vec());
+        assert!(hello_answer(&mut r).unwrap().is_none());
+    }
+
+    /// A refused hello ends the link program: no ssh stays behind (SPEC 29.8, V1).
+    #[test]
+    fn a_failed_connect_kills_its_program() {
+        let dir = std::env::temp_dir().join(format!("sb-connect-kill-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid_file = dir.join("pid");
+        let script = format!(
+            "echo $$ > {}; echo '{{\"hello\":{{\"ok\":false,\"why\":\"no\"}}}}'; exec sleep 30",
+            pid_file.display()
+        );
+        let argv = ["sh".to_owned(), "-c".to_owned(), script];
+        let err = Client::connect(&argv, |_| {}).err().unwrap();
+        assert_eq!(err, "no");
+        let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        // SAFETY: kill with signal 0 only asks whether the process exists.
+        assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "the program still runs");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn screen_commands_are_commands() {
         for c in SCREEN {
+            assert!(dispatch::COMMANDS.contains(c), "{c}");
+            // A screen command runs in order, under the owner lock.
+            assert!(dispatch::ORDERED.contains(c), "{c} is not ordered");
+        }
+        for c in dispatch::ORDERED {
             assert!(dispatch::COMMANDS.contains(c), "{c}");
         }
     }

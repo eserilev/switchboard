@@ -38,6 +38,19 @@ fn arg<T: serde::de::DeserializeOwned>(args: &Value, name: &str) -> Res<T> {
     serde_json::from_value(v).map_err(|e| format!("argument {name}: {e}"))
 }
 
+/// The commands that run in the order the window sends them (SPEC 29): they change
+/// what the window shows, or type in a pane. The app sends them in one lane, and
+/// `sb serve` runs them in its read loop. The other commands run side by side.
+pub const ORDERED: &[&str] = &[
+    "pane_expand",
+    "pane_attach",
+    "pane_detach",
+    "pane_collapse",
+    "pane_resize",
+    "part_resize",
+    "pane_input",
+];
+
 macro_rules! commands {
     ($( $name:ident ( $($a:ident : $ty:ty),* ) -> $ret:ty => |$h:ident| $body:expr; )*) => {
         /// The name of every command that [`dispatch`] knows.

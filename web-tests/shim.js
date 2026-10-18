@@ -183,7 +183,7 @@ window.__TAURI__ = {
           return d.panes.some((x) => x.id === "p8") ? "p8" : null;
         }
         case "review_step_note": return 'I am on step s2 "Proposal path passes slot - 1" (beacon_node/gloas.rs:11-12 (new)).';
-        case "pane_expand": return btoa("\x1b[H\x1b[2Jhello from the live pane\r\n$ ");
+        case "pane_expand": if (window.__expandHook) return window.__expandHook(args); return btoa("\x1b[H\x1b[2Jhello from the live pane\r\n$ ");
         case "pane_open": return pane({ id: "p9", tree: args.req.repo });
         case "link_reconnect": if (window.__linkFail) throw window.__linkFail; return { remote: true, host: "box", up: true, why: null };
         case "review_nvim": return "p3";

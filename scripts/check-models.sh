@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Check the Quint models: the permission flow (SPEC 25) and review close (SPEC 26).
+# Check the Quint models: the permission flow (SPEC 25), review close (SPEC 26)
+# and remote mode (SPEC 29).
 # SAMPLES sets the number of random runs for each step profile (default 100000).
 # STEPS sets the length of each run (default 50).
 set -euo pipefail
@@ -59,4 +60,30 @@ for old in stepNoGate stepBoolDiscard stepNoGuard stepForceLock stepNoLocalGuard
     fi
     echo "== $old fails, as it must"
 done
+
+# Remote mode (SPEC 29): takeover, a lost link, drops and fresh screens. The
+# witnesses must fail: else the runs never reach a resync, a stale command, or a
+# quiet screen after a lost link. The old code must fail too: no owner check,
+# commands in threads of their own, and any expand answer that draws.
+quint typecheck remote.qnt
+quint typecheck remote_test.qnt
+# The fixed traces: the first screen thread leaves a pane streaming; the fix does not.
+quint test remote_test.qnt
+echo "== remote step: $samples runs of $steps steps"
+quint run remote.qnt --step=step --invariants Always \
+    --max-samples="$samples" --max-steps="$steps" --verbosity=1
+must_fail() {
+    if quint run remote.qnt "$@" --max-samples="$samples" --max-steps="$steps" \
+        --verbosity=0 > /dev/null 2>&1; then
+        echo "error: remote $* passed: the model lost that path" >&2
+        exit 1
+    fi
+    echo "== remote $* fails, as it must"
+}
+for w in NoResync NoStaleError NoQuietShow; do
+    must_fail --step=step --invariant="$w"
+done
+must_fail --step=stepNoOwnerCheck --invariant=Always
+must_fail --step=stepAnyOrder --invariant=Always
+must_fail --init=initAnyAnswer --step=step --invariant=Always
 echo "models ok"

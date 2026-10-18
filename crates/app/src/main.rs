@@ -4,7 +4,8 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use switchboard_core::config::Config;
 use switchboard_core::dispatch;
 use switchboard_core::hub::{Hub, Sink};
@@ -84,6 +85,9 @@ struct Remote {
     sink: Arc<AppSink>,
     /// The leader key of this computer's config, not the server's.
     leader: String,
+    /// The number of the newest link. News of an older link is dropped: its
+    /// reader can end after the next link is up.
+    gen: Arc<AtomicU64>,
 }
 
 impl Remote {
@@ -92,20 +96,32 @@ impl Remote {
         if let Some(old) = self.client.lock().unwrap().take() {
             old.close();
         }
-        let (sink, down, host) = (Arc::clone(&self.sink), Arc::clone(&self.down), self.host.clone());
-        let news = move |n: News| match n {
-            News::Event(ev, payload) => sink.emit(&ev, payload),
-            News::Down { why, taken } => {
-                tracing::warn!(target: "sb::remote", %why, taken, "the link is down");
-                *down.lock().unwrap() = Some(why.clone());
-                let _ = sink.handle.emit("link", json!({ "up": false, "host": host, "why": why, "taken": taken }));
+        let g = self.gen.fetch_add(1, Ordering::SeqCst) + 1;
+        let (sink, down, host, gen) = (Arc::clone(&self.sink), Arc::clone(&self.down), self.host.clone(), Arc::clone(&self.gen));
+        let news = move |n: News| {
+            if gen.load(Ordering::SeqCst) != g {
+                return;
+            }
+            match n {
+                News::Event(ev, payload) => sink.emit(&ev, payload),
+                News::Down { why, taken } => {
+                    tracing::warn!(target: "sb::remote", %why, taken, "the link is down");
+                    let mut d = down.lock().unwrap();
+                    *d = Some(why.clone());
+                    let _ = sink.handle.emit("link", json!({ "up": false, "host": host, "why": why, "taken": taken }));
+                }
             }
         };
         match Client::connect(&self.argv, news) {
             Ok(c) => {
-                *self.client.lock().unwrap() = Some(c);
-                *self.down.lock().unwrap() = None;
-                let _ = self.sink.handle.emit("link", json!({ "up": true, "host": self.host }));
+                *self.client.lock().unwrap() = Some(Arc::clone(&c));
+                // Under the `down` lock: a link that already went down (a takeover
+                // right after the hello) keeps its why, and its banner.
+                let mut d = self.down.lock().unwrap();
+                if c.is_up() {
+                    *d = None;
+                    let _ = self.sink.handle.emit("link", json!({ "up": true, "host": self.host }));
+                }
                 Ok(())
             }
             Err(why) => {
@@ -126,7 +142,29 @@ impl Remote {
     }
 }
 
+/// A command that started. A remote one waits for its answer.
+enum Pending {
+    Done(Res<Value>),
+    Wait(mpsc::Receiver<Res<Value>>),
+}
+
 impl Backend {
+    /// Starts one command without a wait for a remote answer, so the next one can
+    /// go out behind it in order. A local one runs to the end here.
+    fn start(&self, cmd: &str, args: Value) -> Pending {
+        match self {
+            Backend::Local(hub) => Pending::Done(dispatch::dispatch(hub, cmd, &args)),
+            Backend::Remote(r) => {
+                let c = r.client.lock().unwrap().clone();
+                match c.map(|c| c.send(cmd, args)) {
+                    Some(Ok(rx)) => Pending::Wait(rx),
+                    Some(Err(e)) => Pending::Done(Err(e)),
+                    None => Pending::Done(Err("the link to the server is down".into())),
+                }
+            }
+        }
+    }
+
     /// One command of the window. It blocks: run it off the async runtime.
     fn call(&self, cmd: &str, args: Value) -> Res<Value> {
         match self {
@@ -147,7 +185,8 @@ impl Backend {
             Backend::Local(_) => json!({ "remote": false, "up": true }),
             Backend::Remote(r) => {
                 let why = r.down.lock().unwrap().clone();
-                json!({ "remote": true, "host": r.host, "up": why.is_none(), "why": why })
+                let up = r.client.lock().unwrap().as_ref().is_some_and(|c| c.is_up());
+                json!({ "remote": true, "host": r.host, "up": up && why.is_none(), "why": why })
             }
         }
     }
@@ -160,14 +199,43 @@ async fn run(name: String, backend: Arc<Backend>, args: Value) -> Res<Value> {
     let out = tauri::async_runtime::spawn_blocking(move || backend.call(&n, args))
         .await
         .map_err(|e| e.to_string())?;
+    note(&name, t0, &out);
+    out
+}
+
+/// The commands that change the screen or type, in the order of the window (SPEC 29).
+/// One thread starts them one by one; their answers come back in any order.
+type Job = (String, Value, tauri::ipc::InvokeResolver<tauri::Wry>);
+struct Lane(mpsc::Sender<Job>);
+
+fn lane(backend: Arc<Backend>, jobs: mpsc::Receiver<Job>) {
+    for (name, args, resolver) in jobs {
+        let t0 = std::time::Instant::now();
+        match backend.start(&name, args) {
+            Pending::Done(out) => {
+                note(&name, t0, &out);
+                resolver.respond(out.map_err(Into::into));
+            }
+            Pending::Wait(rx) => {
+                tauri::async_runtime::spawn_blocking(move || {
+                    let out = rx.recv().unwrap_or_else(|_| Err("the link to the server is down".into()));
+                    note(&name, t0, &out);
+                    resolver.respond(out.map_err(Into::into));
+                });
+            }
+        }
+    }
+}
+
+/// Errors and slow commands go to the log.
+fn note(name: &str, t0: std::time::Instant, out: &Res<Value>) {
     let ms = t0.elapsed().as_millis() as u64;
-    match &out {
+    match out {
         Err(err) => tracing::warn!(target: "sb::cmd", cmd = %name, ms, %err, "command failed"),
         Ok(_) if ms > 1000 => tracing::warn!(target: "sb::cmd", cmd = %name, ms, "slow command"),
         Ok(_) if name == "pane_input" => tracing::trace!(target: "sb::cmd", cmd = %name, ms, "command"),
         Ok(_) => tracing::debug!(target: "sb::cmd", cmd = %name, ms, "command"),
     }
-    out
 }
 
 /// Opens an http(s) link in the browser. It runs here, in remote mode too.
@@ -214,6 +282,16 @@ fn handle(invoke: tauri::ipc::Invoke) -> bool {
         invoke.resolver.reject("the app is starting");
         return true;
     };
+    if dispatch::ORDERED.contains(&cmd.as_str()) {
+        let Some(lane) = webview.try_state::<Lane>() else {
+            invoke.resolver.reject("the app is starting");
+            return true;
+        };
+        if let Err(mpsc::SendError((_, _, resolver))) = lane.0.send((cmd, args, invoke.resolver)) {
+            resolver.reject("the app is stopping");
+        }
+        return true;
+    }
     if !LOCAL.contains(&cmd.as_str()) {
         invoke.resolver.respond_async(async move { run(cmd, backend, args).await.map_err(Into::into) });
         return true;
@@ -304,6 +382,7 @@ fn main() {
                         down: Arc::new(Mutex::new(Some("connecting".into()))),
                         sink,
                         leader: config.leader.clone(),
+                        gen: Arc::default(),
                     };
                     Arc::new(Backend::Remote(remote))
                 }
@@ -315,6 +394,12 @@ fn main() {
                 }
             };
             app.manage(Arc::clone(&backend));
+            let (jobs, rx) = mpsc::channel();
+            {
+                let backend = Arc::clone(&backend);
+                std::thread::spawn(move || lane(backend, rx));
+            }
+            app.manage(Lane(jobs));
             // The link comes up in the background: the window shows while ssh connects.
             if matches!(*backend, Backend::Remote(_)) {
                 std::thread::spawn(move || {

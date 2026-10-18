@@ -401,6 +401,8 @@ term.onBinary((data) => send(data, true));
 let drawn = false;
 let held = [];
 let firstOutput = null;
+// The newest expand. Only its answer draws: an older answer has an older screen.
+let expandSeq = 0;
 listen("pane_output", (e) => {
   if (e.payload.pane !== S.live) return window.SBParts?.output(e.payload.pane, bytes(e.payload.data));
   if (firstOutput === S.live) { firstOutput = null; log("info", "first output reached the window for", S.live); }
@@ -484,6 +486,7 @@ async function expand(id, host) {
   }
   S.live = id;
   S.focus = id;
+  const seq = ++expandSeq;
   drawn = false;
   held = [];
   firstOutput = id;
@@ -496,7 +499,7 @@ async function expand(id, host) {
   try {
     await invoke("pane_resize", { cols: term.cols, rows: term.rows });
     const screen = await invoke("pane_expand", { id });
-    if (S.live !== id) return;
+    if (S.live !== id || seq !== expandSeq) return;
     term.write(bytes(screen));
     held.splice(0).forEach((b) => term.write(b));
     drawn = true;
@@ -504,6 +507,7 @@ async function expand(id, host) {
     if (!host) window.SBParts?.afterExpand(id);
     log("info", "expanded", id, "cols", term.cols, "rows", term.rows, "focus in terminal:", document.activeElement === term.textarea);
   } catch (e) {
+    if (seq !== expandSeq) return;
     toast(e);
     collapse();
   }

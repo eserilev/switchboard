@@ -1472,6 +1472,26 @@
     check("the agent is back", !!$('#board .pane[data-id="p1"]') && !!p1);
   }
 
+  // Two expands of one pane: only the newest answer draws, also when the older
+  // one comes last (models/remote.qnt, R7).
+  {
+    let n = 0;
+    window.__expandHook = () => {
+      n += 1;
+      return n === 1 ? wait(250).then(() => btoa("\x1b[H\x1b[2Jold screen")) : btoa("\x1b[H\x1b[2Jnew screen");
+    };
+    window.SB.collapse();
+    await wait(50);
+    window.SB.expand("p1");
+    await wait(20);
+    window.SB.expand("p1");
+    await wait(400);
+    window.__expandHook = null;
+    check("an older expand answer never draws over the newer one", screen().includes("new screen") && !screen().includes("old screen"), screen().slice(0, 80));
+    window.SB.collapse();
+    await wait(50);
+  }
+
   // The link to a remote hub (SPEC 29).
   {
     window.SB.setTab("board");

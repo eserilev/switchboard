@@ -23,6 +23,7 @@ A desktop app for many AI agents on one screen, plus a guided PR review. `SPEC.m
 After a change to `guide-check` or `outq`, run `scripts/check-proofs.sh`. It regenerates `proofs/GuideCheck/Code` and `proofs/OutQ/Code`; commit them too. Never weaken a statement in `proofs/Statements.lean` to make a proof pass.
 
 After a change to the permission flow (`sb permit`, `on_permit`, `permit_answer`, `answer_permits`), run `scripts/check-models.sh` and keep `models/permit.qnt` true (SPEC 25).
+After a change to remote mode (`remote.rs`: takeover, `run`, the writer, the screen thread; `dispatch::ORDERED`; the lane in the app; `expand` in `web/app.js`), run it too and keep `models/remote.qnt` true (SPEC 29). All window traffic of `sb serve` goes through the writer thread: never write to the socket from another thread.
 After a change to review close or worktree cleanup (`review_close`, `clean_after`, `sweep_closed`, `fetch`, `cleanup::verdict`), run it too and keep `models/review_close.qnt` true (SPEC 26).
 
 ## Build and test

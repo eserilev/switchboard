@@ -13,7 +13,10 @@
 //   the socket and waits for one reply line.
 // - The hub (crates/core/src/hub.rs). One thread for each socket connection, and
 //   the calls from the window. The threads run in any order.
-// - The window. It shows a copy of each tile, and that copy can be old.
+// - The windows. Each shows a copy of each tile, and that copy can be old. In
+//   remote mode (SPEC 29) a second window can attach and take over, and a lost
+//   link loses the clicks in flight. `permit_answer` is not a screen command:
+//   an old window can still answer, with the id that it shows.
 //
 // The state is one record, so each action changes only the fields it names.
 module permit {
@@ -21,6 +24,8 @@ module permit {
   // ---------- sizes ----------
 
   pure val PANES = Set("A", "B")
+  // Window 1, and window 2 after a takeover or a new link.
+  pure val WINDOWS = Set(1, 2)
   // Requests in one run, all panes together.
   pure val MAX_REQ = 4
   // Process starts of one pane: the first start and one resume.
@@ -49,7 +54,8 @@ module permit {
   // or "none" (`PermitReply { behavior: None }`).
   type Reply = { req: int, answer: str, meant: int, n: int }
   type Msg = { pane: str, event: str, n: int }
-  type Click = { pane: str, t: int, answer: str, meant: int, n: int }
+  // `w` is the window of the click.
+  type Click = { w: int, pane: str, t: int, answer: str, meant: int, n: int }
   type Input = { pane: str, key: str, meant: int, n: int }
   type Key = { key: str, meant: int }
   type Clear = { pane: str, meant: int, n: int }
@@ -93,7 +99,7 @@ module permit {
     tile: str -> View,
     clock: int,
     // The window.
-    shown: str -> View,
+    shown: int -> (str -> View),
     // Ghosts for the checks.
     sent: Set[Reply],
     spurious: Set[int],
@@ -360,22 +366,33 @@ module permit {
 
   // ---------- the window and the user ----------
 
-  // The window gets a `pane` event and draws the tile again.
-  action WindowSync(p: str): bool = all {
-    s.shown.get(p) != (if (s.hubPanes.contains(p)) s.tile.get(p) else NO_VIEW),
-    s' = { ...s, shown: s.shown.set(p, if (s.hubPanes.contains(p)) s.tile.get(p) else NO_VIEW) }
+  // Window `w` gets a `pane` event and draws the tile again. A window after a new
+  // link reads all panes again: one sync for each pane.
+  action WindowSyncIn(w: int, p: str): bool = all {
+    s.shown.get(w).get(p) != (if (s.hubPanes.contains(p)) s.tile.get(p) else NO_VIEW),
+    s' = { ...s, shown: s.shown.set(w, s.shown.get(w).set(p, if (s.hubPanes.contains(p)) s.tile.get(p) else NO_VIEW)) }
   }
+  action WindowSync(p: str): bool = WindowSyncIn(1, p)
 
   // A click on Allow or Deny calls `permit_answer(id, allow)` (main.rs of the app).
-  // The id is the one that the window shows, and it can be old.
-  action UserClick(p: str, a: str): bool = all {
-    s.shown.get(p).t != 0,
+  // The id is the one that the window shows, and it can be old: also in a window
+  // that lost a takeover.
+  action UserClickIn(w: int, p: str, a: str): bool = all {
+    s.shown.get(w).get(p).t != 0,
     s.n < MAX_EVENTS,
-    val v = s.shown.get(p)
+    val v = s.shown.get(w).get(p)
     s' = { ...s,
-      clicks: s.clicks.union(Set({ pane: p, t: v.t, answer: a, meant: v.req, n: s.n })),
+      clicks: s.clicks.union(Set({ w: w, pane: p, t: v.t, answer: a, meant: v.req, n: s.n })),
       n: s.n + 1
     }
+  }
+  action UserClick(p: str, a: str): bool = UserClickIn(1, p, a)
+
+  // The link drops a click before the hub reads it (SPEC 29). The window shows
+  // the buttons until its next sync.
+  action ClickLost(c: Click): bool = all {
+    s.clicks.contains(c),
+    s' = { ...s, clicks: s.clicks.exclude(Set(c)) }
   }
 
   // The user types a key in the live pane. They answer the dialog that they
@@ -413,7 +430,7 @@ module permit {
     permits: Set(),
     tile: PANES.mapBy(_ => NO_VIEW),
     clock: 0,
-    shown: PANES.mapBy(_ => NO_VIEW),
+    shown: WINDOWS.mapBy(_ => PANES.mapBy(_ => NO_VIEW)),
     sent: Set(),
     spurious: Set(),
     taken: Set()
@@ -431,6 +448,7 @@ module permit {
     nondet k = KEYS.oneOf()
     nondet ev = Set("working", "turn").oneOf()
     nondet r = REQ_IDS.oneOf()
+    nondet w = WINDOWS.oneOf()
     // `crash == true`: a bare `crash` in `all` fails the effect check of Quint.
     any {
       ClaudeAsk(p),
@@ -448,8 +466,9 @@ module permit {
       all { s.clears != Set(), nondet x = s.clears.oneOf() HubInputClear(x) },
       all { crash == true, HubResume(p) },
       all { crash == true, HubClose(p) },
-      WindowSync(p),
-      UserClick(p, a),
+      WindowSyncIn(w, p),
+      UserClickIn(w, p, a),
+      all { s.clicks != Set(), nondet x = s.clicks.oneOf() ClickLost(x) },
       UserKey(p, k),
     }
   }
@@ -501,7 +520,7 @@ module permit {
     s.conns == Set(), s.msgs == Set(), s.replies == Set(),
     s.clicks == Set(), s.inputs == Set(), s.clears == Set(),
     PANES.forall(p => s.keys.get(p).length() == 0),
-    PANES.forall(p => s.shown.get(p) == (if (s.hubPanes.contains(p)) s.tile.get(p) else NO_VIEW)),
+    WINDOWS.forall(w => PANES.forall(p => s.shown.get(w).get(p) == (if (s.hubPanes.contains(p)) s.tile.get(p) else NO_VIEW))),
     s.hubPanes.forall(p => s.alive.get(p) or s.dead.get(p))
   }
 

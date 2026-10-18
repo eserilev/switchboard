@@ -189,6 +189,41 @@ fn a_remote_window_end_to_end() {
     c.close();
 }
 
+/// Commands that change the screen or type run in the order of the lines, also
+/// when the window does not wait for each answer (models/remote.qnt, R5).
+#[test]
+fn screen_commands_and_keys_keep_their_order() {
+    let home = Home::new("order");
+    let (c, got) = connect(&home);
+    let id = open_shell(&c, &home);
+    c.call("pane_resize", json!({ "cols": 100, "rows": 30 })).unwrap();
+    c.call("pane_expand", json!({ "id": id })).unwrap();
+    // A collapse and then an expand, many times, with no wait between: the pane
+    // is on screen at the end.
+    let mut answers = vec![];
+    for _ in 0..20 {
+        answers.push(c.send("pane_collapse", json!({})).unwrap());
+        answers.push(c.send("pane_expand", json!({ "id": id })).unwrap());
+    }
+    for a in answers {
+        a.recv().unwrap().unwrap();
+    }
+    let panes = c.call("panes", json!({})).unwrap();
+    let p = panes.as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
+    assert_eq!(p["live"], true, "the last expand won: {p}");
+    // Keys one by one, with no wait between: they reach the shell in order.
+    let word = "abcdefghijklmnopqrstuvwxyz0123456789";
+    let mut answers = vec![];
+    for ch in format!("echo {word}-$((2+2))\r").chars() {
+        answers.push(c.send("pane_input", json!({ "id": id, "data": ch.to_string(), "binary": false })).unwrap());
+    }
+    for a in answers {
+        a.recv().unwrap().unwrap();
+    }
+    wait_for("the keys in order", 5, || got.output_of(&id).contains(&format!("{word}-4")));
+    c.close();
+}
+
 /// A window that does not read: the hub keeps working, the pane drops bytes, and
 /// the window gets a fresh screen after it reads again.
 #[test]

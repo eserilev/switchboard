@@ -41,7 +41,7 @@ Switchboard has three parts:
 - Posting to GitHub. Switchboard never posts a review, a comment or an issue.
 - Edits by the review agent. The review agent only reads.
 - Windows. Switchboard targets Arch Linux on Wayland first, and runs on macOS too (23).
-- A hosted service. Everything runs on the local machine.
+- A hosted service. Everything runs on your own machines. In remote mode (29) the hub runs on your server, and the window reaches it over ssh.
 
 ## 4. The problem
 
@@ -692,6 +692,8 @@ sprint_days = 14
 branch_prefix = "sb/"
 ```
 
+`remote = "me@box"` runs the window against a hub on that host, and `remote_command` replaces the ssh command (29.1).
+
 A missing file gives the defaults. An unknown key is an error with the key name.
 
 ## 15. Memory
@@ -875,6 +877,11 @@ Where the build differs from the text above:
 - Parts (28): each part has its own tmux window size, from `refresh-client -C @window:WxH`. tmux 3.2 or newer has it. The live pane also gets its window size, so an old part size never stays on it.
 - Parts (28): the layout memory and the divider sizes are in the window's local storage, not in the store.
 - Parts (28): a chip of a part that does not run shows on the focused tile and the open tile, not on hover. A board redraw drops the hover, and the info line then jumps.
+- Remote (29): the hub uses `pause` and `continue` for a fresh screen, not the `pause-after` flag of tmux.
+- Remote (29): `sb attach` copies with its own loop, not `std::io::copy`. `io::copy` on Linux uses `splice`, and it held back short command lines.
+- Remote (29): only one window at a time. A new window takes over.
+- Remote (29): `remote_command` replaces the whole ssh command, for a jump host or another port.
+- Remote (29): the commands in `dispatch::ORDERED` run in order in local mode too, through the same lane.
 - tmux `%pane:off` stops tmux from reading the pane. Tiles use `pause`.
 - A hidden keeper pane (`@sb_keep`) keeps the tmux session alive when every tile closes.
 - `remain-on-exit` is on for the whole server, so a pane that fails at once still shows its error.
@@ -1020,7 +1027,7 @@ P2 and P6 hold because each request has its own socket and channel, so a reply c
 - Claude itself. The model trusts S2: one dialog for each pane, the first answer wins, and a hook answer applies only to its own request. Two dialogs at once (subagents) are not in the model. After an answer, Claude sends a next hook event (`PreToolUse` or `Stop`).
 - Pane answers from a tmux client outside the app.
 - The `needs` notification, the lamps other than the buttons, and the store.
-- The window draws all tiles from the `pane` events. The model has one copy of each tile, and it can be old.
+- The window draws all tiles from the `pane` events. The model has two windows (29), each with its own copy of each tile, and a copy can be old. A lost link can lose a click.
 - Pane ids are not used again after a close.
 
 ## 26. Model check of review close
@@ -1320,3 +1327,123 @@ An agent pane gets nvim and a shell next to it, in its worktree, when you ask. I
 
 - A hub test (`crates/sb/tests/parts.rs`) on a real tmux: one shell for each worktree, no part with no live pane or for another live pane, a resize right after an expand stays, a close of the live pane takes its parts, each window at its own size, output with the part's id, `busy` on and off, no output after a detach, a detach never takes the live pane, an expand and a close take parts off, and `modified` from a real nvim.
 - 30 window checks: Leader `e`, `s`, `z`, `x`, `h`, `l` and `o`; output and keys go to the right terminal; × keeps the pane; the hidden count; the layout memory; `[+]`; Stop asks; `▸` and `✓ done`; a part gets its tile back when no agent is left or the agent ended; Leader `z` does nothing in a narrow window.
+
+## 29. Remote mode
+
+Status: built (phase 1).
+
+The hub runs on a server, and the window runs on your computer. The agents, tmux, the worktrees and the store stay on the server. The window reaches the hub through ssh. Nothing listens on a network port.
+
+### 29.1 How to use it
+
+1. Install the same version of Switchboard on the server and on your computer.
+2. On your computer, set the host in `~/.config/switchboard/config.toml`:
+
+   ```toml
+   remote = "me@box"
+   ```
+
+3. Start the app. It runs `ssh -T -o ServerAliveInterval=15 -o ServerAliveCountMax=3 me@box sb attach`, with `~/.local/bin` and `~/.cargo/bin` on the server PATH.
+
+- `SB_REMOTE=me@box switchboard` sets the host for one run.
+- `remote_command = ["ssh", "-p", "2222", "me@box", "sb", "attach"]` replaces the whole command.
+- `sb attach` starts `sb serve` when none runs. `sb serve` runs on after the window goes, with its own session (`setsid`). It stops on SIGTERM or SIGINT, and ignores SIGHUP.
+- `sb serve` logs to `~/.switchboard/logs/serve.log`. Its pid is in `run/serve.pid`, and its socket is `run/window.sock` (mode 600).
+- Your leader key comes from the config of your computer, not the server.
+- Links open in the browser of your computer.
+
+### 29.2 The protocol
+
+One JSON object per line, on the window socket. `sb attach` copies its stdin and stdout to the socket and back.
+
+- The window sends `{"hello":{"proto":1,"version":"0.1.0"}}` first. The hub answers `{"hello":{"ok":true,...}}`. A hub with another proto or version answers `{"hello":{"ok":false,"why":...}}` and closes. The window shows the why.
+- A command: `{"id":7,"cmd":"pane_open","args":{...}}`. Its answer: `{"id":7,"ok":<value>}` or `{"id":7,"err":"..."}`. Answers can come out of order.
+- News: `{"event":"panes","payload":...}`. Pane bytes: `{"event":"pane_output","payload":{"pane":"p3","data":"<base64>"}}`.
+- One table in `crates/core/src/dispatch.rs` holds every command, for the app and for `sb serve`.
+- In remote mode only `log`, `open_url`, `link_state` and `link_reconnect` run on your computer. A test keeps that list short. So a server can make the app do nothing else on your computer.
+
+### 29.3 One window at a time
+
+- Each attach gets a new epoch. The new window takes over: under the owner lock, it becomes the owner and the current window, and the screen collapses.
+- The old window gets the `taken_over` event, then its socket closes. Its banner says that another window took over, with Take it back.
+- After the takeover, the hub reads no more lines of the old window, so late keys never reach a pane. A writer that blocks on a dead link gets its socket shut after 5 s.
+- The screen commands (`pane_expand`, `pane_attach`, `pane_detach`, `pane_collapse`, `pane_resize`, `part_resize`) run under the owner lock, and only for the owner. A command of a window that lost a takeover gets an error and changes nothing.
+- A command of the old window that runs at the takeover still runs, if it is not a screen command. A permit click carries its permit id, so it answers only the request that its tile showed (25, P2).
+- When the owner's link goes, the hub collapses the screen. The agents keep running.
+
+### 29.4 Order
+
+- The commands in `dispatch::ORDERED` (the screen commands and `pane_input`) run in the order the window sends them.
+- In the app, one lane thread sends them in order. It does not wait for an answer, so keys over ssh do not wait for a round trip.
+- `sb serve` runs them in the read loop of the window, and queues each answer before it reads the next line. Other commands run in threads of their own.
+- In the window, only the answer of the newest expand draws. An older answer has an older screen.
+
+### 29.5 Pane bytes and a slow link
+
+- The hub never waits for the window. A writer thread for each window does all its I/O, with no lock held.
+- Answers and news never drop. When more than 20,000 lines wait, the window does not read, and the hub closes it.
+- Pane bytes go through the queue of `crates/outq`. A pane can hold 2 MB. Past that, its bytes drop, and the pane takes no more bytes until a fresh screen comes.
+- The writer then asks a screen thread for a fresh screen. The screen thread pauses the pane, so every earlier byte is in the queue already. Then it takes the visible screen and the cursor, puts the screen in the queue as the first bytes, and lets the stream go on. A size change makes the program draw its whole screen again, as after an expand (23).
+- The screen thread holds the owner lock for all of that, and works only while its window owns the screen. So no collapse comes between its check and its stream on, and a window that lost a takeover never pauses a pane of the new one.
+
+### 29.6 A lost link
+
+- ssh ends the link after 45 s with no answer. A banner shows the host and the why, with Reconnect.
+- A connect waits 20 s at most for the hello. It skips up to 100 lines that are not a hello, for example a banner of the login shell. On any failure it kills the ssh process.
+- Each link has a number. News of an older link is dropped, and the link shows as up only while its client is up.
+- While the link is down, a failed command makes no toast.
+- After Reconnect, the window reads everything again: settings, connections, panes, reviews and tasks. Then it opens its live pane again.
+
+### 29.7 Checks
+
+- `outq` is proved in Lean with Aeneas (`proofs/OutQ`). The statements are in `proofs/Statements.lean`:
+  - **Q1.** A push never panics, and a live pane never holds more than the budget.
+  - **Q2.** A live pane keeps its bytes in the order of the pushes.
+  - **Q3.** A push drops only when the bytes do not fit.
+  - **Q4.** A pane that waits for a fresh screen takes no bytes.
+  - **Q5.** A push changes no other pane.
+  - **Q6.** The fresh screen goes first, and the pane is live again.
+  - **Q7.** `take` gives all waiting bytes and keeps the state.
+  - **Q8.** `want_screen` says yes once for each drop.
+- `models/remote.qnt` models the takeover, stale commands, a lost link, drops, the screen thread, and what the xterm shows. Its invariant `Always`:
+  - **R1.** A screen command runs only while its window owns the screen.
+  - **R2.** The current window is the owner.
+  - **R3.** A live pane in a queue never holds more than the budget.
+  - **R4.** A pane that waits for a fresh screen holds no bytes.
+  - **R5.** When all is quiet, the window shows the pane that the hub has on screen.
+  - **R6.** When all is quiet, only the pane on screen streams.
+  - **R7.** When all is quiet and the program draws its screen again on a size change, the window shows the pane as it is, with no hole.
+- Three witnesses must fail, so the runs reach a resync, a stale command, and a quiet screen after a lost link. Three old versions must fail too: no owner check, commands in threads of their own, and any expand answer that draws.
+- `models/remote_test.qnt` holds fixed traces: the first screen thread, with no owner lock, leaves a pane off screen streaming (R6). The random runs reach that order only rarely. The fix does not, and a window that lost a takeover never pauses a pane of the new one.
+- The model is wider than the code in one place: an old window's commands can still run after the takeover. The checks hold also so.
+- `models/permit.qnt` has two windows and lost clicks. P1 to P6 and T1 to T4 still hold.
+- `crates/sb/tests/remote.rs` runs `sb serve`, `sb attach` and the client on a real tmux, with no ssh: an end-to-end run with a takeover and a lost link, a flood that drops bytes, two hubs on one home, and the order of commands and keys. The order test failed before the lane.
+
+### 29.8 Findings
+
+The model found two bugs before the first release:
+
+| ID | Finding | Fix |
+|---|---|---|
+| M1 | Each command ran in a thread of its own, in the app and in `sb serve`. A collapse could run after the expand that came next, and keys could reach the pane out of order. | The ordered lane and the read loop (29.4). |
+| M2 | Two expands of one pane: the older answer could come last and draw an older screen over newer bytes. | The newest expand draws (29.4). |
+
+A review by a second agent found these. All are fixed:
+
+| ID | Finding | Fix |
+|---|---|---|
+| V1 | A failed connect (a banner on stdout, a refused hello) kept ssh running. Each Reconnect leaked one more. The hello had no timeout. | A guard kills ssh on every failure. Banner lines are skipped, and the hello waits 20 s at most. |
+| V2 | A link that went down right after the hello still showed as up, with no banner. | Link numbers, and up only while the client is up. |
+| V3 | A takeover shut the old socket only through the old writer. A writer that blocked on a dead link kept its threads and ssh, and late keys of the old window still ran. | The socket shuts after 5 s, and no line of the old window runs after the takeover. |
+| V4 | The screen thread had no owner lock. A collapse between its check and its stream on left a pane off screen streaming, and an old window could pause a pane of the new one. | The owner lock and the epoch check (29.5). |
+| V5 | A panic in a command of the read loop left the window with no answers. | A guard ends the window, also on a panic. |
+| V6 | A command sent while the link went down could wait for ever. | `send` looks at the link again after it adds its waiter. |
+
+### 29.9 Not yet
+
+- More than one window at a time.
+- A pane that does not draw its screen again on a size change keeps a hole after a drop, as after an expand.
+- `sb serve` as a systemd user unit.
+- Without `loginctl enable-linger` on the server, logind can remove the runtime folder when your last ssh session ends. Then `window.sock` goes, and the next `sb attach` fails. Turn linger on.
+- Any process of your user on the server can run `sb attach` and answer a permit. The tmux socket gives the same power already.
+- A server can send one very long line. The window reads it all.
