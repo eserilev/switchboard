@@ -351,6 +351,43 @@
     window.SB.setTab("r1");
     await wait(300);
   }
+  // The right column of a review shows Claude or nvim. nvim opens at the file you are on.
+  {
+    const leader = (k) => { key(" ", { ctrl: true }); key(k); };
+    const inCol = (id) => window.SB.S.live === id && !!$("#rterm #live") && window.SB.S.termHost === "r1";
+    const pressed = () => $('[data-rview][aria-pressed="true"]')?.dataset.rview;
+    check("the column shows Claude first", inCol("p8") && pressed() === "agent", `${window.SB.S.live} ${pressed()}`);
+    $('[data-rview="nvim"]').click();
+    await wait(200);
+    const first = called("review_nvim").at(-1)?.[1];
+    const shownPaths = $$("#rdiff .file > span").map((x) => x.firstChild.textContent);
+    check("nvim takes the column, at a file of the step", inCol("p3") && pressed() === "nvim" && first?.id === "r1" && shownPaths.includes(first.path) && first.line > 0, JSON.stringify({ first, shownPaths, live: window.SB.S.live }));
+    check("the review stays open", window.SB.S.tab === "r1" && !$("#view-review").hidden);
+    leader("e");
+    await wait(200);
+    check("Leader e goes back to Claude", inCol("p8") && pressed() === "agent", window.SB.S.live);
+    leader("e");
+    await wait(200);
+    check("Leader e opens nvim again", inCol("p3") && pressed() === "nvim", window.SB.S.live);
+    // A clicked line is the spot: nvim opens there.
+    const td = $('#rdiff td.ln[data-side="new"]');
+    td.click();
+    await wait(200);
+    check("a click on a line types into Claude, so Claude shows", inCol("p8"), window.SB.S.live);
+    $('[data-rview="nvim"]').click();
+    await wait(200);
+    const at = called("review_nvim").at(-1)?.[1];
+    check("nvim opens at the clicked line", at?.line === +td.dataset.ln && at?.path === $$("#rdiff .file > span")[+td.dataset.sec].firstChild.textContent && inCol("p3"), JSON.stringify(at));
+    td.click();
+    await wait(100);
+    // The nvim button of a file opens it in the column too, not on the board.
+    $("#rdiff [data-nvim]").click();
+    await wait(200);
+    check("the nvim button of a file opens nvim in the column", inCol("p3") && window.SB.S.tab === "r1" && called("review_nvim").at(-1)?.[1].path === shownPaths[0], window.SB.S.live);
+    $('[data-rview="agent"]').click();
+    await wait(200);
+    check("the Claude button shows Claude again", inCol("p8") && pressed() === "agent" && $("#raskwait").hidden, window.SB.S.live);
+  }
   $("#livetitle [data-collapse]").click();
   await wait(100);
   check("a collapsed Claude pane leaves a Show button", $("#live").hidden && !!$("#raskwait [data-show]") && !$("#raskwait").hidden);

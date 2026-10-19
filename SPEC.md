@@ -178,7 +178,7 @@ A live pane gets every key you type. Esc in Claude Code stops the agent. So app 
 | Leader, `x` | Expand the focused tile, or collapse the live pane. With a zoomed part (28), take the zoom back first. |
 | Leader, `j` / `k` | Next or previous unseen tile. |
 | Leader, `H` `J` `K` `L` | Move focus between tiles. |
-| Leader, `e` | Show or hide nvim next to the focused agent (28). On another pane, nvim in its worktree. |
+| Leader, `e` | Show or hide nvim next to the focused agent (28). On another pane, nvim in its worktree. In a review tab, switch the right column between the agent and nvim (11). |
 | Leader, `s` | Show or hide the shell under the focused agent (28). |
 | Leader, `o` | The keys go to the next part of the live pane: claude, term, nvim (28). |
 | Leader, `h` / `l` | The keys go to the part on the left or the right (28). |
@@ -298,6 +298,7 @@ Opening a layout starts all its panes. Panes that already run are not started ag
 - Later opens use msgpack-RPC `nvim_cmd` with `edit +<line> <file>`. RPC works in every mode.
 - At start, the app removes sockets with no live nvim.
 - From a review, every file:line opens nvim at that line in the review worktree.
+- In a review tab, the right column has a switch: Claude (or Agent) and nvim. nvim takes the column in place of the agent, in the review worktree. It opens at the file and the line you are on: the line you clicked, else the first new line in view of the diff, else the first file of the step. The nvim button of a file opens that file in the column too. Leader, `e` switches back and forth. A click on a line or Send step types into the agent, so the agent shows again.
 - After a `PostToolUse` hook for Edit or Write in a worktree, the app runs `checktime` in that nvim.
 - If the changed buffer has unsaved changes, the app does not reload it. The nvim tile shows the file name as changed on disk.
 - The app runs the `nvim` on `PATH` with your config. If `nvim` is not on `PATH`, the action is hidden.
@@ -382,7 +383,7 @@ The question column is a real Claude Code pane, as on the board. It replaces the
 4. It runs with the rust-analyzer plugin off: it answers questions, and rust-analyzer takes 1 to 4 GB for each copy.
 5. One pane for each review worktree and PR number, titled `Ask #<number>`. It shows as a tile on the board too. The app finds it again by its title and worktree. After a rename, the app starts a new one. An ended pane with no session id is not used again.
 6. With `--fork-session`, the hooks report the new session id (checked on 2026-10-11). A later resume of the pane uses that id, so it never writes into the guide session. A resume does not pass `--add-dir` again.
-7. The live terminal moves into the column while the review tab shows. Another tab takes it back. The board then opens its own live pane again, if one was open.
+7. The live terminal moves into the column while the review tab shows. It shows the agent or nvim (10). Another tab takes it back. The board then opens its own live pane again, if one was open.
 8. The chat of each step. Claude Code runs on the alternate screen, so its history is not in tmux and not in the terminal's scrollback. The app reads the pane's session file (`<claude dir>/projects/*/<session>.jsonl`, the session id from the SessionStart hook) from the review's first message on, and splits it into questions and answers (`chat::turns`). A question belongs to the step in its own step line (Send step), else to the step you viewed when you asked: the window records each step you view (`step_seen`, store version 9). The newer of the two wins. Above the terminal, "On this step" lists the questions of the step, the last one open; "All steps" lists every question with its step. The list loads again when the state of the review's Claude pane changes (it asked, it answered), not on the output of other panes; a chat that did not change draws nothing, so an answer you opened stays open. Claude Code's own lines (commands, reminders, a compact summary, a sub-agent's lines) are not questions. After `/clear`, Claude starts a new session file with no review start, so the list shows nothing new. Tests: `chat::tests` (500 random chats keep every question once, in order, with its step and its answer), and `crates/sb/tests/review_chat.rs` (a real hub, a hook session, a session file, step views).
 9. "Send step" types one line with the current step into the prompt, without Enter. A click on a line number types the path, the line and its text. The text goes in as one bracketed paste, with control characters changed to spaces. While the pane asks for a permission or trust, nothing is typed: a "1" in the text would pick an answer.
 10. The guide agent writes the step fields, and the first message goes into a tmux command. tmux reads one command per line, and its quotes do not hide a line break. So the step line has no control characters, and the tmux client refuses any command with a line break.

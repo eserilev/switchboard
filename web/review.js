@@ -2,6 +2,7 @@
 
 (() => {
   const { S, call, invoke, esc, toast, $ } = window.SB;
+  const $$ = (q) => [...document.querySelectorAll(q)];
   const R = new Map(); // review id -> { cur, anchor, term (the Claude pane), diff: Map(step -> view) }
   // Your place in each review survives a restart: the step, Guide or Files, the file.
   const placeKey = (id) => `sb.review.place.${id}`;
@@ -54,7 +55,7 @@
         <div class="col center" id="rcenter"><div class="guide" id="rguide"></div><div id="rdiff"></div></div>
         <div class="gutter gx" id="rgutr" title="Drag to size. Double-click to reset."></div>
         <div class="col">
-          <div class="tbar"><span class="tlabel">${r.kind === "local" ? "Agent" : "Claude"}</span>${r.kind === "local" ? "" : `<button class="btn small" type="button" id="rstep" title="Type the current step into Claude's prompt">Send step</button>`}</div>
+          <div class="tbar"><span class="seg" role="group" aria-label="Show in this column"><button type="button" class="segb" data-rview="agent" title="Show ${r.kind === "local" ? "the agent" : "Claude"} (Leader e)">${r.kind === "local" ? "Agent" : "Claude"}</button><button type="button" class="segb" data-rview="nvim" title="Open nvim at the file you are on (Leader e)">nvim</button></span>${r.kind === "local" ? "" : `<button class="btn small" type="button" id="rstep" title="Type the current step into Claude's prompt">Send step</button>`}</div>
           <div class="chatlog" id="rchat" hidden></div>
           <div class="askhost" id="rterm"><div class="askwait" id="raskwait"></div></div>
           <div class="drafts" id="rdrafts"></div>
@@ -62,8 +63,10 @@
       </div>
       <div class="finish" id="rfinish" hidden></div>`;
     if ($("#rstep")) $("#rstep").onclick = () => sendStep(id);
+    $$("[data-rview]").forEach((b) => { b.onclick = () => (b.dataset.rview === "nvim" ? showNvim(id) : showAgent(id)); });
+    drawView(id);
     bindColumns();
-    $("#raskwait").onclick = (e) => { if (e.target.closest("[data-show]")) showTerm(id); };
+    $("#raskwait").onclick = (e) => { if (e.target.closest("[data-show]")) showAgent(id); };
     l.term = null;
     update(r, true);
     openTerm(id);
@@ -577,9 +580,7 @@
         const sec = d.sections[+nv.dataset.nvim];
         const first = sec.ranges.find((g) => g.side === "new") || sec.ranges[0];
         const line = (l.anchor?.path === sec.path && l.anchor.line) || first?.from || 1;
-        const pane = await call("review_nvim", { id: r.id, path: sec.path, line });
-        await window.SB.refreshPanes();
-        window.SB.expand(pane);
+        showNvim(r.id, { path: sec.path, line });
         return;
       }
       const td = e.target.closest("td.ln[data-ln]");
@@ -976,8 +977,71 @@
     if (S.tab === id) drawTermWait(S.reviews.get(id));
   }
 
+  // The column shows the agent or nvim (`l.view`). nvim opens at the file and the
+  // line that you are on: the line you clicked, else the first new line in view.
+  function spot(id) {
+    const l = local(id);
+    const r = S.reviews.get(id);
+    const d = r && l.diff.get(diffKey(r));
+    if (!d?.sections?.length) return null;
+    if (l.anchor) {
+      const sec = d.sections.find((x) => x.path === l.anchor.path || x.old_path === l.anchor.path);
+      if (sec && l.anchor.side !== "old") return { path: sec.path, line: l.anchor.line };
+      if (sec) return { path: sec.path, line: (sec.ranges.find((g) => g.side === "new") || sec.ranges[0])?.from || 1 };
+    }
+    const box = $("#rcenter")?.getBoundingClientRect();
+    const seen = box && [...$$('#rdiff td.ln[data-side="new"]')].find((td) => {
+      const b = td.getBoundingClientRect();
+      return b.height > 0 && b.top >= box.top && b.bottom <= box.bottom;
+    });
+    if (seen) return { path: d.sections[+seen.dataset.sec].path, line: +seen.dataset.ln };
+    const sec = d.sections[0];
+    return { path: sec.path, line: (sec.ranges.find((g) => g.side === "new") || sec.ranges[0])?.from || 1 };
+  }
+
+  async function showNvim(id, at) {
+    const l = local(id);
+    const where = at || spot(id);
+    if (!where) return toast("No file to open yet.");
+    try {
+      l.nvim = await call("review_nvim", { id, path: where.path, line: where.line });
+    } catch (_) {
+      return;
+    }
+    l.view = "nvim";
+    if (!window.SB.paneById(l.nvim)) await window.SB.refreshPanes();
+    const host = $("#rterm");
+    if (S.tab !== id || !host) return;
+    await window.SB.expand(l.nvim, host);
+    drawView(id);
+    drawTermWait(S.reviews.get(id));
+  }
+
+  function showAgent(id) {
+    local(id).view = "agent";
+    drawView(id);
+    return showTerm(id);
+  }
+
+  // Leader e in a review tab: nvim, or back to the agent.
+  function toggleNvim(id) {
+    const l = local(id);
+    return l.view === "nvim" && S.live === l.nvim ? showAgent(id) : showNvim(id);
+  }
+
+  function drawView(id) {
+    const v = local(id).view === "nvim" ? "nvim" : "agent";
+    $$("[data-rview]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.rview === v)));
+  }
+
   async function showTerm(id) {
     const l = local(id);
+    // A redraw keeps nvim in the column while you look at it.
+    if (l.view === "nvim" && l.nvim && window.SB.paneById(l.nvim) && S.tab === id && $("#rterm")) {
+      await window.SB.expand(l.nvim, $("#rterm"));
+      drawTermWait(S.reviews.get(id));
+      return;
+    }
     if (!l.term || S.tab !== id || !$("#rterm")) return;
     if (!window.SB.paneById(l.term)) await window.SB.refreshPanes();
     // The tab can change during the wait: take the host only now.
@@ -993,7 +1057,7 @@
     const el = $("#raskwait");
     if (!el || !r) return;
     const l = local(r.id);
-    const shown = l.term && S.live === l.term && S.termHost === r.id;
+    const shown = S.termHost === r.id && ((l.term && S.live === l.term) || (l.view === "nvim" && l.nvim && S.live === l.nvim));
     el.hidden = !!shown;
     el.innerHTML = l.term ? `<button class="btn small" data-show>Show ${r.kind === "local" ? "the agent" : "Claude"}</button>`
       : l.termError ? esc(l.termError)
@@ -1010,7 +1074,7 @@
     const p = window.SB.paneById(l.term);
     if (p && (p.permit || p.trust || p.lamp === "needs")) return toast("Claude is asking you something. Answer it first.");
     if (p && p.lamp === "ended") return toast("Claude has ended. Use Resume on its title bar.");
-    if (S.live !== l.term) await showTerm(id);
+    if (S.live !== l.term) await showAgent(id);
     if (S.tab !== id) return;
     const clean = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
     await invoke("pane_input", { id: l.term, data: `\x1b[200~${clean}\x1b[201~`, binary: false }).catch((e) => toast(e));
@@ -1119,6 +1183,7 @@
       update(r);
     },
     termWait: (id) => drawTermWait(S.reviews.get(id)),
+    toggleNvim,
     // A pane changed. Only a new state of the review's Claude pane (it asked, it
     // answered) reads its chat again; other panes print often and change nothing here.
     panes: () => {

@@ -631,6 +631,8 @@ window.addEventListener("keydown", (e) => {
     case "J": case "L": return moveFocus(1);
     case "K": case "H": return moveFocus(-1);
     case "e": case "s": {
+      // In a review tab, nvim and the agent share the right column.
+      if (e.key === "e" && S.reviews.has(S.tab)) return window.SBReview?.toggleNvim(S.tab);
       // An agent shows nvim or its shell as a part (SPEC 28). Another pane opens nvim.
       const p = paneById(focused);
       const kind = e.key === "e" ? "nvim" : "term";
