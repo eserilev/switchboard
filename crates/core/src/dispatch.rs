@@ -135,6 +135,7 @@ commands! {
     review_term(id: String, step: Option<String>, start: bool) -> Option<String> => |h| h.review_term(&id, step.as_deref(), start);
     review_step_note(id: String, step: String) -> String => |h| h.review_step_note(&id, &step);
     review_retry(id: String) -> () => |h| h.review_retry(&id);
+    review_restart(id: String) -> () => |h| h.review_restart(&id);
     review_close(id: String, keep: bool, discard: Option<Vec<String>>) -> Value => |h| h.review_close(&id, keep, discard).map(|v| json!(v));
     review_nvim(id: String, path: String, line: u32) -> String => |h| h.review_nvim(&id, &path, line);
     tasks() -> Value => |h| h.tasks().map(|v| json!(v));

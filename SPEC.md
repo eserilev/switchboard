@@ -549,6 +549,20 @@ In the window:
 
 Tests: `take::tests` (a full take, every problem listed, 5000 random note lines against the model, `strip_bad`), and window checks for the why block, the answers, the take bar, the notes under their lines, Show list, the steps badge, the PR verdict, Ask, Re-run, Dismiss and Undo, and Add as comment as an agent draft.
 
+### 11.13 Restart
+
+**Restart** in the header of a PR review starts the review again from the start. It shows while no fetch or guide run is busy. A dialog names the base branch, for example `unstable`, and asks first.
+
+1. The app fetches the PR and its base branch again. The base of the diff is the merge base of GitHub's base commit now and the head, as on GitHub (9.2).
+2. It builds and checks the diff model again (24).
+3. A new guide session writes a new guide, as for a new review. A round keeps its scope: the changes since `since` (11.9).
+- Your drafts stay, and move with their code (11.7).
+- The check marks go, because the new guide has new steps.
+- The review's Claude pane closes. A new one forks the new guide session when the guide is ready.
+- The tab goes back to the first step.
+- A failed fetch shows the error with Retry, as for a new review.
+- A review of local commits has Refresh in place of Restart (11.11).
+
 ## 12. Agents
 
 | Where | How |

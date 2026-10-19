@@ -388,6 +388,26 @@
     await wait(200);
     check("the Claude button shows Claude again", inCol("p8") && pressed() === "agent" && $("#raskwait").hidden, window.SB.S.live);
   }
+  // Restart (SPEC 11.13): a confirm first, then the review starts again.
+  {
+    const btn = $('#rhead [data-act="restart"]');
+    check("a PR review has Restart", !!btn && btn.title.includes("unstable"), btn?.title);
+    btn.click();
+    await wait(50);
+    check("Restart asks first, and names the base branch", !$("#rfinish").hidden && $("#rfinish").textContent.includes("unstable") && called("review_restart").length === 0);
+    [...$$("#rfinish [data-b]")].find((b) => b.textContent === "Cancel").click();
+    await wait(50);
+    check("Cancel restarts nothing", $("#rfinish").hidden && called("review_restart").length === 0);
+    $('#rhead [data-act="restart"]').click();
+    await wait(50);
+    [...$$("#rfinish [data-b]")].find((b) => b.textContent === "Restart").click();
+    await wait(100);
+    check("Restart starts the review again", called("review_restart").length === 1 && called("review_restart")[0][1].id === "r1");
+    check("Restart goes back to the first step", $('#rsteps [aria-current="step"]')?.dataset.i === "0");
+    // Back to step 2, where the checks below expect to be.
+    docKey("j");
+    await wait(300);
+  }
   $("#livetitle [data-collapse]").click();
   await wait(100);
   check("a collapsed Claude pane leaves a Show button", $("#live").hidden && !!$("#raskwait [data-show]") && !$("#raskwait").hidden);

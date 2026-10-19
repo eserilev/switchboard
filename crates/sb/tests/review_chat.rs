@@ -155,4 +155,33 @@ fn the_chat_of_each_step_and_dismissed_notes() {
     assert!(hub.review_view("r1").unwrap().dismissed.is_empty());
     // A re-run needs the guide session.
     assert!(hub.review_retake("r1", Some("s2")).unwrap_err().contains("guide session"));
+
+    // Restart (SPEC 11.13): the check marks go, the Claude pane closes, and the
+    // review fetches again. Here the fetch fails (no clone), so it ends in an error.
+    hub.review_mark("r1", "s1", true).unwrap();
+    assert!(hub.review_view("r1").unwrap().steps.iter().any(|s| s.checked));
+    hub.review_restart("r1").unwrap();
+    assert!(hub.review_view("r1").unwrap().steps.iter().all(|s| !s.checked), "the marks go");
+    assert!(!hub.views().iter().any(|v| v.id == ask), "the Claude pane closes");
+    wait_for("the restart ends", || hub.review_view("r1").unwrap().status == "error");
+    // A local review has no PR to fetch again.
+    hub.debug_add_review(ReviewRow {
+        id: "l1".into(),
+        url: String::new(),
+        repo: "demo".into(),
+        number: 0,
+        title: "Local".into(),
+        head: "h".into(),
+        base: "b".into(),
+        tree: tree.to_string_lossy().into(),
+        connection: None,
+        guide_session: None,
+        guide: None,
+        round: 1,
+        since: None,
+        scope_note: None,
+        kind: "local".into(),
+        pane: None,
+    });
+    assert!(hub.review_restart("l1").is_err());
 }

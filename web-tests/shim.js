@@ -17,7 +17,7 @@ window.__data = {
     { name: "timeways", path: "/c/timeways", branch: "master", dirty: false, worktrees: [], last_used: 5, rust: true },
   ],
   reviews: [{
-    id: "r1", url: "https://github.com/sigp/lighthouse/pull/10071", repo: "sigp/lighthouse", number: 10071, title: "Add IL transactions", head: "ac92ae9aaaa", base: "b", tree: "/c/lighthouse-pr10071",
+    id: "r1", url: "https://github.com/sigp/lighthouse/pull/10071", repo: "sigp/lighthouse", number: 10071, title: "Add IL transactions", head: "ac92ae9aaaa", base: "b", base_ref: "unstable", tree: "/c/lighthouse-pr10071",
     status: "ready", error: null, new_head: null,
     guide: { steps: [
       { id: "s1", title: "Read the PR description", file: null, what: "The PR adds ILs.", check: ["slot - 1"] },

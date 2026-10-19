@@ -482,6 +482,12 @@ impl Store {
         Ok(())
     }
 
+    /// Forgets the check marks and stale marks of a review: a new guide has new steps.
+    pub fn clear_steps(&self, review: &str) -> R<()> {
+        self.db.execute("DELETE FROM step_state WHERE review = ?1", [review])?;
+        Ok(())
+    }
+
     /// (step, checked, stale) for a review.
     pub fn steps(&self, review: &str) -> R<Vec<(String, bool, bool)>> {
         let mut s = self

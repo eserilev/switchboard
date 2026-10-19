@@ -239,9 +239,11 @@
     // A later round covers only the changes since the round before.
     const round = r.round > 1 ? `<span class="roundtag" title="${esc(r.scope_note || "A plain diff from the commit that the round before reviewed.")}">Round ${r.round} · changes since ${esc(short(r.since))}${r.scope_note ? " ⚠" : ""}</span>` : "";
     const retry = r.status === "error" ? `<button class="btn small" data-act="retry">Retry</button>` : "";
+    const busy = ["fetching", "writing", "updating"].includes(r.status);
+    const restart = busy ? "" : `<button class="btn small" data-act="restart" title="Fetch the PR again, compare it with ${esc(r.base_ref || "its base branch")} as it is now, and write a new guide">Restart</button>`;
     $("#rhead").innerHTML = `<div><div class="t">${esc(r.title)}</div><div class="m">${esc(r.repo)} #${esc(r.number)} · ${esc(short(r.head))}${r.tree ? " · " + esc(r.tree) : ""}</div></div>
       ${round}${status ? `<span class="status${r.status === "error" ? " error" : ""}">${esc(status)}</span>` : ""}${coverageLine(r)}${prTake(r)}${newHead}
-      <div class="right"><div class="seg" id="rmode" title="Switch with f"><button type="button" data-mode="guide" aria-pressed="${local(r.id).mode === "guide"}">Guide</button><button type="button" data-mode="files" aria-pressed="${local(r.id).mode === "files"}">Files</button></div>${retry}<button class="btn small" data-act="close">Close review</button></div>
+      <div class="right"><div class="seg" id="rmode" title="Switch with f"><button type="button" data-mode="guide" aria-pressed="${local(r.id).mode === "guide"}">Guide</button><button type="button" data-mode="files" aria-pressed="${local(r.id).mode === "files"}">Files</button></div>${retry}${restart}<button class="btn small" data-act="close">Close review</button></div>
       ${r.error ? `<div class="rerror" style="flex-basis:100%;padding:0">${esc(r.error)}</div>` : ""}
       ${r.round > 1 && r.scope_note ? `<div class="scopenote">${esc(r.scope_note)}</div>` : ""}`;
     $("#rhead").onclick = async (e) => {
@@ -250,6 +252,7 @@
       const act = e.target.closest("[data-act]")?.dataset.act;
       if (act === "update") { local(r.id).diff.clear(); local(r.id).files = null; call("review_update", { id: r.id }); }
       if (act === "retry") call("review_retry", { id: r.id });
+      if (act === "restart") restartReview(r.id);
       if (act === "round") {
         try {
           const nid = await invoke("review_round", { id: r.id });
@@ -921,6 +924,33 @@
     box.querySelectorAll("[data-b]").forEach((b) => (b.onclick = () => done(buttons[+b.dataset.b][1])));
     box.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape") done(null); };
     box.querySelector(".btn.primary")?.focus();
+  }
+
+  // Starts the review again from the PR, against its base branch as it is now
+  // (SPEC 11.13). You confirm first: the guide, the check marks and Claude start fresh.
+  function restartReview(id) {
+    const r = S.reviews.get(id);
+    const base = r?.base_ref ? `<code>${esc(r.base_ref)}</code>` : "its base branch";
+    showBox(id, `<h4>Restart the review</h4><p>The app fetches the PR again, compares it with ${base} as it is now, and writes a new guide.</p>
+      <p>Your comments stay and move with their code. The check marks and the Claude pane start fresh.</p>`,
+      [["Cancel", null], ["Restart", "go"]], async (v) => {
+        if (v !== "go") return;
+        const l = local(id);
+        l.diff.clear();
+        l.files = null;
+        l.cur = 0;
+        l.anchor = null;
+        l.term = null;
+        l.view = "agent";
+        l.chat = null;
+        try {
+          await invoke("review_restart", { id });
+        } catch (e) {
+          toast(e);
+        }
+        const now = S.reviews.get(id);
+        if (now) update(now);
+      });
   }
 
   // Closes a review. When its worktree has changes, you choose first (SPEC 11.10).

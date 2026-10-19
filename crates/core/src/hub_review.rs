@@ -26,6 +26,8 @@ pub(crate) struct ReviewState {
     pub coverage: Option<CoverageView>,
     /// The pid of the guide's `claude -p` run while it runs. A close stops it.
     pub run_pid: Option<u32>,
+    /// The PR's base branch, for example `unstable`, from the last `gh pr view`.
+    pub base_ref: Option<String>,
 }
 
 impl ReviewState {
@@ -41,6 +43,7 @@ impl ReviewState {
             proposal: None,
             coverage: None,
             run_pid: None,
+            base_ref: None,
         }
     }
 }
@@ -101,6 +104,8 @@ pub struct ReviewView {
     pub status: String,
     pub error: Option<String>,
     pub new_head: Option<String>,
+    /// The PR's base branch, once a fetch or a poll has read it.
+    pub base_ref: Option<String>,
     pub guide: Option<Value>,
     pub steps: Vec<StepState>,
     pub threads: Vec<ThreadView>,
@@ -376,6 +381,7 @@ impl Hub {
             status: r.status.clone(),
             error: r.error.clone(),
             new_head: r.new_head.clone(),
+            base_ref: r.base_ref.clone(),
             guide: r
                 .row
                 .guide
@@ -686,6 +692,7 @@ impl Hub {
         let (base, note) = scope(&f, round, since.as_deref())?;
         review::pin(&dir, id, &f.head, &base)?;
         if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
+            r.base_ref = Some(pr.base_ref_name.clone());
             r.row.title = pr.title.clone();
             r.row.head = f.head.clone();
             r.row.base = base;
@@ -1067,6 +1074,51 @@ impl Hub {
             );
         }
         Ok(p)
+    }
+
+    /// Starts a PR review again from the start (SPEC 11.13): the PR and its base
+    /// branch are fetched again, the diff model is built again against the base as
+    /// it is now, and a new guide session writes a new guide. Drafts move with their
+    /// code. The check marks go, and so does the review's Claude pane: a new one
+    /// forks the new guide session.
+    pub fn review_restart(&self, id: &str) -> Res<()> {
+        self.pr_only(id)?;
+        // The check and the new status in one step: two clicks start one run.
+        let row = {
+            let mut r = self.reviews.lock().unwrap();
+            let r = r.get_mut(id).ok_or("gone")?;
+            if matches!(r.status.as_str(), "fetching" | "writing" | "updating") {
+                return Err("the review is still running".into());
+            }
+            r.status = "fetching".into();
+            r.error = None;
+            r.new_head = None;
+            r.row.clone()
+        };
+        tracing::info!(target: "sb::review", review = id, "restart");
+        self.emit_review(id);
+        let title = format!("Ask #{}", row.number);
+        let ask: Vec<String> = self
+            .panes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.row.kind == "claude" && p.row.title.as_deref() == Some(title.as_str()))
+            .filter(|p| review::same_path(Path::new(&p.row.tree), Path::new(&row.tree)))
+            .map(|p| p.row.id.clone())
+            .collect();
+        for pane in ask {
+            let _ = self.close(&pane);
+        }
+        let _ = self.store.lock().unwrap().clear_steps(id);
+        let hub = self.arc();
+        let rid = id.to_owned();
+        std::thread::spawn(move || {
+            if let Err(err) = hub.review_prepare(&rid) {
+                hub.set_status(&rid, "error", Some(err));
+            }
+        });
+        Ok(())
     }
 
     pub fn review_retry(&self, id: &str) -> Res<()> {
@@ -2116,6 +2168,9 @@ impl Hub {
             let hub = self.arc();
             std::thread::spawn(move || {
                 if let Ok(pr) = review::gh_view(&url) {
+                    if let Some(r) = hub.reviews.lock().unwrap().get_mut(&id) {
+                        r.base_ref = Some(pr.base_ref_name.clone());
+                    }
                     if pr.head_ref_oid != head && !head.is_empty() {
                         if let Some(r) = hub.reviews.lock().unwrap().get_mut(&id) {
                             r.new_head = Some(pr.head_ref_oid.clone());
@@ -2175,6 +2230,7 @@ impl Hub {
             r.row.head = f.head.clone();
             r.row.base = base;
             r.row.scope_note = note;
+            r.base_ref = Some(pr.base_ref_name.clone());
             r.new_head = None;
             r.attempts = 0;
             r.proposal = None;
