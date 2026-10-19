@@ -482,14 +482,16 @@ impl Hub {
         reviews.insert(id.clone(), ReviewState::new(row, "fetching", None));
         drop(reviews);
         self.save_row(&id);
-        self.local_refresh_bg(&id)?;
+        self.local_refresh_bg(&id, false)?;
         Ok(id)
     }
 
     /// Reads the range again in the background: a new HEAD, or the first load. The
     /// check that no load runs and the switch to "fetching" are one lock, so two
     /// quick clicks start one load.
-    fn local_refresh_bg(&self, id: &str) -> Res<()> {
+    /// Loads the commits of a local review in the background. With `fetch`, the
+    /// remotes are fetched first, so the range uses their branches as they are now.
+    fn local_refresh_bg(&self, id: &str, fetch: bool) -> Res<()> {
         {
             let mut reviews = self.reviews.lock().unwrap();
             let r = reviews.get_mut(id).ok_or("gone")?;
@@ -503,7 +505,7 @@ impl Hub {
         let hub = self.arc();
         let rid = id.to_owned();
         std::thread::spawn(move || {
-            if let Err(err) = hub.local_refresh(&rid) {
+            if let Err(err) = hub.local_refresh(&rid, fetch) {
                 hub.set_status(&rid, "error", Some(err));
             }
         });
@@ -512,9 +514,24 @@ impl Hub {
 
     /// The commits of a local review: the range rule, then the diff model. The
     /// drafts move to the new head as after a PR update (`load_model`).
-    fn local_refresh(&self, id: &str) -> Res<()> {
+    fn local_refresh(&self, id: &str, fetch: bool) -> Res<()> {
         let tree = self.reviews.lock().unwrap().get(id).map(|r| r.row.tree.clone()).ok_or("gone")?;
-        let range = review::local_range(Path::new(&tree))?;
+        // A failed fetch (no network, a login prompt) still loads the range, with a note.
+        let fetched = if fetch {
+            match repos::git(Path::new(&tree), &["fetch", "--all", "--no-tags", "-q"]) {
+                Ok(_) => None,
+                Err(err) => {
+                    tracing::warn!(target: "sb::review", review = id, %err, "fetch of the remotes failed");
+                    Some(format!(" The fetch of the remotes failed, so this uses them as they were: {err}"))
+                }
+            }
+        } else {
+            None
+        };
+        let mut range = review::local_range(Path::new(&tree))?;
+        if let Some(n) = fetched {
+            range.note += &n;
+        }
         let branch = repos::git(Path::new(&tree), &["symbolic-ref", "--short", "-q", "HEAD"]).unwrap_or_default();
         let title = format!(
             "{} commit{} on {}",
@@ -1076,13 +1093,17 @@ impl Hub {
         Ok(p)
     }
 
-    /// Starts a PR review again from the start (SPEC 11.13): the PR and its base
-    /// branch are fetched again, the diff model is built again against the base as
-    /// it is now, and a new guide session writes a new guide. Drafts move with their
-    /// code. The check marks go, and so does the review's Claude pane: a new one
-    /// forks the new guide session.
+    /// Starts a review again from the start (SPEC 11.13). A review of local commits
+    /// fetches its remotes and reads its range again. A PR review fetches the PR and
+    /// its base branch again, builds the diff model again against the base as it is
+    /// now, and a new guide session writes a new guide. Drafts move with their code.
+    /// The check marks go, and so does the review's Claude pane: a new one forks the
+    /// new guide session.
     pub fn review_restart(&self, id: &str) -> Res<()> {
-        self.pr_only(id)?;
+        // A local review: fetch the remotes, then read the range again.
+        if self.pr_only(id).is_err() {
+            return self.local_refresh_bg(id, true);
+        }
         // The check and the new status in one step: two clicks start one run.
         let row = {
             let mut r = self.reviews.lock().unwrap();
@@ -1133,7 +1154,7 @@ impl Hub {
             return Err("the review is still running".into());
         }
         if self.pr_only(id).is_err() {
-            return self.local_refresh_bg(id);
+            return self.local_refresh_bg(id, false);
         }
         self.set_status(id, "fetching", None);
         let hub = self.arc();
@@ -2195,7 +2216,7 @@ impl Hub {
             return Err("the review is still running".into());
         }
         if self.pr_only(id).is_err() {
-            return self.local_refresh_bg(id);
+            return self.local_refresh_bg(id, false);
         }
         let hub = self.arc();
         let rid = id.to_owned();

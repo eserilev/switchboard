@@ -551,7 +551,7 @@ Tests: `take::tests` (a full take, every problem listed, 5000 random note lines 
 
 ### 11.13 Restart
 
-**Restart** in the header of a PR review starts the review again from the start. It shows while no fetch or guide run is busy. A dialog names the base branch, for example `unstable`, and asks first.
+**Restart** in the header of a review starts the review again from the start. It shows while no fetch or guide run is busy. A dialog names the base branch, for example `unstable`, and asks first.
 
 1. The app fetches the PR and its base branch again. The base of the diff is the merge base of GitHub's base commit now and the head, as on GitHub (9.2).
 2. It builds and checks the diff model again (24).
@@ -561,7 +561,7 @@ Tests: `take::tests` (a full take, every problem listed, 5000 random note lines 
 - The review's Claude pane closes. A new one forks the new guide session when the guide is ready.
 - The tab goes back to the first step.
 - A failed fetch shows the error with Retry, as for a new review.
-- A review of local commits has Refresh in place of Restart (11.11).
+- A review of local commits has Restart too, with no dialog. It runs `git fetch --all --no-tags` in the agent's folder, then reads the range again (11.11). So a base like `sigp/unstable` is the branch as it is on the remote now, not an old copy of it. A failed fetch still reads the range, and the header says that the fetch failed.
 
 ## 12. Agents
 

@@ -164,7 +164,6 @@ fn the_chat_of_each_step_and_dismissed_notes() {
     assert!(hub.review_view("r1").unwrap().steps.iter().all(|s| !s.checked), "the marks go");
     assert!(!hub.views().iter().any(|v| v.id == ask), "the Claude pane closes");
     wait_for("the restart ends", || hub.review_view("r1").unwrap().status == "error");
-    // A local review has no PR to fetch again.
     hub.debug_add_review(ReviewRow {
         id: "l1".into(),
         url: String::new(),
@@ -183,5 +182,8 @@ fn the_chat_of_each_step_and_dismissed_notes() {
         kind: "local".into(),
         pane: None,
     });
-    assert!(hub.review_restart("l1").is_err());
+    // A local review fetches its remotes and reads its range again. This folder is no
+    // git checkout, so that ends in an error.
+    hub.review_restart("l1").unwrap();
+    wait_for("the local restart ends", || hub.review_view("l1").unwrap().status == "error");
 }

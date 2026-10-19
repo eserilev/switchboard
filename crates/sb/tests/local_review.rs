@@ -169,6 +169,22 @@ fn review_local_commits_send_to_the_agent_and_keep_its_worktree() {
     let d = &hub.review_view(&id).unwrap().drafts[0];
     assert_eq!((d.line, d.stale, d.head.as_deref()), (Some(3), false, Some(head2.as_str())));
 
+    // The base branch moves on the remote, and the agent rebases onto it with a fetch
+    // by path, so the clone's `origin/main` is old. Refresh then counts the new base
+    // commit as the agent's. Restart fetches the remotes first and leaves it out (SPEC 11.13).
+    let moved = commit(&up, "c.rs", "fn c() {}\n");
+    g(&wt, &["fetch", "-q", &up.to_string_lossy(), "main"]);
+    g(&wt, &["rebase", "-q", "FETCH_HEAD"]);
+    let head3 = g(&wt, &["rev-parse", "HEAD"]);
+    hub.review_update(&id).unwrap();
+    wait_for("the rebase loads", || hub.review_view(&id).map(|v| v.head == head3 && v.status == "ready").unwrap_or(false));
+    let files: Vec<String> = hub.review_files(&id).unwrap().into_iter().map(|f| f.path).collect();
+    assert!(files.contains(&"c.rs".to_owned()), "an old remote ref: {files:?}");
+    hub.review_restart(&id).unwrap();
+    wait_for("the restart loads", || hub.review_view(&id).map(|v| v.base == moved && v.status == "ready").unwrap_or(false));
+    let files: Vec<String> = hub.review_files(&id).unwrap().into_iter().map(|f| f.path).collect();
+    assert_eq!(files, vec!["a.rs", "b.rs"], "only the agent's commits");
+
     // Close: the agent's worktree, its commits and its pane stay. No pin is written.
     assert!(hub.review_close(&id, false, None).unwrap().closed);
     std::thread::sleep(Duration::from_millis(300));
@@ -179,7 +195,7 @@ fn review_local_commits_send_to_the_agent_and_keep_its_worktree() {
     hub.close(&pane).unwrap();
     hub.debug_sweep();
     assert!(wt.exists(), "the sweep never removes an agent's worktree");
-    assert_eq!(g(&wt, &["rev-parse", "HEAD"]), head2);
+    assert_eq!(g(&wt, &["rev-parse", "HEAD"]), head3);
     // And its commits still count as work: no ref of ours hides them.
     assert!(!switchboard_core::review::local_changes(&clone, &wt).unwrap().is_empty());
 }

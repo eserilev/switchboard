@@ -670,6 +670,14 @@
   $('#rhead .newhead [data-act="update"]').click();
   await wait(50);
   check("new commits offer Refresh, which reads the commits again", called("review_update").some((c) => c[1].id === "rL"));
+  // A review of local commits has Restart too: it fetches the remotes and reads the range again.
+  {
+    const btn = $('#rhead [data-act="restart"]');
+    check("a local review has Restart", !!btn && btn.title.includes("Fetch the remotes"), btn?.title);
+    btn?.click();
+    await wait(50);
+    check("Restart of a local review runs at once", called("review_restart").some((c) => c[1].id === "rL") && $("#rfinish").hidden);
+  }
   {
     const rL = window.__data.reviews.find((x) => x.id === "rL");
     const terms = called("review_term").filter((c) => c[1].id === "rL").length;

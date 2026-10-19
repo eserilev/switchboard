@@ -316,12 +316,14 @@
     const retry = r.status === "error" ? `<button class="btn small" data-act="retry">Retry</button>` : "";
     $("#rhead").innerHTML = `<div><div class="t">${esc(r.title || "Local commits")}</div><div class="m">${esc(r.repo)} · ${range}${r.tree ? " · " + esc(r.tree) : ""}</div></div>
       ${status ? `<span class="status${r.status === "error" ? " error" : ""}">${esc(status)}</span>` : ""}${newHead}
-      <div class="right">${r.new_head ? "" : `<button class="btn small" data-act="update" title="Read the commits again">Refresh</button>`}${retry}<button class="btn small" data-act="close">Close review</button></div>
+      <div class="right">${r.new_head ? "" : `<button class="btn small" data-act="update" title="Read the commits again">Refresh</button>`}${r.status === "fetching" ? "" : `<button class="btn small" data-act="restart" title="Fetch the remotes, then compare the commits with the remote branch as it is now">Restart</button>`}${retry}<button class="btn small" data-act="close">Close review</button></div>
       ${r.error ? `<div class="rerror" style="flex-basis:100%;padding:0">${esc(r.error)}</div>` : ""}
       ${r.scope_note ? `<div class="scopenote">${esc(r.scope_note)}</div>` : ""}`;
     $("#rhead").onclick = (e) => {
       const act = e.target.closest("[data-act]")?.dataset.act;
       if (act === "update" || act === "retry") { local(r.id).diff.clear(); local(r.id).files = null; call(act === "update" ? "review_update" : "review_retry", { id: r.id }); }
+      // No dialog: a fetch of the remotes loses nothing, and your comments move with their code.
+      if (act === "restart") { local(r.id).diff.clear(); local(r.id).files = null; call("review_restart", { id: r.id }); }
       if (act === "close") closeReview(r.id);
       if (act === "prtake") { const l = local(r.id); l.prOpen = !l.prOpen; drawPrNotes(r); }
     };
