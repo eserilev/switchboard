@@ -84,6 +84,15 @@
     window.__emit("panes", window.__data.panes);
     await wait(100);
   }
+  // Without parts, the agent's terminal takes the full height of the live pane.
+  {
+    await wait(150);
+    const t = window.SB.term;
+    const box = $("#term").getBoundingClientRect().height, part = $("#pagent").getBoundingClientRect().height;
+    const cell = t._core._renderService.dimensions.css.cell.height;
+    const sent = window.__calls.filter((c) => c[0] === "pane_resize").at(-1)?.[1];
+    check("the live terminal fills the pane in height", box === part && t.rows * cell <= box && (t.rows + 1) * cell > box - 6 && sent?.rows === t.rows, JSON.stringify({ box, part, rows: t.rows, cell, sent }));
+  }
   check("pane_resize before expand", window.__calls.findIndex((c) => c[0] === "pane_resize") < window.__calls.findIndex((c) => c[0] === "pane_expand"));
   await wait(100);
   check("terminal drew the screen", screen().includes("hello from the live pane"), screen().slice(0, 80));

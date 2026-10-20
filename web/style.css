@@ -131,6 +131,9 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .lparts { display: flex; min-height: 0; min-width: 0; }
 .lleft { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .part { display: grid; grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); min-width: 0; min-height: 0; }
+/* The terminal keeps the second row. Without it, a hidden header puts the terminal
+   in the first row, which takes only the height of its content. */
+.part > .term { grid-row: 2; }
 #pagent { flex: 1 1 0; }
 #pterm { flex: 0 0 var(--term-h, 220px); }
 #pnvim { flex: 0 0 var(--nvim-w, 50%); }
