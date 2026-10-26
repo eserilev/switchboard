@@ -1198,7 +1198,7 @@ dependencies = [
 
 [[package]]
 name = "guide-check"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "hashbrown"
@@ -2173,7 +2173,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "outq"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "pango"
@@ -2615,7 +2615,7 @@ dependencies = [
 
 [[package]]
 name = "sb"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "libc",
@@ -3027,7 +3027,7 @@ dependencies = [
 
 [[package]]
 name = "switchboard"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -3042,7 +3042,7 @@ dependencies = [
 
 [[package]]
 name = "switchboard-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "guide-check",

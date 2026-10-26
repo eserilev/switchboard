@@ -1,6 +1,6 @@
 # Builds Switchboard from this checkout: cd packaging/arch && makepkg -si
 pkgname=switchboard-git
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Many AI coding agents on one screen, and a guided PR review"
 arch=(x86_64)
