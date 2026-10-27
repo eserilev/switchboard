@@ -12,6 +12,20 @@ pub const ALLOWED: &str = "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(
 pub const DENIED: &str =
     "Edit,Write,NotebookEdit,MultiEdit,Bash(gh:*),Bash(git push:*),Bash(git commit:*)";
 
+/// The `WebFetch` rules for the sites of `review.web_domains`. A name that is not a
+/// plain host name is left out: a comma or a paren would break the tool list.
+pub fn web_rules(domains: &[String]) -> Vec<String> {
+    domains
+        .iter()
+        .map(|d| d.trim())
+        .filter(|d| {
+            !d.is_empty()
+                && d.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        })
+        .map(|d| format!("WebFetch(domain:{d})"))
+        .collect()
+}
+
 pub const DEFAULT_PROMPT: &str = include_str!("../../../prompts/review.md");
 
 #[derive(Debug, Clone, PartialEq)]
@@ -417,7 +431,7 @@ pub fn remove_tree(main: &Path, tree: &Path, force: bool) -> Result<(), String> 
 }
 
 /// The prompt for the guide session.
-pub fn prompt(template: &str, pr: &PrInfo, head: &str, specs: &[String]) -> String {
+pub fn prompt(template: &str, pr: &PrInfo, head: &str, specs: &[String], web: &[String]) -> String {
     let files: Vec<String> = pr
         .files
         .iter()
@@ -432,6 +446,14 @@ pub fn prompt(template: &str, pr: &PrInfo, head: &str, specs: &[String]) -> Stri
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let web = if web_rules(web).is_empty() {
+        "(none)".to_owned()
+    } else {
+        web.iter()
+            .map(|d| format!("- {}", d.trim()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     template
         .replace("{{number}}", &pr.number.to_string())
         .replace("{{title}}", &pr.title)
@@ -440,6 +462,7 @@ pub fn prompt(template: &str, pr: &PrInfo, head: &str, specs: &[String]) -> Stri
         .replace("{{files}}", &files.join("\n"))
         .replace("{{body}}", pr.body.trim())
         .replace("{{specs}}", &specs)
+        .replace("{{web}}", &web)
 }
 
 /// Checks a guide from `guide_set_steps`. Paths must exist at `head`, lines must be in the file.
@@ -522,7 +545,24 @@ pub enum Stream {
         text: String,
         error: bool,
         session: Option<String>,
+        /// The tool calls that were refused, one line each: a site that is not
+        /// in `review.web_domains`, a `curl`.
+        denied: Vec<String>,
     },
+}
+
+/// One line for a refused tool call of a `result` event: the tool and its URL,
+/// command or path.
+fn denial(d: &Value) -> Option<String> {
+    let tool = d.get("tool_name")?.as_str()?;
+    let input = d.get("tool_input");
+    let what = ["url", "query", "command", "file_path"]
+        .iter()
+        .find_map(|k| input.and_then(|i| i.get(*k)).and_then(Value::as_str));
+    Some(match what {
+        Some(w) => format!("{tool} {}", crate::proto::first_line(w, 100)),
+        None => tool.to_owned(),
+    })
 }
 
 pub fn parse_stream(line: &str) -> Option<Stream> {
@@ -567,6 +607,11 @@ pub fn parse_stream(line: &str) -> Option<Stream> {
                 .get("session_id")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            denied: v
+                .get("permission_denials")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(denial).collect())
+                .unwrap_or_default(),
         }),
         _ => None,
     }
@@ -695,6 +740,10 @@ pub struct Run<'a> {
     pub mcp: Option<(&'a Path, &'a str, &'a Path)>,
     /// Folders outside `cwd` that the agent can read: the spec clones.
     pub dirs: &'a [String],
+    /// The sites the agent can fetch (`review.web_domains`).
+    pub web: &'a [String],
+    /// WebSearch on. Off, it is denied: Claude Code has it on by default.
+    pub search: bool,
 }
 
 pub fn args(run: &Run) -> Vec<String> {
@@ -718,11 +767,19 @@ pub fn args(run: &Run) -> Vec<String> {
             a.push("--fork-session".into());
         }
     }
+    let mut allowed = vec![ALLOWED.to_owned()];
+    allowed.extend(web_rules(run.web));
+    let mut denied = DENIED.to_owned();
+    if run.search {
+        allowed.push("WebSearch".into());
+    } else {
+        denied += ",WebSearch";
+    }
     a.extend([
         "--allowedTools".into(),
-        ALLOWED.into(),
+        allowed.join(","),
         "--disallowedTools".into(),
-        DENIED.into(),
+        denied,
     ]);
     for d in run.dirs {
         a.extend(["--add-dir".into(), d.clone()]);
@@ -810,8 +867,8 @@ pub fn run(run: &Run, mut on: impl FnMut(&Stream)) -> Result<Stream, String> {
                         break;
                     }
                 }
-                Stream::Result { error, .. } => {
-                    tracing::info!(target: "sb::claude", pid, error, ms = t0.elapsed().as_millis() as u64, "claude -p result")
+                Stream::Result { error, denied, .. } => {
+                    tracing::info!(target: "sb::claude", pid, error, ?denied, ms = t0.elapsed().as_millis() as u64, "claude -p result")
                 }
                 Stream::Delta(_) | Stream::Started { .. } | Stream::Exited => {}
             }
@@ -1290,9 +1347,18 @@ mod tests {
             Some(Stream::Result {
                 text: "done".into(),
                 error: false,
-                session: Some("s1".into())
+                session: Some("s1".into()),
+                denied: vec![],
             })
         );
+        // The refused calls come from `permission_denials`, with the URL or command.
+        let deny = r#"{"type":"result","subtype":"success","result":"x","permission_denials":[{"tool_name":"WebFetch","tool_input":{"url":"https://example.com","prompt":"p"}},{"tool_name":"Bash","tool_input":{"command":"curl x\ny"}},{"tool_name":"Odd"}]}"#;
+        match parse_stream(deny) {
+            Some(Stream::Result { denied, .. }) => {
+                assert_eq!(denied, ["WebFetch https://example.com", "Bash curl x", "Odd"])
+            }
+            other => panic!("{other:?}"),
+        }
         assert!(matches!(
             parse_stream(r#"{"type":"result","subtype":"error_max_turns"}"#),
             Some(Stream::Result { error: true, .. })
@@ -1310,10 +1376,15 @@ mod tests {
             env: &[],
             mcp: None,
             dirs: &[],
+            web: &[],
+            search: false,
         });
         let s = a.join(" ");
         assert!(s.contains("--resume g1 --fork-session"));
         assert!(s.contains("--disallowedTools Edit,Write"));
+        // Search off is a deny: Claude Code has WebSearch on by default.
+        assert!(a.last().unwrap().ends_with(",WebSearch"));
+        assert!(!s.contains("WebFetch"));
         assert!(s.contains("--verbose"));
         assert_eq!(&a[..2], ["-p", "q"]);
         let b = args(&Run {
@@ -1324,7 +1395,15 @@ mod tests {
             env: &[],
             mcp: Some((Path::new("/sb"), "r1", Path::new("/s"))),
             dirs: &["/specs a".into()],
+            web: &["github.com".into(), " eips.ethereum.org ".into(), "x,Bash".into(), "".into()],
+            search: true,
         });
+        let i = b.iter().position(|x| x == "--allowedTools").unwrap();
+        assert_eq!(
+            b[i + 1],
+            format!("{ALLOWED},WebFetch(domain:github.com),WebFetch(domain:eips.ethereum.org),WebSearch")
+        );
+        assert_eq!(b[i + 3], DENIED);
         assert!(!b.contains(&"--fork-session".to_owned()));
         let i = b.iter().position(|x| x == "--add-dir").unwrap();
         assert_eq!(b[i + 1], "/specs a");
@@ -1349,8 +1428,11 @@ mod tests {
                 deletions: 1,
             }],
         };
-        let p = prompt(DEFAULT_PROMPT, &pr, "abc123", &["~/specs".into()]);
+        let p = prompt(DEFAULT_PROMPT, &pr, "abc123", &["~/specs".into()], &["eips.ethereum.org".into()]);
         assert!(!p.contains("{{"), "unfilled field in:\n{p}");
+        assert!(p.contains("- eips.ethereum.org"));
+        let none = prompt(DEFAULT_PROMPT, &pr, "abc123", &[], &[]);
+        assert!(none.contains("Sites you can fetch:\n(none)"));
         assert!(p.contains("a.rs (+3 -1)") && p.contains("abc123") && p.contains("~/specs"));
         assert!(p.contains("guide_set_steps"));
     }

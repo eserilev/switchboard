@@ -85,6 +85,8 @@ pub(crate) struct Start {
     pub connection: Option<String>,
     /// The rust-analyzer plugin on or off. With none, on when the tree has a `Cargo.toml`.
     pub rust: Option<bool>,
+    /// Tool rules that run with no prompt, for the pane settings.
+    pub allow: Vec<String>,
 }
 
 pub(crate) struct Pane {
@@ -680,7 +682,7 @@ impl Hub {
         }
         let settings = self.paths.settings_dir().join(format!("{id}.json"));
         let rust = start.rust.unwrap_or_else(|| tree.join("Cargo.toml").exists());
-        std::fs::write(&settings, hooks::settings(&self.sb, rust).to_string()).map_err(e)?;
+        std::fs::write(&settings, hooks::settings(&self.sb, rust, &start.allow).to_string()).map_err(e)?;
         env.extend(connections::env(
             &self.config(),
             connection.unwrap_or(connections::DEFAULT),

@@ -40,11 +40,35 @@ pub struct ConnectionCfg {
     pub token: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields, default)]
 pub struct ReviewCfg {
     pub prompt: Option<String>,
     pub spec_clones: Vec<String>,
+    /// The sites the review agent can fetch, as host names (SPEC 11.2). Other
+    /// sites are refused: the PR body can hold instructions, and a fetch to any
+    /// site could send out the code.
+    pub web_domains: Vec<String>,
+    /// Lets the review agent use WebSearch.
+    pub web_search: bool,
+}
+
+impl Default for ReviewCfg {
+    fn default() -> Self {
+        ReviewCfg {
+            prompt: None,
+            spec_clones: Vec::new(),
+            web_domains: [
+                "github.com",
+                "raw.githubusercontent.com",
+                "ethereum.github.io",
+                "eips.ethereum.org",
+            ]
+            .map(String::from)
+            .to_vec(),
+            web_search: false,
+        }
+    }
 }
 
 /// The `[tasks]` table (SPEC 27.11).
@@ -147,12 +171,19 @@ mod tests {
             token = "keyring:local"
             [review]
             spec_clones = ["~/specs"]
+            web_domains = ["example.org"]
+            web_search = true
             "#,
         )
         .unwrap();
         assert_eq!(c.leader, "ctrl+a");
         assert_eq!(c.connections.len(), 2);
         assert_eq!(c.review.spec_clones, vec!["~/specs"]);
+        assert_eq!(c.review.web_domains, vec!["example.org"]);
+        assert!(c.review.web_search);
+        // With no `web_domains`, the default sites stay.
+        let d = Config::parse("[review]\nspec_clones = []").unwrap();
+        assert!(d.review.web_domains.contains(&"raw.githubusercontent.com".to_owned()));
     }
 
     #[test]

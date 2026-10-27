@@ -9,7 +9,8 @@ pub const RUST_PLUGIN: &str = "rust-analyzer-lsp@claude-plugins-official";
 
 /// The settings file for one pane, passed with `claude --settings`.
 /// `rust` is false for repos with no `Cargo.toml`: then the rust-analyzer plugin is off.
-pub fn settings(sb: &Path, rust: bool) -> Value {
+/// `allow` are tool rules that run with no prompt, such as `WebFetch(domain:x)`.
+pub fn settings(sb: &Path, rust: bool, allow: &[String]) -> Value {
     let sb = sb.to_string_lossy();
     let cmd = |arg: &str| json!([{ "hooks": [{ "type": "command", "command": format!("'{sb}' {arg}") }] }]);
     let with = |matcher: &str, arg: &str, timeout: Option<u64>| {
@@ -31,6 +32,9 @@ pub fn settings(sb: &Path, rust: bool) -> Value {
             "StopFailure": cmd("state failure"),
         }
     });
+    if !allow.is_empty() {
+        s["permissions"] = json!({ "allow": allow });
+    }
     if !rust {
         s["enabledPlugins"] = json!({ RUST_PLUGIN: false });
     }
@@ -114,7 +118,7 @@ mod tests {
 
     #[test]
     fn settings_have_every_hook_and_quote_the_path() {
-        let s = settings(Path::new("/opt/my sb/sb"), true);
+        let s = settings(Path::new("/opt/my sb/sb"), true, &[]);
         for h in [
             "SessionStart",
             "UserPromptSubmit",
@@ -136,8 +140,14 @@ mod tests {
             600
         );
         assert!(s.get("enabledPlugins").is_none());
+        assert!(s.get("permissions").is_none());
+        let allow = ["WebFetch(domain:github.com)".to_owned()];
         assert_eq!(
-            settings(Path::new("/sb"), false)["enabledPlugins"][RUST_PLUGIN],
+            settings(Path::new("/sb"), true, &allow)["permissions"]["allow"],
+            json!(allow)
+        );
+        assert_eq!(
+            settings(Path::new("/sb"), false, &[])["enabledPlugins"][RUST_PLUGIN],
             false
         );
     }

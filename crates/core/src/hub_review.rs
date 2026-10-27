@@ -905,7 +905,7 @@ impl Hub {
         let prompt = match update.clone() {
             Some(u) => u,
             None => {
-                let mut p = review::prompt(&template, pr, &head, &specs);
+                let mut p = review::prompt(&template, pr, &head, &specs, &config.review.web_domains);
                 p += &self.round_prompt(id)?;
                 p
             }
@@ -921,6 +921,8 @@ impl Hub {
             env: &env,
             mcp: Some((&self.sb, id, &sock)),
             dirs: &specs,
+            web: &config.review.web_domains,
+            search: config.review.web_search,
         };
         let result = review::run(&run, |ev| match ev {
             Stream::Started { pid } => match self.reviews.lock().unwrap().get_mut(id) {
@@ -948,7 +950,9 @@ impl Hub {
         let result = result?;
         let has_guide = self.finalize_guide(id)?;
         match result {
-            Stream::Result { .. } if has_guide => self.set_status(id, "ready", None),
+            Stream::Result { denied, .. } if has_guide => {
+                self.set_status(id, "ready", refused_note(&denied))
+            }
             Stream::Result { text, .. } => self.set_status(
                 id,
                 "error",
@@ -1595,6 +1599,8 @@ impl Hub {
             env: &env,
             mcp: Some((&self.sb, id, &sock)),
             dirs: &specs,
+            web: &config.review.web_domains,
+            search: config.review.web_search,
         };
         let result = review::run(&run, |ev| match ev {
             Stream::Init { session, .. } if fork => {
@@ -1613,12 +1619,15 @@ impl Hub {
             ),
             _ => {}
         })?;
-        if let Stream::Result { text, error, .. } = result {
-            let text = if error {
+        if let Stream::Result { text, error, denied, .. } = result {
+            let mut text = if error {
                 format!("Error: {text}")
             } else {
                 text
             };
+            if let Some(note) = refused_note(&denied) {
+                text = format!("{text}\n\n{note}");
+            }
             self.store
                 .lock()
                 .unwrap()
@@ -1662,6 +1671,8 @@ impl Hub {
             env: &env,
             mcp: None,
             dirs: &specs,
+            web: &config.review.web_domains,
+            search: config.review.web_search,
         };
         match review::run(&run, |_| {})? {
             Stream::Result {
@@ -2438,6 +2449,8 @@ impl Hub {
                 resume: Some(session),
                 fork: true,
                 dirs: spec_dirs(&self.config()),
+                // The pane asks before other sites; these it fetches with no prompt.
+                allow: review::web_rules(&self.config().review.web_domains),
                 first: Some(first),
                 // The guide session file is in the config dir of its connection.
                 connection,
@@ -2765,6 +2778,18 @@ fn thread_prompt(step: &Value, t: &ThreadRow, pins: &[String], question: &str) -
     p += "\nDo not call the guide tools. Respond tersely.\n\nQuestion: ";
     p += question;
     p
+}
+
+/// A line for the review header about tool calls that were refused, so a spec
+/// page that did not load is not a silent gap in the guide.
+fn refused_note(denied: &[String]) -> Option<String> {
+    if denied.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "The agent was refused: {}. To allow a site, add it to review.web_domains in the config.",
+        denied.join("; ")
+    ))
 }
 
 /// The spec clones of the config, with `~` expanded.
