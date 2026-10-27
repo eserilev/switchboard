@@ -160,9 +160,13 @@ function nextConnection(current) {
   return free[0]?.name;
 }
 
+// The review whose Claude pane this is (SPEC 11.5), or none. That pane shows in
+// its review tab, not on the board.
+const askOf = (p) => p.kind === "claude" && [...S.reviews.values()].find((r) => r.tree === p.tree && p.title === `Ask #${r.number}`);
+
 // The tiles on the board. The nvim and shell of an agent are its parts (SPEC 28).
 // A part that is the live pane itself keeps its tile, as every live pane does.
-const tiles = () => S.panes.filter((p) => p.id === S.live || !window.SBParts?.isPart(p));
+const tiles = () => S.panes.filter((p) => p.id === S.live || (!window.SBParts?.isPart(p) && !askOf(p)));
 
 function meta(p) {
   const parts = [p.repo];
@@ -577,7 +581,11 @@ async function openNvim(tree, file, line) {
 function nextUnseen(dir) {
   const list = S.panes.filter((p) => p.unseen && p.id !== S.live).sort((a, b) => URGENT.indexOf(a.lamp) - URGENT.indexOf(b.lamp));
   if (!list.length) return;
-  expand((dir > 0 ? list[0] : list[list.length - 1]).id);
+  const p = dir > 0 ? list[0] : list[list.length - 1];
+  // A review's Claude pane has no tile: go to its review tab.
+  const r = askOf(p);
+  if (r) return setTab(r.id);
+  expand(p.id);
 }
 
 function moveFocus(d) {
@@ -879,6 +887,8 @@ async function refreshReviews() {
   const list = await invoke("reviews");
   S.reviews = new Map(list.map((r) => [r.id, r]));
   drawTabs();
+  // The Claude panes of the reviews leave the board.
+  drawBoard();
 }
 
 listen("panes", (e) => {
@@ -914,7 +924,7 @@ listen("review", (e) => {
   S.reviews.set(e.payload.id, e.payload);
   drawTabs();
   window.SBReview?.update(e.payload);
-  if (!was) drawTabs();
+  if (!was) { drawTabs(); drawBoard(); }
 });
 listen("review_cleanup", (e) => toast(e.payload.note));
 listen("review_closed", (e) => {

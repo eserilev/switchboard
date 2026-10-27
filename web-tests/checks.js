@@ -330,6 +330,7 @@
   window.SB.setTab("board");
   await wait(100);
   check("the board takes the terminal back", $("#live").parentElement === $("#view-board") && window.SB.S.live === window.SB.S.boardLive && $("#live").hidden === !window.SB.S.boardLive && window.SB.S.live !== "p8" && window.SB.S.termHost === null, `${window.SB.S.live} ${window.SB.S.boardLive}`);
+  check("the review's Claude pane has no tile on the board", !!window.SB.paneById("p8") && !$('#board .pane[data-id="p8"]') && $$("#board .pane").length >= 3, $$("#board .pane").map((t) => t.dataset.id).join());
   window.SB.setTab("r1");
   await wait(200);
   check("the review shows its Claude pane again", !!$("#rterm #live") && !$("#live").hidden && window.SB.S.live === "p8" && called("review_term").every((c) => c[1].id === "r1"));
