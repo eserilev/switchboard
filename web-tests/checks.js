@@ -1608,6 +1608,15 @@
     $("#host").hidden = true;
   }
 
+  {
+    // A repo made while the app runs shows after the window gets the focus back.
+    const was = window.__data.repos;
+    window.__data.repos = [...was, { name: "fresh", path: "/c/fresh", branch: "main", dirty: false, worktrees: [], last_used: 0, rust: false }];
+    window.dispatchEvent(new Event("focus"));
+    await wait(100);
+    check("the focus loads the repo list again", window.SB.S.repos.some((r) => r.path === "/c/fresh"), window.SB.S.repos.map((r) => r.path).join());
+    window.__data.repos = was;
+  }
   check("no script errors", window.__errors.length === 0, window.__errors);
   const pre = document.createElement("pre");
   pre.id = "__results";

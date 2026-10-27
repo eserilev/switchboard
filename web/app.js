@@ -883,6 +883,23 @@ async function refreshPanes() {
   drawBoard();
 }
 
+// The repo list again, when the window gets the focus back: a repo made in a
+// terminal shows without a restart. At most once in 5 s; a scan takes about 250 ms.
+let reposAt = 0;
+function refreshRepos() {
+  if (Date.now() - reposAt < 5000) return;
+  reposAt = Date.now();
+  invoke("repos").then((r) => {
+    // Only a new or a gone repo redraws: a redraw resets the launcher's choice.
+    const paths = (list) => list.map((x) => x.path).join("\n");
+    if (paths(r) === paths(S.repos)) return;
+    S.repos = r;
+    if (!$("#launcher").hidden) pickRepo(L.sel);
+    window.SBTasks?.repos?.();
+  }).catch(() => {});
+}
+window.addEventListener("focus", refreshRepos);
+
 async function refreshReviews() {
   const list = await invoke("reviews");
   S.reviews = new Map(list.map((r) => [r.id, r]));

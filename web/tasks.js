@@ -920,6 +920,8 @@
       if (!S.repos.length) invoke("repos").then((r) => { S.repos = r; if (T.sel) draw(); }).catch(() => {});
       return T.loaded ? draw() : refresh();
     },
+    // The repo list changed: the open task's repo picker shows it.
+    repos: () => { if (T.sel && T.loaded) draw(); },
     // Leaving the tab closes an open dialog.
     leave: () => T.cancel?.(),
     // A text to copy, in a dialog with a Copy button.

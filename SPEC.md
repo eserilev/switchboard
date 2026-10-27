@@ -252,7 +252,7 @@ Leader, `n` or `+` opens the launcher.
 
 | Choice | Behavior |
 |---|---|
-| Repo | Fuzzy search. The list is the union of the `cwd` values in the session files under `~/.claude/projects/*/*.jsonl` and a scan of the folders in the config. The most recent repo is first. |
+| Repo | Fuzzy search. The list is the union of the `cwd` values in the session files under `~/.claude/projects/*/*.jsonl` and a scan of the folders in the config. The most recent repo is first. The list loads when the launcher opens, and again when the window gets the focus back (at most once in 5 s), so a new repo shows with no restart. |
 | Where | Main checkout, new worktree, or an existing worktree from `git worktree list`. |
 | Run | Claude Code, nvim, or a shell. Claude Code uses the active connection. |
 
