@@ -214,16 +214,21 @@ fn close_cleans_up_and_never_races_a_checkout() {
 
     // 5. Close and checkout race: a close at a random time during the fetch. When
     // both are done, no worktree is left, and no folder of an open review goes.
+    // The delays spread over 0 to 300 ms, and the rounds go on until both orders
+    // ran: how long a fetch takes depends on the machine.
     let hub = Arc::new(hub);
     let (mut before, mut after) = (0, 0);
-    for i in 0..25 {
+    for i in 0..100 {
+        if i >= 25 && before > 0 && after > 0 {
+            break;
+        }
         let id = format!("rs{i}");
         hub.debug_add_review(row(&id, &head));
         let (h1, h2) = (hub.clone(), hub.clone());
         let (id1, id2) = (id.clone(), id.clone());
         let (c1, p1) = (clone.clone(), pr.clone());
         let fetch = std::thread::spawn(move || h1.debug_fetch(&id1, &c1, "origin", &p1, 1));
-        let delay = Duration::from_millis((i * 7 % 40) as u64);
+        let delay = Duration::from_millis((i * 37 % 300) as u64);
         let close = std::thread::spawn(move || {
             std::thread::sleep(delay);
             h2.review_close(&id2, false, None).unwrap()

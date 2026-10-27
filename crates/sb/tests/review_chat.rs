@@ -11,6 +11,23 @@ use std::time::{Duration, Instant};
 use switchboard_core::hub::{Hub, OpenReq, Sink};
 use switchboard_core::store::ReviewRow;
 
+/// An RFC 3339 UTC time, `2026-10-15T04:24:39.000Z`, made here: `date -d` is GNU only,
+/// and macOS `date` gives nothing for it.
+fn rfc3339(t: u64) -> String {
+    let (days, secs) = (t / 86400, t % 86400);
+    // The civil-from-days rule.
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + u64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.000Z", secs / 3600, secs / 60 % 60, secs % 60)
+}
+
 #[derive(Default)]
 struct Events(Mutex<Vec<(String, Value)>>);
 
@@ -112,9 +129,11 @@ fn the_chat_of_each_step_and_dismissed_notes() {
     // Claude's session file, with the guide session copied in before the first message.
     let now = |offset: i64| {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 + offset;
-        let out = Command::new("date").args(["-u", "-d", &format!("@{t}"), "+%Y-%m-%dT%H:%M:%S.000Z"]).output().unwrap();
-        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        rfc3339(t as u64)
     };
+    for t in [0, 951782400, 1709210096, 1793075479] {
+        assert_eq!(switchboard_core::chat::epoch(&rfc3339(t)), Some(t), "{}", rfc3339(t));
+    }
     let user = |text: &str, at: &str| json!({"type": "user", "message": {"role": "user", "content": text}, "timestamp": at}).to_string();
     let said = |text: &str| json!({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}).to_string();
     hub.review_step_seen("r1", "s1").unwrap();
