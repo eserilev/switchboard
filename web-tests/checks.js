@@ -91,7 +91,18 @@
     const box = $("#term").getBoundingClientRect().height, part = $("#pagent").getBoundingClientRect().height;
     const cell = t._core._renderService.dimensions.css.cell.height;
     const sent = window.__calls.filter((c) => c[0] === "pane_resize").at(-1)?.[1];
-    check("the live terminal fills the pane in height", box === part && t.rows * cell <= box && (t.rows + 1) * cell > box - 6 && sent?.rows === t.rows, JSON.stringify({ box, part, rows: t.rows, cell, sent }));
+    check("the live terminal fills the pane in height", box === part && t.rows * cell <= box - 6 && (t.rows + 1) * cell > box - 6 && sent?.rows === t.rows, JSON.stringify({ box, part, rows: t.rows, cell, sent }));
+    // At every height the last row shows: the fit takes off the 6 px of padding.
+    const cut = [];
+    for (let h = 300; h < 300 + Math.ceil(cell) + 2; h++) {
+      $("#term").style.height = `${h}px`;
+      await wait(120);
+      const bottom = $("#term .xterm-screen").getBoundingClientRect().bottom, edge = $("#term").getBoundingClientRect().bottom;
+      if (bottom > edge + 0.5) cut.push({ h, rows: t.rows, bottom, edge });
+    }
+    $("#term").style.height = "";
+    await wait(120);
+    check("no height cuts off the last row of the live terminal", cut.length === 0, JSON.stringify(cut));
   }
   check("pane_resize before expand", window.__calls.findIndex((c) => c[0] === "pane_resize") < window.__calls.findIndex((c) => c[0] === "pane_expand"));
   await wait(100);

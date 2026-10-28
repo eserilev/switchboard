@@ -125,7 +125,11 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
    full screen the terminal shrinks one column at a time while the program in the
    pane draws for the old width. */
 .live { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; margin: 12px 12px 0; border: 1px solid var(--accent); border-radius: 8px; overflow: hidden; }
-.live .term { min-height: 0; min-width: 0; overflow: hidden; padding: 6px 0 0 8px; background: var(--bg); }
+/* The padding is on .xterm, not on .term: the fit reads the height of .term with
+   its padding (border-box) and takes off only the padding of .xterm. Padding on
+   .term gives one row too many when less than 6 px is left, and the last row is cut. */
+.live .term { min-height: 0; min-width: 0; overflow: hidden; background: var(--bg); }
+.live .term .xterm { padding: 6px 0 0 8px; }
 /* The parts of the live pane (SPEC 28): the agent and the shell on the left, nvim
    on the right at full height. A part header shows only when a part shows. */
 .lparts { display: flex; min-height: 0; min-width: 0; }
