@@ -96,12 +96,18 @@
     const cut = [];
     for (let h = 300; h < 300 + Math.ceil(cell) + 2; h++) {
       $("#term").style.height = `${h}px`;
-      await wait(120);
-      const bottom = $("#term .xterm-screen").getBoundingClientRect().bottom, edge = $("#term").getBoundingClientRect().bottom;
-      if (bottom > edge + 0.5) cut.push({ h, rows: t.rows, bottom, edge });
+      // The test browser does not fire the ResizeObserver reliably: a window resize fits too.
+      window.dispatchEvent(new Event("resize"));
+      // The fit runs 60 ms later, and xterm repaints a moment after it.
+      const fitted = () => t.rows * cell <= h - 6 && (t.rows + 1) * cell > h - 6;
+      const bottom = () => $("#term .xterm-screen").getBoundingClientRect().bottom, edge = () => $("#term").getBoundingClientRect().bottom;
+      await wait(100);
+      for (let i = 0; i < 15 && !(fitted() && bottom() <= edge() + 0.5); i++) await wait(40);
+      if (!fitted() || bottom() > edge() + 0.5) cut.push({ h, rows: t.rows, bottom: bottom(), edge: edge() });
     }
     $("#term").style.height = "";
-    await wait(120);
+    window.dispatchEvent(new Event("resize"));
+    await wait(200);
     check("no height cuts off the last row of the live terminal", cut.length === 0, JSON.stringify(cut));
   }
   check("pane_resize before expand", window.__calls.findIndex((c) => c[0] === "pane_resize") < window.__calls.findIndex((c) => c[0] === "pane_expand"));
