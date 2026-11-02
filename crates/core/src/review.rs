@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// The tools a review agent may use. Everything else is denied in `-p` mode.
-pub const ALLOWED: &str = "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),mcp__sb__guide_set_steps,mcp__sb__guide_update_step";
+pub const ALLOWED: &str = "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(git merge-base:*),Bash(git rev-parse:*),mcp__sb__guide_set_steps,mcp__sb__guide_update_step";
 pub const DENIED: &str =
     "Edit,Write,NotebookEdit,MultiEdit,Bash(gh:*),Bash(git push:*),Bash(git commit:*)";
 

@@ -2780,15 +2780,22 @@ fn thread_prompt(step: &Value, t: &ThreadRow, pins: &[String], question: &str) -
     p
 }
 
-/// A line for the review header about tool calls that were refused, so a spec
-/// page that did not load is not a silent gap in the guide.
+/// A line for the review header about pages the agent could not fetch, so a spec
+/// page that did not load is not a silent gap in the guide. Other refused calls,
+/// such as a Bash command that is not on the list, are only in the log: the agent
+/// tries another way, and you cannot fix them in the config.
 fn refused_note(denied: &[String]) -> Option<String> {
-    if denied.is_empty() {
+    let web: Vec<&str> = denied
+        .iter()
+        .map(String::as_str)
+        .filter(|d| d.starts_with("WebFetch") || d.starts_with("WebSearch"))
+        .collect();
+    if web.is_empty() {
         return None;
     }
     Some(format!(
-        "The agent was refused: {}. To allow a site, add it to review.web_domains in the config.",
-        denied.join("; ")
+        "A page did not load: {}. To allow a site, add it to review.web_domains in the config.",
+        web.join("; ")
     ))
 }
 
@@ -2805,6 +2812,14 @@ fn spec_dirs(config: &crate::config::Config) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_header_names_only_refused_pages() {
+        assert_eq!(refused_note(&[]), None);
+        assert_eq!(refused_note(&["Bash git diff $(git merge-base HEAD x)".into()]), None);
+        let n = refused_note(&["Bash ls".into(), "WebFetch https://example.com".into()]).unwrap();
+        assert!(n.starts_with("A page did not load: WebFetch https://example.com.") && !n.contains("Bash"), "{n}");
+    }
 
     #[test]
     fn only_one_send_of_a_review_runs_at_a_time() {

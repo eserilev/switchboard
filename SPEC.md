@@ -321,12 +321,12 @@ The review header shows the state of the guide session: fetching, writing, updat
 - The app runs `claude -p` in the review worktree with the review prompt (11.3).
 - Flags: `--output-format stream-json --verbose --include-partial-messages --mcp-config <sb mcp> --allowedTools <list>`.
 - stdin is `/dev/null`. With any other stdin, `claude -p` waits 3 s for input (S3).
-- `--allowedTools`: `Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),mcp__sb__guide_set_steps,mcp__sb__guide_update_step`, plus `WebFetch(domain:<d>)` for each site in `review.web_domains`, plus `WebSearch` when `review.web_search` is on.
+- `--allowedTools`: `Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(git merge-base:*),Bash(git rev-parse:*),mcp__sb__guide_set_steps,mcp__sb__guide_update_step`, plus `WebFetch(domain:<d>)` for each site in `review.web_domains`, plus `WebSearch` when `review.web_search` is on.
 - `--disallowedTools`: `Edit,Write,NotebookEdit,Bash(gh:*)`, plus `WebSearch` when `review.web_search` is off. Claude Code has WebSearch on by default, so off must be a deny.
-- In `-p` mode a tool that is not allowed is denied with no prompt.
+- In `-p` mode a tool that is not allowed is denied with no prompt. A Bash command that joins others (`;`, `&&`, `|`, `$(...)`) is denied too, even when each part is allowed (checked on 2026-11-02). The prompt asks for one git command in each call.
 - Spec context comes from local clones that the config names, for example `consensus-specs`. The prompt gives their paths.
 - Web context comes from the sites in `review.web_domains` (default: `github.com`, `raw.githubusercontent.com`, `ethereum.github.io`, `eips.ethereum.org`). Only plain host names count. Other sites, `curl` and `wget` are refused. The list is short on purpose: the PR body and the code can hold instructions, and a fetch to any site could send the code out.
-- The `result` event lists the refused tool calls (`permission_denials`). When the guide is ready, the review header names them, so a spec page that did not load is not a silent gap. A thread answer gets the same line at its end.
+- The `result` event lists the refused tool calls (`permission_denials`). When the guide is ready, the review header names the refused `WebFetch` and `WebSearch` calls, so a spec page that did not load is not a silent gap. A thread answer gets the same line at its end. Other refused calls, such as a Bash command that is not on the list, are only in the log: the agent tries another way, and the config cannot fix them.
 - The guide session ends after one turn. The store keeps its session id.
 
 ### 11.3 Review prompt

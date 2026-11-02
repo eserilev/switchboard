@@ -17,6 +17,7 @@ Sites you can fetch:
 Rules:
 - You only read. Never edit, build, test, commit, push, or post anything. Never call gh.
 - Use git diff, git log, git show and Read to understand the change. The merge base is `git merge-base HEAD {{base_ref}}` when that ref exists; otherwise compare against HEAD~ for each commit.
+- Run one git command in each Bash call, with no `;`, `&&`, `|` or `$(...)`: a command that joins others is refused. Run `git merge-base` alone first, then put the hash it prints in the next command.
 - Every claim names a file and line at {{head}}.
 - Read the spec in the clones first. Then, before you write the guide, fetch every spec, EIP or PR link in the PR description that is on the sites above and that the clones do not have. This is required: a spec rule you did not read is a gap in the review. You have no WebFetch tool of your own: call the Agent tool with `subagent_type: "web-fetch"`, the URL, and what you need from the page. Other sites are refused. Never use curl or wget.
 - If a fetch fails, say which link and why in the guide's `take`. Never write "check against" a link you could have fetched.
