@@ -212,10 +212,11 @@ window.__TAURI__ = {
         case "review_open_local": {
           if (!d.reviews.some((x) => x.id === "rL")) d.reviews.push(Object.assign(structuredClone(d.reviews[0]), {
             id: "rL", kind: "local", pane: args.pane, url: "", number: 0, repo: "lighthouse", title: "2 commits on feat", base: "b0b0b0b0b0b0", head: "ac92ae9aaaa",
-            guide: null, steps: [], threads: [], pins: [], drafts: d.reviews[0].drafts, posted: [], scope_note: "Commits not on origin/unstable.", coverage: null }));
+            guide: null, steps: [], threads: [], pins: [], drafts: d.reviews[0].drafts, posted: [], scope_note: "Commits not on origin/unstable.", coverage: null, range: "new", reviewed: false }));
           return "rL";
         }
         case "review_send_agent": return 1;
+        case "review_range": case "review_mark_reviewed": return null;
         case "review_chat": return [
           { step: "s1", question: "what does the PR add?", answer: "ILs for **gloas**.", at: 1 },
           { step: "s2", question: "is slot 0 real?", answer: "Yes: it saturates.", at: 2 },

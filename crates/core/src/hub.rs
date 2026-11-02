@@ -985,6 +985,12 @@ impl Hub {
         if let Some(tree) = checktime {
             self.nvim_checktime(Path::new(&tree));
         }
+        if m.event == "turn" {
+            let tree = self.panes.lock().unwrap().iter().find(|p| p.row.id == m.pane && p.row.kind == "claude").map(|p| p.row.tree.clone());
+            if let Some(tree) = tree {
+                self.turn_snapshot(&tree);
+            }
+        }
         if let Some(c) = limit_conn {
             let c = c.unwrap_or_else(|| self.active_connection());
             let _ = self.store.lock().unwrap().set_limit(&c, now() + 3600);

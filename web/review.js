@@ -307,20 +307,28 @@
   // A smaller window shrinks the saved sizes so the middle keeps its room.
   window.addEventListener("resize", () => { if ($("#rcols")) setCols(colSizes()); });
 
-  // The header of a review of local commits: the range, what it compares with, and a
-  // Refresh when the agent made new commits.
+  // The header of a review of an agent's work: the commits and the uncommitted work
+  // (SPEC 11.11, 11.14). New or All, Mark reviewed, and a Refresh when the agent
+  // changed more.
   function drawLocalHead(r) {
-    const status = { fetching: "Reading the commits", error: "Error", ready: "" }[r.status] ?? r.status;
+    const status = { fetching: "Reading the work", error: "Error", ready: "" }[r.status] ?? r.status;
     const range = r.head ? `${esc(short(r.base))}..${esc(short(r.head))}` : "";
-    const newHead = r.new_head ? `<span class="newhead">New commits: ${esc(short(r.head))} → ${esc(short(r.new_head))}<button class="btn small primary" data-act="update" title="Read the commits again; your comments move with their code">Refresh</button></span>` : "";
+    const newHead = r.new_head ? `<span class="newhead">New changes<button class="btn small primary" data-act="update" title="Read the work again; your comments move with their code">Refresh</button></span>` : "";
+    const busy = r.status === "fetching";
+    const seg = `<span class="seg" role="group" aria-label="Show">${[["new", "New", r.reviewed ? "The changes since you marked the work reviewed" : "Nothing is marked reviewed yet, so this shows all of it"], ["all", "All", "Every change since the base: the commits and the uncommitted work"]]
+      .map(([v, label, tip]) => `<button type="button" class="segb" data-range="${v}" aria-pressed="${r.range === v}" title="${esc(tip)}"${busy ? " disabled" : ""}>${label}</button>`).join("")}</span>`;
+    const mark = `<button class="btn small" data-act="mark" title="What shows now is reviewed: New shows only later changes. Press o for nvim next to the old side."${busy || !r.head ? " disabled" : ""}>Mark reviewed</button>`;
     const retry = r.status === "error" ? `<button class="btn small" data-act="retry">Retry</button>` : "";
     $("#rhead").innerHTML = `<div><div class="t">${esc(r.title || "Local commits")}</div><div class="m">${esc(r.repo)} · ${range}${r.tree ? " · " + esc(r.tree) : ""}</div></div>
       ${status ? `<span class="status${r.status === "error" ? " error" : ""}">${esc(status)}</span>` : ""}${newHead}
-      <div class="right">${r.new_head ? "" : `<button class="btn small" data-act="update" title="Read the commits again">Refresh</button>`}${r.status === "fetching" ? "" : `<button class="btn small" data-act="restart" title="Fetch the remotes, then compare the commits with the remote branch as it is now">Restart</button>`}${retry}<button class="btn small" data-act="close">Close review</button></div>
+      <div class="right">${seg}${mark}${r.new_head ? "" : `<button class="btn small" data-act="update" title="Read the work again">Refresh</button>`}${r.status === "fetching" ? "" : `<button class="btn small" data-act="restart" title="Fetch the remotes, then compare the commits with the remote branch as it is now">Restart</button>`}${retry}<button class="btn small" data-act="close">Close review</button></div>
       ${r.error ? `<div class="rerror" style="flex-basis:100%;padding:0">${esc(r.error)}</div>` : ""}
       ${r.scope_note ? `<div class="scopenote">${esc(r.scope_note)}</div>` : ""}`;
     $("#rhead").onclick = (e) => {
       const act = e.target.closest("[data-act]")?.dataset.act;
+      const to = e.target.closest("[data-range]")?.dataset.range;
+      if (to && to !== r.range) { local(r.id).diff.clear(); local(r.id).files = null; call("review_range", { id: r.id, range: to }); }
+      if (act === "mark") { local(r.id).diff.clear(); local(r.id).files = null; call("review_mark_reviewed", { id: r.id }); }
       if (act === "update" || act === "retry") { local(r.id).diff.clear(); local(r.id).files = null; call(act === "update" ? "review_update" : "review_retry", { id: r.id }); }
       // No dialog: a fetch of the remotes loses nothing, and your comments move with their code.
       if (act === "restart") { local(r.id).diff.clear(); local(r.id).files = null; call("review_restart", { id: r.id }); }
@@ -1194,6 +1202,8 @@
     else if (e.key === "j") files ? goFile(id, fileIndex(l) + 1) : go(id, l.cur + 1);
     else if (e.key === "k") files ? goFile(id, fileIndex(l) - 1) : go(id, l.cur - 1);
     else if (e.key === "n") files ? nextFile(id) : next(id);
+    // nvim at the line you are on, next to the old side (SPEC 11.14).
+    else if (e.key === "o") showNvim(id);
     else return;
     e.preventDefault();
   });

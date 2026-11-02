@@ -136,6 +136,8 @@ commands! {
     review_restart(id: String) -> () => |h| h.review_restart(&id);
     review_close(id: String, keep: bool, discard: Option<Vec<String>>) -> Value => |h| h.review_close(&id, keep, discard).map(|v| json!(v));
     review_nvim(id: String, path: String, line: u32) -> String => |h| h.review_nvim(&id, &path, line);
+    review_range(id: String, range: String) -> () => |h| h.review_range(&id, &range);
+    review_mark_reviewed(id: String) -> () => |h| h.review_mark_reviewed(&id);
     tasks() -> Value => |h| h.tasks().map(|v| json!(v));
     task_add(task: NewTask) -> Value => |h| h.task_add(task).map(|v| json!(v));
     task_edit(id: String, fields: TaskFields) -> Value => |h| h.task_edit(&id, fields).map(|v| json!(v));

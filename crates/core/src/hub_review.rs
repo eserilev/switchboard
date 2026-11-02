@@ -3,6 +3,7 @@
 use crate::diff::Row;
 use crate::hub::Hub;
 use crate::now;
+use crate::nvim;
 use crate::repos;
 use crate::review::{self, PrInfo, Run, Stream};
 use crate::store::{DraftRow, ReviewRow, ThreadRow};
@@ -28,6 +29,13 @@ pub(crate) struct ReviewState {
     pub run_pid: Option<u32>,
     /// The PR's base branch, for example `unstable`, from the last `gh pr view`.
     pub base_ref: Option<String>,
+    /// A local review (SPEC 11.14): `new` (since Mark reviewed) or `all`.
+    pub range: String,
+    /// A local review: HEAD of its folder when the view loaded. The head of the view
+    /// is a snapshot, so the poll compares HEAD with this.
+    pub head_commit: Option<String>,
+    /// A local review: Mark reviewed was pressed, so `new` has a start.
+    pub reviewed: bool,
 }
 
 impl ReviewState {
@@ -44,6 +52,9 @@ impl ReviewState {
             coverage: None,
             run_pid: None,
             base_ref: None,
+            range: "new".into(),
+            head_commit: None,
+            reviewed: false,
         }
     }
 }
@@ -122,6 +133,10 @@ pub struct ReviewView {
     pub pane: Option<String>,
     /// The take notes you dismissed, by their key (`take_key` in review.js).
     pub dismissed: Vec<String>,
+    /// A local review: `new` or `all` (SPEC 11.14).
+    pub range: String,
+    /// A local review: Mark reviewed was pressed, so `new` has a start.
+    pub reviewed: bool,
 }
 
 /// What the window shows before a send: the GitHub account, the head, and where
@@ -397,6 +412,8 @@ impl Hub {
             kind: r.row.kind.clone(),
             pane: r.row.pane.clone(),
             dismissed: store.dismissed(id).map_err(e)?,
+            range: r.range.clone(),
+            reviewed: r.reviewed,
         })
     }
 
@@ -528,24 +545,52 @@ impl Hub {
         } else {
             None
         };
-        let mut range = review::local_range(Path::new(&tree))?;
+        let dir = Path::new(&tree);
+        let mut range = review::local_range(dir)?;
         if let Some(n) = fetched {
             range.note += &n;
         }
-        let branch = repos::git(Path::new(&tree), &["symbolic-ref", "--short", "-q", "HEAD"]).unwrap_or_default();
-        let title = format!(
-            "{} commit{} on {}",
-            range.count,
-            if range.count == 1 { "" } else { "s" },
-            if branch.is_empty() { "a detached HEAD".to_owned() } else { branch }
-        );
+        // The head of the view is the work tree as a commit: the agent's commits and
+        // its uncommitted work (SPEC 11.14).
+        let snap = review::snapshot(dir)?;
+        let work = snap.commit != snap.head;
+        let mode = self.reviews.lock().unwrap().get(id).map(|r| r.range.clone()).ok_or(CLOSED)?;
+        let reviewed = repos::git(dir, &["rev-parse", "--verify", "-q", &review::snap_ref(id, "reviewed")]).ok();
+        let branch = repos::git(dir, &["symbolic-ref", "--short", "-q", "HEAD"]).unwrap_or_default();
+        let on = if branch.is_empty() { "a detached HEAD".to_owned() } else { branch };
+        let has_reviewed = reviewed.is_some();
+        let (base, title, mut note) = match reviewed.filter(|_| mode == "new") {
+            Some(rv) => {
+                let mut note = "The changes since you marked the work reviewed.".to_owned();
+                // A snapshot's own parent is the HEAD it was made on.
+                let snapped = repos::git(dir, &["log", "-1", "--format=%s", &rv]).unwrap_or_default().starts_with(review::SNAP_SUBJECT);
+                let rv_head = if snapped { format!("{rv}^") } else { rv.clone() };
+                if repos::git(dir, &["merge-base", "--is-ancestor", &rv_head, &snap.head]).is_err() {
+                    note += " HEAD moved off the commit you reviewed (a reset, a rebase or another branch), so this shows the whole difference.";
+                }
+                (rv, format!("Since you marked reviewed, on {on}"), note)
+            }
+            None if !range.unpushed && work => (snap.head.clone(), format!("Uncommitted work on {on}"), "No unpushed commits: this shows the uncommitted work.".to_owned()),
+            None => {
+                let commits = format!("{} commit{}", range.count, if range.count == 1 { "" } else { "s" });
+                let title = if work { format!("{commits} and uncommitted work on {on}") } else { format!("{commits} on {on}") };
+                (range.base, title, range.note)
+            }
+        };
+        if !snap.skipped.is_empty() {
+            note += &format!(" Left out, bigger than {} MB: {}.", review::SNAP_MAX >> 20, snap.skipped.join(", "));
+        }
+        // The ref keeps the snapshot from `git gc` while the view shows it.
+        repos::git(dir, &["update-ref", &review::snap_ref(id, "head"), &snap.commit])?;
         match self.reviews.lock().unwrap().get_mut(id) {
             Some(r) => {
-                r.row.head = range.head;
-                r.row.base = range.base;
-                r.row.scope_note = Some(range.note);
+                r.row.head = snap.commit;
+                r.row.base = base;
+                r.row.scope_note = Some(note);
                 r.row.title = title;
                 r.new_head = None;
+                r.head_commit = Some(snap.head);
+                r.reviewed = has_reviewed;
             }
             None => return Err(CLOSED.into()),
         }
@@ -553,6 +598,75 @@ impl Hub {
         self.load_model(id, None)?;
         self.set_status(id, "ready", None);
         Ok(())
+    }
+
+    /// Shows `new` (since Mark reviewed) or `all` in a local review (SPEC 11.14).
+    pub fn review_range(&self, id: &str, range: &str) -> Res<()> {
+        if !matches!(range, "new" | "all") {
+            return Err(format!("unknown range {range}"));
+        }
+        match self.reviews.lock().unwrap().get_mut(id) {
+            Some(r) if r.row.is_local() => r.range = range.to_owned(),
+            Some(_) => return Err("Only a review of local work has ranges.".into()),
+            None => return Err(format!("no review {id}")),
+        }
+        self.local_refresh_bg(id, false)
+    }
+
+    /// Marks what the view shows as reviewed: the next `new` view starts here.
+    pub fn review_mark_reviewed(&self, id: &str) -> Res<()> {
+        let (tree, head) = {
+            let mut reviews = self.reviews.lock().unwrap();
+            let r = reviews.get_mut(id).ok_or(format!("no review {id}"))?;
+            if !r.row.is_local() || r.row.head.is_empty() {
+                return Err("Only a loaded review of local work can be marked reviewed.".into());
+            }
+            r.range = "new".into();
+            (r.row.tree.clone(), r.row.head.clone())
+        };
+        repos::git(Path::new(&tree), &["update-ref", &review::snap_ref(id, "reviewed"), &head])?;
+        tracing::info!(target: "sb::review", review = id, %head, "marked reviewed");
+        self.local_refresh_bg(id, false)
+    }
+
+    /// After an agent's turn (the Stop hook): when a local review is open on its
+    /// folder and the work changed, the review shows New changes. Only there, so
+    /// other panes cost nothing. Runs in a thread: the hook waits for nothing.
+    pub(crate) fn turn_snapshot(&self, tree: &str) {
+        let open: Vec<(String, String)> = self
+            .reviews
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|r| r.row.is_local() && r.status == "ready" && review::same_path(Path::new(&r.row.tree), Path::new(tree)))
+            .map(|r| (r.row.id.clone(), r.row.head.clone()))
+            .collect();
+        if open.is_empty() {
+            return;
+        }
+        let hub = self.arc();
+        let tree = tree.to_owned();
+        std::thread::spawn(move || {
+            let dir = Path::new(&tree);
+            let Ok(snap) = review::snapshot(dir) else { return };
+            let tree_of = |c: &str| repos::git(dir, &["rev-parse", &format!("{c}^{{tree}}")]).ok();
+            let now = tree_of(&snap.commit);
+            for (id, head) in open {
+                if now.is_none() || now == tree_of(&head) {
+                    continue;
+                }
+                let changed = match hub.reviews.lock().unwrap().get_mut(&id) {
+                    Some(r) if r.status == "ready" && r.row.head == head => {
+                        r.new_head = Some(snap.commit.clone());
+                        true
+                    }
+                    _ => false,
+                };
+                if changed {
+                    hub.emit_review(&id);
+                }
+            }
+        });
     }
 
     /// Puts the comments of a local review into its agent's prompt, as one paste with
@@ -2034,6 +2148,11 @@ impl Hub {
                 let _ = self.close(&pane);
             }
         }
+        // A local review's snapshot refs (SPEC 11.14) are the review's own, never
+        // the agent's: they go with it.
+        if row.is_local() && !row.tree.is_empty() {
+            review::drop_snap_refs(&tree, id);
+        }
         self.sink.emit("review_closed", json!(id));
         let hub = self.arc();
         std::thread::spawn(move || {
@@ -2167,13 +2286,28 @@ impl Hub {
             .filter(|r| r.row.is_local() && r.status == "ready")
             .map(|r| (r.row.id.clone(), r.row.tree.clone(), r.row.head.clone()))
             .collect();
-        for (id, tree, _) in locals {
+        for (id, tree, head) in locals {
             if let Ok(now_head) = repos::git(Path::new(&tree), &["rev-parse", "HEAD"]) {
+                // The view's head is a snapshot: compare HEAD with the HEAD it was made
+                // on. After a restart that is not in memory: a snapshot's parent.
+                let known = self.reviews.lock().unwrap().get(&id).and_then(|r| r.head_commit.clone());
+                let made_on = match known {
+                    Some(h) => h,
+                    None => {
+                        let dir = Path::new(&tree);
+                        let snapped = repos::git(dir, &["log", "-1", "--format=%s", &head]).unwrap_or_default().starts_with(review::SNAP_SUBJECT);
+                        let h = if snapped { repos::git(dir, &["rev-parse", &format!("{head}^")]).unwrap_or(head) } else { head };
+                        if let Some(r) = self.reviews.lock().unwrap().get_mut(&id) {
+                            r.head_commit = Some(h.clone());
+                        }
+                        h
+                    }
+                };
                 let changed = {
                     let mut reviews = self.reviews.lock().unwrap();
                     // Compare with the row as it is now: a Refresh can have run since.
                     match reviews.get_mut(&id) {
-                        Some(r) if r.status == "ready" && now_head != r.row.head && r.new_head.as_deref() != Some(now_head.as_str()) => {
+                        Some(r) if r.status == "ready" && r.head_commit.as_deref().unwrap_or(&made_on) != now_head && r.new_head.as_deref() != Some(now_head.as_str()) => {
                             r.new_head = Some(now_head);
                             true
                         }
@@ -2380,17 +2514,40 @@ impl Hub {
     }
 
     /// Opens nvim in the review worktree at a file and line.
+    /// Opens nvim in the review's folder at `path` and `line`, next to the old side
+    /// of the view (`git show <base>:<path>`), in diff mode (SPEC 11.14). The new
+    /// side is the file itself, so you can edit it.
     pub fn review_nvim(&self, id: &str, path: &str, line: u32) -> Res<String> {
-        let tree = PathBuf::from(
-            self.reviews
-                .lock()
-                .unwrap()
-                .get(id)
-                .map(|r| r.row.tree.clone())
-                .ok_or("gone")?,
-        );
+        let (tree, base) = self
+            .reviews
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|r| (PathBuf::from(&r.row.tree), r.row.base.clone()))
+            .ok_or("gone")?;
         let file = tree.join(path);
-        self.nvim_open(&tree, Some((&file.to_string_lossy(), line.max(1))))
+        let pane = self.nvim_open(&tree, Some((&file.to_string_lossy(), line.max(1))))?;
+        if base.is_empty() {
+            return Ok(pane);
+        }
+        let lua = self.paths.nvim_dir().join("sb_diff.lua");
+        std::fs::write(&lua, nvim::DIFF_LUA).map_err(e)?;
+        let sock = nvim::socket(&self.paths.nvim_dir(), &tree);
+        let expr = nvim::diff_expr(&lua, &tree, &base, path, line.max(1));
+        // A new nvim needs a moment before it listens. The pane shows at once.
+        std::thread::spawn(move || {
+            for _ in 0..50 {
+                if nvim::alive(&sock) {
+                    if let Err(err) = nvim::expr(&sock, &expr) {
+                        tracing::warn!(target: "sb::nvim", %err, "review diff failed");
+                    }
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            tracing::warn!(target: "sb::nvim", "nvim did not start in 5 s: no review diff");
+        });
+        Ok(pane)
     }
 
     /// The Claude Code pane of a review. It forks the guide session in the review
@@ -2599,6 +2756,12 @@ impl Hub {
     #[doc(hidden)]
     pub fn debug_fetch(&self, id: &str, dir: &Path, remote: &str, pr: &PrInfo, round: u32) -> Res<PathBuf> {
         self.fetch(id, dir, remote, pr, round).map(|f| f.tree)
+    }
+
+    /// Tests only: the review part of the ticker at second `n`.
+    #[doc(hidden)]
+    pub fn debug_tick(&self, n: u64) {
+        self.review_tick(n)
     }
 
     /// Tests only: the cleanup that runs at start.

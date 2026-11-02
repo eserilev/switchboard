@@ -62,7 +62,10 @@ module review_close {
     told: str -> bool,
     cleanups: Set[Cleanup],
     // The agent's unpushed commits in "a1". They count as work, unless a ref of
-    // ours (a pin) reaches them: then `local_changes` does not see them.
+    // ours (a pin) reaches them: then `local_changes` does not see them. Only
+    // refs under refs/switchboard hide commits. The snapshot refs of a local
+    // review (SPEC 11.14) live under refs/sb and hide nothing, so they are not a
+    // pin here; `crates/core/tests/snapshot.rs` checks that.
     commits: bool,
     pinned: bool,
     // Ghosts. `lost`: a removal dropped a change that you did not choose to drop.

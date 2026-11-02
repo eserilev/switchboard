@@ -298,7 +298,7 @@ Opening a layout starts all its panes. Panes that already run are not started ag
 - Later opens use msgpack-RPC `nvim_cmd` with `edit +<line> <file>`. RPC works in every mode.
 - At start, the app removes sockets with no live nvim.
 - From a review, every file:line opens nvim at that line in the review worktree.
-- In a review tab, the right column has a switch: Claude (or Agent) and nvim. nvim takes the column in place of the agent, in the review worktree. It opens at the file and the line you are on: the line you clicked, else the first new line in view of the diff, else the first file of the step. The nvim button of a file opens that file in the column too. Leader, `e` switches back and forth. A click on a line or Send step types into the agent, so the agent shows again.
+- In a review tab, the right column has a switch: Claude (or Agent) and nvim. nvim takes the column in place of the agent, in the review worktree. It opens at the file and the line you are on: the line you clicked, else the first new line in view of the diff, else the first file of the step. It shows the file next to its old side, in diff mode (11.14). `o` opens it too. The nvim button of a file opens that file in the column too. Leader, `e` switches back and forth. A click on a line or Send step types into the agent, so the agent shows again.
 - After a `PostToolUse` hook for Edit or Write in a worktree, the app runs `checktime` in that nvim.
 - If the changed buffer has unsaved changes, the app does not reload it. The nvim tile shows the file name as changed on disk.
 - The app runs the `nvim` on `PATH` with your config. If `nvim` is not on `PATH`, the action is hidden.
@@ -518,7 +518,7 @@ An agent commits its work in its own checkout. Before you push, you review those
 - The right column shows the agent pane itself. A click on a line number types the line into its prompt, as in 11.5.
 - **Send to agent** puts every comment that is not stale into the agent's prompt as one bracketed paste, with no Enter: `Review comments on commit <head> (line numbers are at that commit):`, then one `- path:line: text` line for each comment. You read it and press Enter. Nothing is typed while the agent asks for a permission or has ended. The comments then move to a `posted` row with the event `AGENT`, so the tab lists what you sent.
 - Every 30 s the app reads HEAD in the folder and compares it with the review's head as it is at that moment. A new HEAD shows **New commits** with **Refresh**. Refresh reads the range again; drafts move with their code, or become stale, as in 11.7. One lock checks that no load runs and starts the load, so two quick clicks start one load. A new base alone (after a push) also loads a new file list.
-- **Close review** closes only the tab. A local review never asks about changes, never closes a pane, never pins a ref, and never removes its folder: the folder is the agent's. Three guards hold this: `clean_after` returns at once for a local row, before its pin; `closed_reviews` leaves out local rows, so the start sweep never sees them; and `review_close` skips the change check and the pane close. A fourth, `Facts.in_store` false for a local row, sits behind the first and only matters if it goes. The model of 26 checks this property.
+- **Close review** closes only the tab. A local review never asks about changes, never closes a pane, never adds a ref under `refs/switchboard`, and never removes its folder: the folder is the agent's. Three guards hold this: `clean_after` returns at once for a local row, before its pin; `closed_reviews` leaves out local rows, so the start sweep never sees them; and `review_close` skips the change check and the pane close. A fourth, `Facts.in_store` false for a local row, sits behind the first and only matters if it goes. The model of 26 checks this property.
 - A second **review** on the same folder opens the same tab, also with a new agent pane there; the check and the insert are one lock.
 - PR-only commands (rounds, threads, pins, the GitHub send, the Claude pane of 11.5) return an error for a local review.
 - Store version 8 adds `review.kind` (`pr` or `local`) and `review.pane`.
@@ -564,6 +564,25 @@ Tests: `take::tests` (a full take, every problem listed, 5000 random note lines 
 - The tab goes back to the first step.
 - A failed fetch shows the error with Retry, as for a new review.
 - A review of local commits has Restart too, with no dialog. It runs `git fetch --all --no-tags` in the agent's folder, then reads the range again (11.11). So a base like `sigp/unstable` is the branch as it is on the remote now, not an old copy of it. A failed fetch still reads the range, and the header says that the fetch failed.
+
+### 11.14 Review the work as it goes
+
+A local review (11.11) shows the agent's uncommitted work too, not only its commits. You review in steps: what changed since you last looked.
+
+- **Snapshots.** The head of the view is the work tree as a commit nobody sees (`review::snapshot`): a copy of the worktree's own index (`git rev-parse --git-path index`, so a linked worktree uses its own), `git add -A` on the copy with `GIT_INDEX_FILE`, `write-tree`, and `commit-tree -p HEAD`, never signed. The files, the real index and HEAD never change, and git never takes the real `index.lock`, so the agent's git commands run as usual. The copy keeps the stat cache (only changed files are read) and the sparse checkout bits (a file outside the cone is not "deleted"). A clean tree gives HEAD itself.
+- **Left out.** Ignored files, and new files over 5 MB (`SNAP_MAX`): a snapshot writes into the repo's object store. The header names what it left out.
+- **Refs.** `refs/sb/review/<id>/head` keeps the view's snapshot from `git gc`, and `refs/sb/review/<id>/reviewed` keeps the point of Mark reviewed. Not under `refs/switchboard`: `local_changes` leaves out commits that refs there reach, and a snapshot's parent is the agent's HEAD. Close of the review deletes both. No store change: the refs hold the state.
+- **New and All.** New (the default) shows `reviewed..snapshot`. With nothing marked yet, it shows the same as All. All shows the range of 11.11 to the snapshot: the commits and the uncommitted work. With nothing unpushed and work in the tree, All shows only the work. **Mark reviewed** sets `reviewed` to the view's head; New is then empty until the agent changes more. After a reset, a rebase or a branch switch, New shows the whole difference, and the header says HEAD moved off the reviewed commit.
+- **When it reads again.** After each turn of an agent (the Stop hook), when a local review is open on its folder, a thread makes a snapshot. A new tree shows **New changes** with Refresh. Other panes cost nothing. The 30 s poll compares HEAD with the HEAD the view was made on (in memory, or after a restart the snapshot's parent), so a snapshot never looks like a new commit.
+- **Comments.** A comment anchors at the view's head and keeps its text, so a Refresh moves it to the same code, or makes it stale (11.7). Send to agent is as in 11.11.
+- **nvim.** `o`, Leader `e` and the nvim buttons of a review open nvim at your line next to the old side: a read-only scratch buffer of `git show <base>:<path>`, in diff mode. The other side is the file itself, so you can edit it; your edits show in the next snapshot. nvim is the worktree's own and stays open, so each call first closes the old side of the call before and runs `diffoff!`. The Lua is `crates/core/src/lua/sb_diff.lua`; the hub writes it to its nvim folder and runs it with `luaeval`, so no Lua is quoted in a Vim string. This works for PR reviews too. `]c` and `[c` are nvim's own jumps between changes.
+- **Not yet.** Comments from nvim (`sb note`), a Last turn view, and a guide for local work.
+
+Tests:
+- `crates/core/tests/snapshot.rs`: real git. A clean tree is HEAD; a change, a deletion, a new file, a staged change and an ignored file, with the files, the index and HEAD unchanged; a big file left out; a linked worktree; a sparse checkout; a held `index.lock`; and a snapshot ref that does not hide the agent's commits from `local_changes`.
+- `crates/sb/tests/work_review.rs`: a real hub and tmux. Open with work, no false alarm from the poll, Mark reviewed, New changes after a turn, Refresh shows only the new file, All, a commit seen by the poll, and a close that drops the refs and keeps the work.
+- `nvim::tests::live_nvim_shows_the_old_side_in_diff_mode`: a real nvim. Two diff windows, the cursor at the line, the old side from git, no pile-up on a second call, an empty old side for a new file.
+- Window checks: New changes, the New and All switch, Mark reviewed, both waiting while the work loads, and `o`.
 
 ## 12. Agents
 
@@ -1067,7 +1086,7 @@ P2 and P6 hold because each request has its own socket and channel, so a reply c
 
 ## 26. Model check of review close
 
-`models/review_close.qnt` models the review map, the folders on disk, the background jobs (fetch, then checkout), close with its three choices, the cleanup threads, the sweep at start, and your panes, locks and numbered changes. It also has a review of local commits (11.11), "l1", whose folder "a1" is the agent's: it exists from the start, has the agent's pane, and holds unpushed commits. The agent commits and pushes at any time. A pin hides those commits from the work check, as `local_changes` does with `refs/switchboard/*`. Two round-1 reviews of one PR share a folder; a round 2 has its own. Each action is one critical section of the code under the tree lock.
+`models/review_close.qnt` models the review map, the folders on disk, the background jobs (fetch, then checkout), close with its three choices, the cleanup threads, the sweep at start, and your panes, locks and numbered changes. It also has a review of local commits (11.11), "l1", whose folder "a1" is the agent's: it exists from the start, has the agent's pane, and holds unpushed commits. The agent commits and pushes at any time. A pin hides those commits from the work check, as `local_changes` does with `refs/switchboard/*`. The snapshot refs of 11.14 are under `refs/sb` and hide nothing, so the model has no action for them. Two round-1 reviews of one PR share a folder; a round 2 has its own. Each action is one critical section of the code under the tree lock.
 
 The invariant `Always`:
 - `OpenKeepsFolder`: an open review that has its folder keeps it.

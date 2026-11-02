@@ -629,6 +629,8 @@ pub struct LocalRange {
     pub count: u32,
     /// What the base is, for the header: "unpushed to origin/x", or why it is not.
     pub note: String,
+    /// False when nothing is unpushed and the range is the last commit.
+    pub unpushed: bool,
 }
 
 /// The unpushed commits of the checkout at `tree`. The base is, in order:
@@ -692,7 +694,8 @@ pub fn local_range(tree: &Path) -> Result<LocalRange, String> {
         }
     }
     let (mut base, mut note) = found.unwrap_or_else(|| (head.clone(), "No branch to compare with.".into()));
-    if base == head {
+    let unpushed = base != head;
+    if !unpushed {
         // Nothing unpushed: show the last commit, so the tab is still useful. Only a
         // true root commit compares with the empty tree: in a shallow clone the parent
         // is missing, and the whole repo would show as new.
@@ -710,7 +713,112 @@ pub fn local_range(tree: &Path) -> Result<LocalRange, String> {
     } else {
         git(tree, &["rev-list", "--count", &format!("{base}..{head}")])?.parse().unwrap_or(0)
     };
-    Ok(LocalRange { head, base, count, note })
+    Ok(LocalRange { head, base, count, note, unpushed })
+}
+
+/// The work tree of a folder as a commit nobody sees (SPEC 11.14): the agent's
+/// uncommitted work, new files too, on top of HEAD.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Snapshot {
+    /// The snapshot commit, or HEAD when the work tree is clean.
+    pub commit: String,
+    /// HEAD when the snapshot was made.
+    pub head: String,
+    /// New files left out because they are bigger than `SNAP_MAX`.
+    pub skipped: Vec<String>,
+}
+
+/// A new file bigger than this stays out of a snapshot: a snapshot writes into the
+/// repo's object store, and a dataset or a build output does not belong there.
+pub const SNAP_MAX: u64 = 5 << 20;
+
+/// The message of a snapshot commit.
+pub const SNAP_SUBJECT: &str = "Switchboard snapshot of the work tree";
+
+/// Makes a snapshot of `tree`. It never changes the files, the index or HEAD:
+/// git works on a copy of the worktree's own index (`GIT_INDEX_FILE`), so it also
+/// never takes `index.lock`, and an agent's git command runs as usual. The copy
+/// keeps the stat cache and the sparse checkout bits, so `add -A` reads only the
+/// files that changed, and a file outside a sparse checkout is not "deleted".
+pub fn snapshot(tree: &Path) -> Result<Snapshot, String> {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let head = git(tree, &["rev-parse", "--verify", "HEAD"])?;
+    let index = PathBuf::from(git(tree, &["rev-parse", "--path-format=absolute", "--git-path", "index"])?);
+    let tmp = std::env::temp_dir().join(format!(
+        "sb-snap-{}-{}.index",
+        std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    struct Gone(PathBuf);
+    impl Drop for Gone {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+            let _ = std::fs::remove_file(self.0.with_extension("index.lock"));
+        }
+    }
+    let _gone = Gone(tmp.clone());
+    let run = |args: &[&str]| -> Result<String, String> {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(tree)
+            .args(args)
+            .env("GIT_INDEX_FILE", &tmp)
+            // commit-tree needs a name; the user may have none set.
+            .env("GIT_AUTHOR_NAME", "Switchboard")
+            .env("GIT_AUTHOR_EMAIL", "switchboard@localhost")
+            .env("GIT_COMMITTER_NAME", "Switchboard")
+            .env("GIT_COMMITTER_EMAIL", "switchboard@localhost")
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| format!("git: {e}"))?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_owned())
+    };
+    // Git swaps a new index in with a rename, so a copy is never half written.
+    match std::fs::copy(&index, &tmp) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            run(&["read-tree", "HEAD"])?;
+        }
+        Err(e) => return Err(format!("{}: {e}", index.display())),
+    }
+    let mut skipped = vec![];
+    for f in run(&["ls-files", "-z", "--others", "--exclude-standard"])?.split('\0').filter(|f| !f.is_empty()) {
+        if std::fs::metadata(tree.join(f)).map(|m| m.len() > SNAP_MAX).unwrap_or(false) {
+            skipped.push(f.to_owned());
+        }
+    }
+    let excludes: Vec<String> = skipped.iter().map(|f| format!(":(exclude,literal){f}")).collect();
+    let mut add = vec!["add", "-A", "--", "."];
+    add.extend(excludes.iter().map(String::as_str));
+    run(&add)?;
+    let work = run(&["write-tree"])?;
+    let commit = if work == git(tree, &["rev-parse", "HEAD^{tree}"])? {
+        head.clone()
+    } else {
+        // Never signed: a signature could ask for a passphrase.
+        run(&["commit-tree", "--no-gpg-sign", &work, "-p", &head, "-m", SNAP_SUBJECT])?
+    };
+    Ok(Snapshot { commit, head, skipped })
+}
+
+/// The ref that keeps a snapshot of a local review from `git gc`: `head` (the
+/// view's head) or `reviewed` (Mark reviewed). Not under `refs/switchboard`:
+/// `local_changes` leaves out commits that refs there reach, and a snapshot's parent
+/// is the agent's HEAD, so its unpushed commits would stop counting as work.
+pub fn snap_ref(review: &str, name: &str) -> String {
+    format!("refs/sb/review/{review}/{name}")
+}
+
+/// Deletes every snapshot ref of a review. Worktrees share one ref store, so this
+/// works from any folder of the repo.
+pub fn drop_snap_refs(tree: &Path, review: &str) {
+    let refs = git(tree, &["for-each-ref", "--format=%(refname)", &format!("refs/sb/review/{review}/")]).unwrap_or_default();
+    for r in refs.lines().filter(|r| !r.is_empty()) {
+        let _ = git(tree, &["update-ref", "-d", r]);
+    }
 }
 
 /// Stops a `claude -p` run and every process of its group: its tools and its MCP

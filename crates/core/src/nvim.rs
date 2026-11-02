@@ -77,6 +77,23 @@ pub fn edit_expr(file: &str, line: u32) -> String {
     )
 }
 
+/// The Lua that shows a file next to its old side (SPEC 11.14).
+pub const DIFF_LUA: &str = include_str!("lua/sb_diff.lua");
+
+/// The expression that runs `diff` of the Lua file at `lua`: `tree/path` next to
+/// `git show base:path`, in diff mode, at `line`. `luaeval` takes the values as a
+/// list, so no Lua is quoted inside a Vim string.
+pub fn diff_expr(lua: &Path, tree: &Path, base: &str, path: &str, line: u32) -> String {
+    let q = |s: &str| format!("'{}'", s.replace('\'', "''"));
+    format!(
+        "luaeval('dofile(_A[1]).diff(_A[2], _A[3], _A[4], _A[5])', [{}, {}, {}, {}, {line}])",
+        q(&lua.to_string_lossy()),
+        q(&tree.to_string_lossy()),
+        q(base),
+        q(path)
+    )
+}
+
 /// Reloads every loaded buffer with no unsaved changes. A changed buffer stays as is.
 pub const CHECKTIME: &str = "execute('lua for _, b in ipairs(vim.api.nvim_list_bufs()) do if vim.api.nvim_buf_is_loaded(b) and not vim.bo[b].modified then vim.cmd(\"checktime \" .. b) end end')";
 
@@ -140,5 +157,59 @@ mod tests {
         let _ = expr(&sock, "execute('qa!')");
         let _ = child.wait();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn live_nvim_shows_the_old_side_in_diff_mode() {
+        if !installed() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("sb-nvim-diff-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let tree = dir.join("it's tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        let git = |args: &[&str]| {
+            let ok = Command::new("git").arg("-C").arg(&tree).args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]).args(args).output().unwrap();
+            assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+            String::from_utf8_lossy(&ok.stdout).trim().to_owned()
+        };
+        git(&["init", "-q"]);
+        std::fs::write(tree.join("f.txt"), "1\n2\n3\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "one"]);
+        let base = git(&["rev-parse", "HEAD"]);
+        std::fs::write(tree.join("f.txt"), "1\ntwo\n3\n4\n").unwrap();
+        std::fs::write(tree.join("new.txt"), "n\n").unwrap();
+        let lua = dir.join("sb_diff.lua");
+        std::fs::write(&lua, DIFF_LUA).unwrap();
+        let sock = dir.join("n.sock");
+        // Killed on a panic too, and with no stdout: a live nvim holds no pipe open.
+        struct Kill(std::process::Child);
+        impl Drop for Kill {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let _child = Kill(Command::new("nvim").args(["--headless", "--clean", "--listen"]).arg(&sock).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap());
+        for _ in 0..50 {
+            if alive(&sock) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let diff_wins = "len(filter(range(1, winnr('$')), 'getwinvar(v:val, \"&diff\")'))";
+        expr(&sock, &diff_expr(&lua, &tree, &base, "f.txt", 3)).unwrap();
+        assert_eq!(expr(&sock, "winnr('$')").unwrap(), "2");
+        assert_eq!(expr(&sock, diff_wins).unwrap(), "2");
+        // The cursor is on the file itself, at the line, and the old side is the base.
+        assert_eq!(expr(&sock, "expand('%:t') .. ':' .. line('.')").unwrap(), "f.txt:3");
+        assert_eq!(expr(&sock, "string(getbufline(winbufnr(1), 1, '$'))").unwrap(), "['1', '2', '3']");
+        // A second call does not pile up splits; a new file has an empty old side.
+        expr(&sock, &diff_expr(&lua, &tree, &base, "new.txt", 1)).unwrap();
+        assert_eq!(expr(&sock, "winnr('$')").unwrap(), "2");
+        assert_eq!(expr(&sock, "string(getbufline(winbufnr(1), 1, '$'))").unwrap(), "['']");
+        assert_eq!(expr(&sock, "expand('%:t')").unwrap(), "new.txt");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

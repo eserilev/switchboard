@@ -711,6 +711,31 @@
   $('#rhead .newhead [data-act="update"]').click();
   await wait(50);
   check("new commits offer Refresh, which reads the commits again", called("review_update").some((c) => c[1].id === "rL"));
+  {
+    // The agent's work in steps (SPEC 11.14): New or All, Mark reviewed, and o for nvim.
+    window.__emit("review", Object.assign({}, window.__data.reviews.find((x) => x.id === "rL"), { new_head: null }));
+    await wait(100);
+    check("the work view says New changes, not New commits", !$("#rhead").textContent.includes("New commits"));
+    check("New is on, with All next to it", $('#rhead [data-range="new"]')?.getAttribute("aria-pressed") === "true" && $('#rhead [data-range="all"]')?.getAttribute("aria-pressed") === "false");
+    $('#rhead [data-range="all"]').click();
+    await wait(50);
+    check("All asks for the whole range", called("review_range").at(-1)?.[1].range === "all" && called("review_range").at(-1)?.[1].id === "rL", JSON.stringify(called("review_range")));
+    $('#rhead [data-act="mark"]').click();
+    await wait(50);
+    check("Mark reviewed marks the view", called("review_mark_reviewed").at(-1)?.[1].id === "rL");
+    window.__emit("review", Object.assign({}, window.__data.reviews.find((x) => x.id === "rL"), { status: "fetching" }));
+    await wait(100);
+    check("while the work loads, the switch and Mark reviewed wait", $('#rhead [data-range="all"]').disabled && $('#rhead [data-act="mark"]').disabled);
+    window.__emit("review", Object.assign({}, window.__data.reviews.find((x) => x.id === "rL"), { status: "ready" }));
+    await wait(100);
+    const before = called("review_nvim").length;
+    docKey("o");
+    await wait(100);
+    check("o opens nvim at the line you are on", called("review_nvim").length === before + 1 && called("review_nvim").at(-1)[1].id === "rL", JSON.stringify(called("review_nvim").slice(-2)));
+    // Back to the agent, as the checks below expect.
+    $('[data-rview="agent"]')?.click();
+    await wait(150);
+  }
   // A review of local commits has Restart too: it fetches the remotes and reads the range again.
   {
     const btn = $('#rhead [data-act="restart"]');
