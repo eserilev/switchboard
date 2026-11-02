@@ -18,6 +18,8 @@ Usage: install.sh [flags]
   --source       build from source, also when a prebuilt release exists
   --prefix DIR   put the binaries (Linux) or the links to them (macOS) in DIR/bin
                  (default ~/.local)
+  --scan DIR     a folder that holds your git repos; give it more than once for
+                 more folders. Without it, the script looks for the usual ones.
   --uninstall    remove the app; your config, store and agents stay
 The script checks every dependency first and prints the command that installs
 what is missing. It never changes your shell files or your Claude settings.
@@ -31,11 +33,16 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 main() {
   local deps=0 source=0 uninstall=0 prefix="$HOME/.local"
+  scan_dirs=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --deps) deps=1 ;;
       --source) source=1 ;;
       --prefix) [ $# -ge 2 ] || die "--prefix needs a folder"; prefix=$2; shift ;;
+      --scan)
+        [ $# -ge 2 ] || die "--scan needs a folder"
+        [ -d "$2" ] || die "--scan $2: no such folder"
+        scan_dirs+=("$(cd "$2" && pwd -P)"); shift ;;
       --uninstall) uninstall=1 ;;
       -h|--help) usage; exit 0 ;;
       *) usage; die "unknown flag: $1" ;;
@@ -352,35 +359,86 @@ do_uninstall() {
   echo "Your agents keep running in tmux (socket 'switchboard'). Stop them with: tmux -L switchboard kill-server"
 }
 
+# A folder for the config: `~/x` inside the home folder, else the full path.
+config_path() {
+  case "$1" in
+    "$HOME") echo "~" ;;
+    "$HOME"/*) echo "~${1#"$HOME"}" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+# The folders that hold git repos, from a search of the home folder 4 levels
+# deep. A repo right in the home folder is listed itself: a scan of the whole
+# home folder would read Library and the rest.
+find_code_dirs() {
+  local g repo parent
+  find "$HOME" -maxdepth 4 \( -name .git -prune -print \) -o \( -type d \( -name '.*' -o -name Library \
+    -o -name Applications -o -name Pictures -o -name Music -o -name Movies -o -name Downloads \
+    -o -name node_modules -o -name target \) -prune \) 2>/dev/null | while read -r g; do
+    repo=$(dirname "$g")
+    parent=$(dirname "$repo")
+    if [ "$parent" = "$HOME" ]; then echo "$repo"; else echo "$parent"; fi
+  done | sort -u
+}
+
 write_config() {
   local os=$1 config="$config_home/switchboard/config.toml"
-  [ -f "$config" ] && return 0
-  local roots=() seen=() d real r dup
-  for d in "$HOME/Documents/Code" "$HOME/code" "$HOME/Code" "$HOME/src" "$HOME/dev" "$HOME/projects" "$HOME/Projects" "$HOME/workspace"; do
-    [ -d "$d" ] || continue
+  local d real r dup
+  if [ -f "$config" ]; then
+    # --scan with a config already there: add the folders to its scan line.
+    for d in "${scan_dirs[@]+"${scan_dirs[@]}"}"; do
+      r=$(config_path "$d")
+      if grep -qF "\"$r\"" "$config"; then continue; fi
+      if grep -qE '^scan = \[.*\]$' "$config"; then
+        sed -i.bak -E "s|^scan = \[(.*)\]$|scan = [\1, \"$r\"]|; s|^scan = \[, |scan = [|" "$config" && rm -f "$config.bak"
+        say "Added $r to scan in $config"
+      else
+        warn "Add \"$r\" to scan in $config yourself: the scan line has a form this script does not change."
+      fi
+    done
+    return 0
+  fi
+  local roots=() seen=() found=()
+  if [ ${#scan_dirs[@]} -gt 0 ]; then
+    found=("${scan_dirs[@]}")
+  else
+    for d in "$HOME/Documents/Code" "$HOME/code" "$HOME/Code" "$HOME/src" "$HOME/dev" "$HOME/projects" "$HOME/Projects" "$HOME/workspace"; do
+      [ -d "$d" ] && found+=("$(cd "$d" && pwd -P)")
+    done
+    if [ ${#found[@]} -eq 0 ]; then
+      say "Looking for your git repos in $HOME"
+      while read -r d; do [ -n "$d" ] && found+=("$d"); done < <(find_code_dirs)
+    fi
+  fi
+  for real in "${found[@]+"${found[@]}"}"; do
     # On macOS ~/code and ~/Code are one folder: list it once.
-    real=$(cd "$d" && pwd -P)
     dup=0
     for r in "${seen[@]+"${seen[@]}"}"; do [ "$r" = "$real" ] && dup=1; done
     [ "$dup" = 1 ] && continue
     seen+=("$real")
-    roots+=("\"~${d#"$HOME"}\"")
+    roots+=("\"$(config_path "$real")\"")
   done
-  [ ${#roots[@]} -eq 0 ] && roots=('"~/Documents/Code"')
   local leader='ctrl+space'
   # On macOS ctrl+space often switches the input language.
   [ "$os" = Darwin ] && leader='ctrl+;'
   local list
-  list=$(printf '%s, ' "${roots[@]}")
+  list=$(printf '%s, ' "${roots[@]+"${roots[@]}"}")
   mkdir -p "$(dirname "$config")"
   {
     echo "# Switchboard config. SPEC.md section 14 has every key."
     echo "# The folders where the app looks for your git repos and PR clones."
+    [ ${#roots[@]} -eq 0 ] && echo "# None found: add yours here, or in the app's Settings."
     echo "scan = [${list%, }]"
     echo "# The leader key: the first key of every Switchboard shortcut."
     echo "leader = \"$leader\""
   } > "$config"
   say "Wrote a starter config: $config"
+  if [ ${#roots[@]} -eq 0 ]; then
+    warn "No folder with git repos found. Add yours in Settings, or run the script again with --scan DIR."
+  else
+    say "Repos come from: ${list%, }"
+  fi
 }
 
 next_steps() {

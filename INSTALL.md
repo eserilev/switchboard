@@ -15,7 +15,7 @@ The script:
 3. Installs the app:
    - Linux: `switchboard` and `sb` in `~/.local/bin`, an app menu entry, and an icon.
    - macOS: `~/Applications/Switchboard.app`, and links to `sb` and `switchboard` in `~/.local/bin`.
-4. Writes a starter config with the code folders that it finds, if you have no config yet.
+4. Writes a starter config, if you have no config yet. `scan` gets the folders you give with `--scan`. Without them, it gets the usual code folders that exist (`~/Documents/Code`, `~/code`, `~/src`, `~/dev`, `~/projects`, `~/workspace`). With none of those, the script looks for git repos in your home folder, 4 levels deep, and lists the folders that hold them.
 5. Tells you the steps that are left, for example `gh auth login`.
 
 It does not change your shell files or your Claude Code settings. It keeps a list of the files it installs (`~/.local/share/switchboard/installed-files`), and it never replaces a file that is not on the list. The whole script runs only after the download is complete.
@@ -43,7 +43,7 @@ Optional: `nvim` for nvim panes, `notify-send` for desktop notifications, `secre
 
 1. Log in to Claude Code once: run `claude` in a terminal.
 2. Log in to GitHub for reviews: `gh auth login`.
-3. Check the config: `~/.config/switchboard/config.toml`. `scan` lists the folders where Switchboard looks for your repos. A PR review needs a local clone of the repo in one of these folders. Section 14 of `SPEC.md` has every key.
+3. Check the folders where Switchboard looks for your repos: Settings (the gear at the top right), or `scan` in `~/.config/switchboard/config.toml`. Repos where you ran `claude` show too, wherever they are. A PR review needs a local clone of the repo in one of these folders. Section 14 of `SPEC.md` has every key.
 4. Start Switchboard:
    - Linux: `switchboard`, or from your app menu.
    - macOS: open `~/Applications/Switchboard.app`.
@@ -89,6 +89,7 @@ cargo run -p switchboard
 | `--deps` | Install missing tools with your package manager |
 | `--source` | Build from source, also when a release exists |
 | `--prefix DIR` | Put the binaries (Linux) or the links to them (macOS) in `DIR/bin` (default `~/.local`) |
+| `--scan DIR` | A folder that holds your git repos. Give it more than once for more folders. With a config already there, the folder is added to its `scan` |
 | `--uninstall` | Remove the app |
 
 ## Problems
