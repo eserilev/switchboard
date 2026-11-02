@@ -1,6 +1,6 @@
 {
   "productName": "Switchboard",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "identifier": "dev.switchboard.app",
   "build": { "frontendDist": "../../web" },
   "app": {
