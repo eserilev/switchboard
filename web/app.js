@@ -122,17 +122,34 @@ function setTab(tab, quiet) {
   else window.SBReview?.draw(tab);
 }
 
+// Board, Tasks, and Code reviews: a menu of the open reviews. The tab shows the
+// review that is open, and a dot while any review works.
+const reviewBusy = (r) => ["fetching", "writing", "updating"].includes(r.status);
+const reviewLabel = (r) => (r.kind === "local" ? `${esc(r.repo)} commits` : `#${esc(r.number)}${r.round > 1 ? ` R${r.round}` : ""}`);
 function drawTabs() {
-  const tabs = [`<button class="tab" role="tab" data-tab="board" aria-selected="${S.tab === "board"}">Board</button>`,
-    `<button class="tab" role="tab" data-tab="tasks" aria-selected="${S.tab === "tasks"}">Tasks</button>`];
-  for (const r of S.reviews.values()) {
-    const busy = ["fetching", "writing", "updating"].includes(r.status) ? '<i class="busy"></i>' : "";
-    const label = r.kind === "local" ? `${esc(r.repo)} commits` : `#${esc(r.number)}${r.round > 1 ? ` R${r.round}` : ""}`;
-    tabs.push(`<button class="tab" role="tab" data-tab="${esc(r.id)}" aria-selected="${S.tab === r.id}">${label}${busy}</button>`);
-  }
-  $("#tabs").innerHTML = tabs.join("");
+  const list = [...S.reviews.values()];
+  const cur = S.reviews.get(S.tab);
+  const open = !!$("#revmenu") && !$("#revmenu").hidden;
+  const items = list.map((r) => `<button role="menuitemradio" data-tab="${esc(r.id)}" aria-selected="${S.tab === r.id}" aria-checked="${S.tab === r.id}"><span class="rname">${reviewLabel(r)}${reviewBusy(r) ? '<i class="busy"></i>' : ""}<small>${esc(r.title || "")}</small></span><span class="at">${esc(r.status === "ready" ? "" : r.status || "")}</span></button>`);
+  if (!list.length) items.push('<div class="mnone">No open reviews</div>');
+  items.push('<button role="menuitem" data-newreview>New review…</button>');
+  $("#tabs").innerHTML = [
+    `<button class="tab" role="tab" data-tab="board" aria-selected="${S.tab === "board"}">Board</button>`,
+    `<button class="tab" role="tab" data-tab="tasks" aria-selected="${S.tab === "tasks"}">Tasks</button>`,
+    `<span class="revtab"><button class="tab" role="tab" id="revtab" aria-haspopup="menu" aria-expanded="${open}" aria-selected="${!!cur}">Code reviews${cur ? `<b class="cur">${reviewLabel(cur)}</b>` : list.length ? `<b class="count">${list.length}</b>` : ""}${list.some(reviewBusy) ? '<i class="busy"></i>' : ""}<i class="caret"></i></button>` +
+      `<div class="menu revmenu" id="revmenu" role="menu"${open ? "" : " hidden"}>${items.join("")}</div></span>`,
+  ].join("");
 }
-$("#tabs").addEventListener("click", (e) => { const t = e.target.closest("[data-tab]"); if (t) setTab(t.dataset.tab); });
+$("#tabs").addEventListener("click", (e) => {
+  if (e.target.closest("#revtab")) { $("#revmenu").hidden = !$("#revmenu").hidden; $("#revtab").setAttribute("aria-expanded", String(!$("#revmenu").hidden)); return; }
+  if (e.target.closest("[data-newreview]")) { $("#revmenu").hidden = true; return openLauncher(); }
+  const t = e.target.closest("[data-tab]");
+  if (!t) return;
+  if ($("#revmenu")) $("#revmenu").hidden = true;
+  setTab(t.dataset.tab);
+});
+document.addEventListener("click", (e) => { if (!e.target.closest(".revtab") && $("#revmenu") && !$("#revmenu").hidden) { $("#revmenu").hidden = true; $("#revtab").setAttribute("aria-expanded", "false"); } });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("#revmenu") && !$("#revmenu").hidden) { $("#revmenu").hidden = true; $("#revtab").focus(); } });
 
 // ---------- board ----------
 

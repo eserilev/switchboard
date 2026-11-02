@@ -196,6 +196,20 @@
 
   // Review
   check("review tab button", $$('#tabs [data-tab="r1"]').length === 1);
+  {
+    // Three tabs: Board, Tasks, and Code reviews with a menu of the open reviews.
+    const tabs = $$("#tabs > .tab, #tabs > .revtab > .tab").map((t) => t.textContent.trim());
+    check("the tabs are Board, Tasks and Code reviews", tabs.length === 3 && tabs[0] === "Board" && tabs[1] === "Tasks" && tabs[2].startsWith("Code reviews"), JSON.stringify(tabs));
+    check("the Code reviews tab shows the open review", $("#revtab").getAttribute("aria-selected") === "true" && $("#revtab .cur")?.textContent === "#10071", $("#revtab").textContent);
+    check("the review menu starts closed", $("#revmenu").hidden);
+    $("#revtab").click();
+    check("a click opens the menu of open reviews", !$("#revmenu").hidden && $$('#revmenu [data-tab]').length === window.SB.S.reviews.size && $("#revmenu").textContent.includes("Add IL transactions"), $("#revmenu").textContent);
+    document.body.click();
+    check("a click outside closes the menu", $("#revmenu").hidden);
+    $("#revtab").click();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    check("Escape closes the menu", $("#revmenu").hidden);
+  }
   check("steps render", $$("#rsteps .step").length === 2);
   docKey("j");
   await wait(300);

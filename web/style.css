@@ -45,9 +45,18 @@ button { font: inherit; }
 
 /* ---------- top bar ---------- */
 .bar { display: flex; align-items: center; gap: 6px 14px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel-2); }
-.tabs { display: flex; gap: 2px; min-width: 0; overflow-x: auto; }
+.tabs { display: flex; gap: 2px; min-width: 0; }
 .tab { font: 700 13px/1 var(--display); font-stretch: 85%; letter-spacing: .06em; text-transform: uppercase; padding: 8px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; white-space: nowrap; }
 .tab[aria-selected="true"] { background: var(--accent); color: var(--accent-fg); }
+.revtab { position: relative; display: inline-flex; }
+.tab .cur, .tab .count { font: 600 12px/1 var(--mono); letter-spacing: 0; text-transform: none; margin-left: 8px; }
+.tab .count { opacity: .75; }
+.tab .caret { display: inline-block; width: 0; height: 0; margin-left: 8px; vertical-align: middle; border: 4px solid transparent; border-top-color: currentColor; border-bottom: 0; }
+.revmenu { left: 0; right: auto; min-width: 280px; max-width: 420px; max-height: 60vh; overflow: auto; }
+.revmenu .rname { display: grid; gap: 3px; min-width: 0; }
+.revmenu .rname small { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.revmenu .mnone { padding: 8px 10px; color: var(--muted); font: 500 13px/1.2 var(--mono); }
+.revmenu [data-newreview] { border-top: 1px solid var(--line); border-radius: 0 0 6px 6px; color: var(--accent); }
 .tab .busy { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--working); margin-left: 6px; vertical-align: middle; }
 .tally { display: flex; gap: 12px; margin-left: auto; font: 500 12px/1 var(--mono); font-variant-numeric: tabular-nums; }
 .tally b { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; cursor: pointer; }

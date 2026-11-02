@@ -313,7 +313,7 @@ Opening a layout starts all its panes. Panes that already run are not started ag
 | Guide + diff | The current step: what the code does, what to check, pins, context links. Under it, the diff at the PR head: only the parts of each file that the step's ranges name, with 6 rows of context. A bar counts the other changed lines of the file, links the steps that cover them, and opens the whole file in the Files view. Each gap in a diff has buttons that show 20 hidden lines above or below, or the whole gap. The hidden lines come from `all_rows`: the proved numbering with no cut. |
 | Claude | A Claude Code pane for questions (11.5). Below it, the drafts. |
 
-A review has its own tab. More than one review can be open, one tab for each PR.
+The tab bar has three tabs: Board, Tasks, and Code reviews. More than one review can be open. A click on Code reviews opens a menu of the open reviews (number, round, title, and the state while it works) and New review…, which opens the launcher. The tab shows the review on screen, the count of open reviews when none shows, and a dot while any review works. Leader, `r` steps through the open reviews.
 The review header shows the state of the guide session: fetching, writing, updating, ready or error.
 
 ### 11.2 Guide session
@@ -460,7 +460,7 @@ Limits:
 After you send a review, the author pushes new commits. A new round reviews only what changed since your round.
 
 - When the head changes (11.7), the header offers **Start round N+1** next to **Update guide**.
-- A round is a new review of the same PR, in its own tab (`#10182 R2`) and its own worktree (`pr10182-r2`). The round before stays open until you close it.
+- A round is a new review of the same PR, in its own item of the Code reviews menu (`#10182 R2`) and its own worktree (`pr10182-r2`). The round before stays open until you close it.
 - A round can also start after the round before is closed: open the PR again, and the launcher offers the next round (9.2). `since` is then the head of the last closed round with a guide. Its pinned ref keeps that commit, also after a force-push and a `git gc` (11.10).
 - `since` is the head that the round before covered. The base of the round's diff is:
   - `since`, when the author only added commits on top of it.
