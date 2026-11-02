@@ -1640,6 +1640,38 @@
   }
 
   {
+    // Settings (SPEC 14.1): the lists, a bad site, and a save that works at once.
+    $("#gear").click();
+    await wait(100);
+    const rows = (k) => $$(`#sbody input[data-list="${k}"]`).map((i) => i.value);
+    check("the gear opens Settings with the saved lists", !$("#settings").hidden && rows("scan").join() === "~/code,~/gone" && rows("web_domains").join() === "github.com" && !$("#swebsearch").checked, JSON.stringify({ scan: rows("scan"), web: rows("web_domains") }));
+    check("a folder that does not exist says so", $$("#sbody .miss").length === 1 && $$("#sbody .srow")[1].textContent.includes("not found"));
+    $('#sbody [data-add="scan"]').click();
+    const fresh = $$('#sbody input[data-list="scan"]').at(-1);
+    check("Add puts an empty row and focuses it", rows("scan").length === 3 && document.activeElement === fresh);
+    fresh.value = "~/notes";
+    fresh.dispatchEvent(new Event("input", { bubbles: true }));
+    $('#sbody [data-del="scan"][data-i="1"]').click();
+    const web = $('#sbody input[data-list="web_domains"]');
+    web.value = "https://github.com/x";
+    web.dispatchEvent(new Event("input", { bubbles: true }));
+    $("#ssave").click();
+    await wait(100);
+    check("a bad site is refused and Settings stays open", !$("#settings").hidden && $("#serr").textContent.includes("not a host name"), $("#serr").textContent);
+    web.value = "github.com";
+    web.dispatchEvent(new Event("input", { bubbles: true }));
+    $("#swebsearch").click();
+    $("#ssave").click();
+    await wait(100);
+    const sent = called("settings_save").at(-1)?.[1].set;
+    check("Save sends the lists and closes", $("#settings").hidden && JSON.stringify(sent?.scan) === JSON.stringify(["~/code", "~/notes"]) && sent?.web_search === true, JSON.stringify(sent));
+    check("the leader of this computer stays after a save", window.SB.S.settings.leader === "ctrl+space" && window.SB.S.settings.web_search === true, JSON.stringify(window.SB.S.settings));
+    $("#gear").click();
+    await wait(100);
+    $("#settings").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    check("Escape closes Settings", $("#settings").hidden);
+  }
+  {
     // A repo made while the app runs shows after the window gets the focus back.
     const was = window.__data.repos;
     window.__data.repos = [...was, { name: "fresh", path: "/c/fresh", branch: "main", dirty: false, worktrees: [], last_used: 0, rust: false }];

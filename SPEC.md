@@ -715,6 +715,21 @@ branch_prefix = "sb/"
 
 A missing file gives the defaults. An unknown key is an error with the key name.
 
+### 14.1 Settings
+
+The gear at the top right opens Settings. It changes four keys, so nobody has to find and edit the file:
+
+- Repo folders: `scan`. A folder that does not exist shows "not found".
+- Spec clones: `review.spec_clones`.
+- Sites the review agent can fetch: `review.web_domains`. Only plain host names: `https://` or a path is refused with a reason, and Settings stays open.
+- Let the review agent search the web: `review.web_search`.
+
+Save writes the config file with `toml_edit`: every other key and every comment stays. Items are trimmed, and empty items and repeats go. The new text must parse with the same rules as at start, else nothing is written. The write is a new file and a rename, so a crash never leaves half a config. A file that does not parse is not changed: the error says to fix it first.
+
+A change works at once, with no restart: the hub keeps the new config, the repo list loads again, and the next review run and Ask pane use the new keys. In remote mode (29) Settings changes the server's config, because the repos and the reviews are there. The leader key stays the one of your own computer.
+
+Not in Settings yet: the leader key, connections, and the other keys. Edit the file for those, and restart.
+
 ## 15. Memory
 
 The global `rust-analyzer-lsp` plugin gives each Claude session its own rust-analyzer.

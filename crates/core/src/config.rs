@@ -71,6 +71,45 @@ impl Default for ReviewCfg {
     }
 }
 
+/// The fields that the Settings window changes (SPEC 14.1).
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SettingsEdit {
+    pub scan: Vec<String>,
+    pub spec_clones: Vec<String>,
+    pub web_domains: Vec<String>,
+    pub web_search: bool,
+}
+
+impl SettingsEdit {
+    /// Trims each item and drops empty items and repeats. A site must be a plain
+    /// host name: anything else would break the tool list of the review agent.
+    fn clean(&self) -> Result<SettingsEdit, String> {
+        let tidy = |v: &[String]| {
+            let mut out: Vec<String> = vec![];
+            for s in v.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                if !out.iter().any(|o| o == s) {
+                    out.push(s.to_owned());
+                }
+            }
+            out
+        };
+        let web_domains: Vec<String> = tidy(&self.web_domains).iter().map(|d| d.to_ascii_lowercase()).collect();
+        if let Some(bad) = web_domains
+            .iter()
+            .find(|d| !d.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-'))
+        {
+            return Err(format!("{bad} is not a host name. Write it like github.com, with no https:// and no path."));
+        }
+        Ok(SettingsEdit {
+            scan: tidy(&self.scan),
+            spec_clones: tidy(&self.spec_clones),
+            web_domains,
+            web_search: self.web_search,
+        })
+    }
+}
+
 /// The `[tasks]` table (SPEC 27.11).
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields, default)]
@@ -131,6 +170,43 @@ impl Config {
         }
     }
 
+    /// Writes the Settings fields into the config file, and keeps every other key
+    /// and the comments. Returns the new config. A file that does not parse is not
+    /// changed: the error names the problem.
+    pub fn edit(path: &Path, set: &SettingsEdit) -> Result<Config, String> {
+        let set = set.clean()?;
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        let mut doc: toml_edit::Document = text
+            .parse()
+            .map_err(|e: toml_edit::TomlError| format!("{}: {}. Fix the file, then save again.", path.display(), e.message()))?;
+        let list = |v: &[String]| toml_edit::value(v.iter().map(String::as_str).collect::<toml_edit::Array>());
+        doc["scan"] = list(&set.scan);
+        if !doc.get("review").is_some_and(toml_edit::Item::is_table) {
+            if doc.contains_key("review") {
+                return Err(format!("{}: review is not a table.", path.display()));
+            }
+            doc["review"] = toml_edit::table();
+        }
+        doc["review"]["spec_clones"] = list(&set.spec_clones);
+        doc["review"]["web_domains"] = list(&set.web_domains);
+        doc["review"]["web_search"] = toml_edit::value(set.web_search);
+        let text = doc.to_string();
+        // The app reads the file with the same rules at its next start.
+        let config = Config::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        // A new file and a rename, so a crash never leaves half a config.
+        let tmp = path.with_extension("toml.new");
+        std::fs::write(&tmp, &text).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(config)
+    }
+
     pub fn parse(text: &str) -> Result<Config, String> {
         let c: Config = toml::from_str(text).map_err(|e| e.message().to_owned())?;
         for (name, conn) in &c.connections {
@@ -184,6 +260,38 @@ mod tests {
         // With no `web_domains`, the default sites stay.
         let d = Config::parse("[review]\nspec_clones = []").unwrap();
         assert!(d.review.web_domains.contains(&"raw.githubusercontent.com".to_owned()));
+    }
+
+    #[test]
+    fn edit_keeps_comments_and_other_keys() {
+        let dir = std::env::temp_dir().join(format!("sb-config-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("config.toml");
+        // No file yet: the edit writes one.
+        let set = SettingsEdit {
+            scan: vec![" ~/code ".into(), "".into(), "~/code".into(), "~/notes".into()],
+            spec_clones: vec![],
+            web_domains: vec!["GitHub.com".into()],
+            web_search: true,
+        };
+        let c = Config::edit(&path, &set).unwrap();
+        assert_eq!(c.scan, vec!["~/code", "~/notes"]);
+        assert_eq!(c.review.web_domains, vec!["github.com"]);
+        assert!(c.review.web_search);
+        // A file with comments, another key and a review table.
+        std::fs::write(&path, "# my config\nleader = \"ctrl+a\" # the key\nscan = [\"~/x\"]\n\n[review]\nprompt = \"p.md\"\n").unwrap();
+        let c = Config::edit(&path, &SettingsEdit { scan: vec!["~/y".into()], ..set.clone() }).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# my config") && text.contains("# the key"), "{text}");
+        assert_eq!((c.leader.as_str(), c.scan.clone(), c.review.prompt.as_deref()), ("ctrl+a", vec!["~/y".to_owned()], Some("p.md")));
+        assert_eq!(Config::load(&path).unwrap(), c);
+        // A bad site, and a file that does not parse, change nothing.
+        let bad = SettingsEdit { web_domains: vec!["https://x.org/a".into()], ..set.clone() };
+        assert!(Config::edit(&path, &bad).unwrap_err().contains("not a host name"));
+        std::fs::write(&path, "scan = [").unwrap();
+        assert!(Config::edit(&path, &set).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "scan = [");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

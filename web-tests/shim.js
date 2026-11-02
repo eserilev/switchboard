@@ -11,7 +11,7 @@ window.__data = {
     pane({ id: "p3", kind: "nvim", lamp: "none", repo: "timeways", tree: "/c/timeways", branch: "master", session: null }),
   ],
   connections: { active: "a", list: [{ name: "a", kind: "claude", limit_until: null }, { name: "b", kind: "claude", limit_until: null }] },
-  settings: { leader: "ctrl+space", nvim: true },
+  settings: { leader: "ctrl+space", nvim: true, scan: ["~/code", "~/gone"], spec_clones: [], web_domains: ["github.com"], web_search: false, missing: ["~/gone"], config: "/home/me/.config/switchboard/config.toml" },
   repos: [
     { name: "lighthouse", path: "/c/lighthouse", branch: "unstable", dirty: true, worktrees: [{ path: "/c/lighthouse-il", branch: "il" }], last_used: 9, rust: true },
     { name: "timeways", path: "/c/timeways", branch: "master", dirty: false, worktrees: [], last_used: 5, rust: true },
@@ -165,7 +165,16 @@ window.__TAURI__ = {
       switch (cmd) {
         case "panes": return structuredClone(d.panes);
         case "connections": return d.connections;
-        case "settings": return d.settings;
+        // A copy, as from the hub: the window never shares an object with the hub.
+        case "settings": return { ...d.settings };
+        case "settings_save": {
+          // A copy of the hub rule: a site must be a plain host name.
+          const bad = args.set.web_domains.find((x) => !/^[A-Za-z0-9.-]+$/.test(x.trim()));
+          if (bad) throw `${bad} is not a host name. Write it like github.com, with no https:// and no path.`;
+          const clean = (v) => [...new Set(v.map((x) => x.trim()).filter(Boolean))];
+          Object.assign(d.settings, { scan: clean(args.set.scan), spec_clones: clean(args.set.spec_clones), web_domains: clean(args.set.web_domains), web_search: args.set.web_search, leader: "server-key", missing: [] });
+          return { ...d.settings };
+        }
         case "repos": return d.repos;
         case "reviews": return d.reviews;
         case "layouts": return ["day"];

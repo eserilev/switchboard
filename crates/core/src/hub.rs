@@ -1446,6 +1446,33 @@ impl Hub {
         list
     }
 
+    /// The Settings fields, the config file, and the scan folders that do not exist
+    /// (SPEC 14.1).
+    pub fn settings_view(&self) -> Value {
+        let c = self.config();
+        let missing: Vec<&String> = c.scan.iter().chain(&c.review.spec_clones).filter(|s| !expand(s).is_dir()).collect();
+        json!({
+            "leader": c.leader,
+            "nvim": crate::nvim::installed(),
+            "sprint_days": c.tasks.sprint_days,
+            "scan": c.scan,
+            "spec_clones": c.review.spec_clones,
+            "web_domains": c.review.web_domains,
+            "web_search": c.review.web_search,
+            "missing": missing,
+            "config": self.paths.config.to_string_lossy(),
+        })
+    }
+
+    /// Saves the Settings fields to the config file. They work at once: the next
+    /// repo list, review and Ask pane read the new config.
+    pub fn settings_save(&self, set: &crate::config::SettingsEdit) -> Res<Value> {
+        let config = Config::edit(&self.paths.config, set)?;
+        tracing::info!(target: "sb::hub", scan = ?config.scan, web = ?config.review.web_domains, "settings saved");
+        *self.config.write().unwrap() = config;
+        Ok(self.settings_view())
+    }
+
     pub fn layout_save(&self, name: &str) -> Res<()> {
         tracing::info!(target: "sb::hub", name, "layout save");
         let list: Vec<Value> = self

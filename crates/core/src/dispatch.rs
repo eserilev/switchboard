@@ -101,10 +101,8 @@ commands! {
     layouts() -> Vec<String> => |h| Ok(h.layouts());
     layout_save(name: String) -> () => |h| h.layout_save(&name);
     layout_open(name: String) -> () => |h| h.layout_open(&name);
-    settings() -> Value => |h| {
-        let c = h.config();
-        Ok(json!({ "leader": c.leader, "nvim": crate::nvim::installed(), "sprint_days": c.tasks.sprint_days }))
-    };
+    settings() -> Value => |h| Ok(h.settings_view());
+    settings_save(set: crate::config::SettingsEdit) -> Value => |h| h.settings_save(&set);
     reviews() -> Value => |h| Ok(json!(h.reviews()));
     review_open(url: String, round_of: Option<String>) -> String => |h| h.review_open(&url, round_of.as_deref());
     review_prior(url: String) -> Value => |h| h.review_prior(&url).map(|v| json!(v));

@@ -16,6 +16,7 @@
       <button class="btn small" id="conn" aria-haspopup="menu"></button>
       <div class="menu" id="connmenu" role="menu" hidden></div>
     </div>
+    <button class="btn plus" id="gear" aria-label="Settings" title="Settings">⚙</button>
     <button class="btn plus" id="newpane" aria-label="New pane">+</button>
   </header>
 
@@ -42,6 +43,18 @@
 
   <main id="view-tasks" class="tasks" hidden></main>
   <div class="finish" id="tbox" hidden></div>
+
+  <div class="launcher" id="settings" hidden>
+    <div class="lbox sbox" role="dialog" aria-label="Settings">
+      <h3>Settings</h3>
+      <div class="lrows" id="sbody"></div>
+      <div class="lfoot">
+        <span class="lerr" id="serr"></span>
+        <button class="btn" id="scancel" type="button">Cancel</button>
+        <button class="btn primary" id="ssave" type="button">Save</button>
+      </div>
+    </div>
+  </div>
 
   <div class="launcher" id="launcher" hidden>
     <div class="lbox" role="dialog" aria-label="New pane">

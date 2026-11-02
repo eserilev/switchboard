@@ -892,6 +892,81 @@ $("#launcher").addEventListener("keydown", (e) => {
   }
 });
 
+// ---------- settings (SPEC 14.1) ----------
+
+// The lists of the Settings window: the key, the title, the help line, and an example.
+const SET_LISTS = [
+  ["scan", "Repo folders", "Switchboard looks for git repos in these folders, 3 levels deep. Repos where you ran claude show too.", "~/code"],
+  ["spec_clones", "Spec clones", "Folders that the review agent reads first, such as a consensus-specs clone.", "~/code/consensus-specs"],
+  ["web_domains", "Sites the review agent can fetch", "Host names only, such as github.com. Other sites are refused.", "github.com"],
+];
+const SET = { draft: null, missing: new Set(), config: "" };
+
+async function openSettings() {
+  const s = await invoke("settings").catch((e) => { toast(e); return null; });
+  if (!s) return;
+  SET.draft = { scan: [...s.scan], spec_clones: [...s.spec_clones], web_domains: [...s.web_domains], web_search: !!s.web_search };
+  SET.missing = new Set(s.missing || []);
+  SET.config = s.config || "";
+  $("#serr").textContent = "";
+  drawSettings();
+  $("#settings").hidden = false;
+  $("#sbody input")?.focus();
+}
+
+function closeSettings() {
+  $("#settings").hidden = true;
+  SET.draft = null;
+}
+
+function drawSettings() {
+  const d = SET.draft;
+  const group = ([key, title, help, eg]) => `<div class="sgroup"><h4>${esc(title)}</h4><p>${esc(help)}</p>${d[key].map((v, i) =>
+    `<div class="srow"><input data-list="${key}" data-i="${i}" value="${esc(v)}" placeholder="${esc(eg)}" spellcheck="false" autocomplete="off" aria-label="${esc(title)} ${i + 1}">${SET.missing.has(v) ? '<span class="miss">not found</span>' : ""}<button class="btn small" type="button" data-del="${key}" data-i="${i}" aria-label="Remove">×</button></div>`).join("")}<button class="btn small" type="button" data-add="${key}">Add</button></div>`;
+  $("#sbody").innerHTML = SET_LISTS.map(group).join("") +
+    `<label class="scheck"><input type="checkbox" id="swebsearch"${d.web_search ? " checked" : ""}> Let the review agent search the web</label>` +
+    `<div class="sfile">Saved in ${esc(SET.config)}. A change works at once, with no restart.</div>`;
+}
+
+$("#gear").addEventListener("click", openSettings);
+$("#scancel").addEventListener("click", closeSettings);
+$("#settings").addEventListener("click", (e) => { if (e.target === $("#settings")) closeSettings(); });
+$("#settings").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); closeSettings(); } });
+$("#sbody").addEventListener("input", (e) => {
+  const t = e.target;
+  if (t.dataset.list) SET.draft[t.dataset.list][+t.dataset.i] = t.value;
+  else if (t.id === "swebsearch") SET.draft.web_search = t.checked;
+});
+$("#sbody").addEventListener("change", (e) => { if (e.target.id === "swebsearch") SET.draft.web_search = e.target.checked; });
+$("#sbody").addEventListener("click", (e) => {
+  const add = e.target.closest("[data-add]"), del = e.target.closest("[data-del]");
+  if (add) {
+    SET.draft[add.dataset.add].push("");
+    drawSettings();
+    const rows = document.querySelectorAll(`#sbody input[data-list="${add.dataset.add}"]`);
+    rows[rows.length - 1]?.focus();
+  } else if (del) {
+    SET.draft[del.dataset.del].splice(+del.dataset.i, 1);
+    drawSettings();
+  }
+});
+$("#ssave").addEventListener("click", async () => {
+  if (!SET.draft) return;
+  $("#serr").textContent = "";
+  try {
+    const s = await invoke("settings_save", { set: SET.draft });
+    // The leader comes from the config of this computer (SPEC 29.1): keep it.
+    S.settings = { ...S.settings, ...s, leader: S.settings?.leader ?? s.leader };
+    closeSettings();
+    const missing = s.missing || [];
+    toast(missing.length ? `Saved. Not found: ${missing.join(", ")}` : "Saved.");
+    // The repo list follows the new folders at once.
+    loadRepos();
+  } catch (e) {
+    $("#serr").textContent = String(e);
+  }
+});
+
 // ---------- data ----------
 
 async function refreshPanes() {
@@ -906,6 +981,9 @@ let reposAt = 0;
 function refreshRepos() {
   if (Date.now() - reposAt < 5000) return;
   reposAt = Date.now();
+  loadRepos();
+}
+function loadRepos() {
   invoke("repos").then((r) => {
     // Only a new or a gone repo redraws: a redraw resets the launcher's choice.
     const paths = (list) => list.map((x) => x.path).join("\n");

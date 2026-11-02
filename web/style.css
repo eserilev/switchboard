@@ -196,6 +196,19 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .layouts:empty { display: none; }
 .chip { font: 500 11px/1 var(--mono); padding: 6px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--bg); cursor: pointer; }
 .chip:hover { color: var(--fg); }
+.sbox h3 { margin: 0; padding: 14px 16px; font: 700 15px/1 var(--display); letter-spacing: .04em; text-transform: uppercase; }
+.sbox .lrows { max-height: 70vh; overflow: auto; gap: 18px; }
+.sgroup { display: grid; gap: 6px; }
+.sgroup h4 { margin: 0; font: 600 13px/1.2 var(--body); }
+.sgroup p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.srow { display: flex; gap: 6px; align-items: center; }
+.srow input { flex: 1; }
+.srow .miss { color: var(--limit); font-size: 11px; white-space: nowrap; }
+.srow .btn, .sgroup > .btn { padding: 5px 9px; }
+.sgroup > .btn { justify-self: start; }
+.scheck { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+.scheck input { width: auto; }
+.sfile { color: var(--muted); font: 11px/1.4 var(--mono); word-break: break-all; }
 .lfoot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--panel-2); }
 .lerr { margin-right: auto; color: var(--error); font-size: 12px; }
 
