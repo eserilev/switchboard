@@ -187,6 +187,7 @@ A live pane gets every key you type. Esc in Claude Code stops the agent. So app 
 | Leader, `r` | Review tab. |
 | Leader, `b` | Board tab. |
 | Leader, `t` | Tasks tab (27). |
+| Leader, `w` | Work environment tab (30). |
 | Leader, `a` | Switch the active connection. |
 | Leader, `<` / `>` | Move the focused tile one place left or right. |
 | Review: `j` / `k` | Next or previous step. |
@@ -313,7 +314,7 @@ Opening a layout starts all its panes. Panes that already run are not started ag
 | Guide + diff | The current step: what the code does, what to check, pins, context links. Under it, the diff at the PR head: only the parts of each file that the step's ranges name, with 6 rows of context. A bar counts the other changed lines of the file, links the steps that cover them, and opens the whole file in the Files view. Each gap in a diff has buttons that show 20 hidden lines above or below, or the whole gap. The hidden lines come from `all_rows`: the proved numbering with no cut. |
 | Claude | A Claude Code pane for questions (11.5). Below it, the drafts. |
 
-The tab bar has three tabs: Board, Tasks, and Code reviews. More than one review can be open. A click on Code reviews opens a menu of the open reviews (number, round, title, and the state while it works) and New review…, which opens the launcher. The tab shows the review on screen, the count of open reviews when none shows, and a dot while any review works. Leader, `r` steps through the open reviews.
+The tab bar has four tabs: Board, Tasks, Work environment (30), and Code reviews. More than one review can be open. A click on Code reviews opens a menu of the open reviews (number, round, title, and the state while it works) and New review…, which opens the launcher. The tab shows the review on screen, the count of open reviews when none shows, and a dot while any review works. Leader, `r` steps through the open reviews.
 The review header shows the state of the guide session: fetching, writing, updating, ready or error.
 
 ### 11.2 Guide session
@@ -1501,3 +1502,19 @@ A review by a second agent found these. All are fixed:
 - Without `loginctl enable-linger` on the server, logind can remove the runtime folder when your last ssh session ends. Then `window.sock` goes, and the next `sb attach` fails. Turn linger on.
 - Any process of your user on the server can run `sb attach` and answer a permit. The tmux socket gives the same power already.
 - A server can send one very long line. The window reads it all.
+
+## 30. Work environment
+
+Status: built.
+
+A tab for working in one repo yourself: nvim takes the left half, Claude Code the top right, and a terminal the bottom right.
+
+- **The tab.** Work environment, between Tasks and Code reviews. Leader, `w` opens it.
+- **The repo.** A picker lists the repo list (9.1). The choice stays for the next start (browser storage of the window; a convenience only). A repo with a Claude agent that runs in its main checkout opens that agent at once. A repo with none shows **Start Claude**, which opens Claude in the main checkout, as the launcher does. Another repo in the picker takes the live pane off the one before.
+- **The layout.** The tab hosts the live pane, as a review tab does (11.5), but with its parts (28): nvim and the shell of the worktree. A `work` class turns the parts around: nvim on the left at half the width, Claude on top of the right half, and the terminal under it at half the height. The dividers, zoom, stop, ×, and Leader `e`, `s`, `o`, `z` work as on the board. Leader `h` and `l` turn around with the layout. A narrow window shows one part at a time, as on the board. Without nvim on PATH, Claude and the terminal share the tab.
+- **The same panes.** The agent, nvim and the shell are the panes of the board: the agent keeps its tile, and the parts have none, as in 28. Sizes are kept for each worktree, shared with the board.
+- **Other tabs.** Another tab takes the live pane back to the board, the right way round. Back in this tab, the repo's agent opens again with its parts.
+- **Not yet.** A worktree other than the main checkout, and more than one work tab.
+
+Tests: window checks for the tab, the picker, Start Claude (the request), an agent that runs there (no new pane), the layout (nvim on the left half, Claude above the terminal on the right), nvim and the shell in the repo, and the trip to the board and back.
+

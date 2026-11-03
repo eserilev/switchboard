@@ -112,13 +112,15 @@ function setTab(tab, quiet) {
   S.tab = tab;
   $("#view-board").hidden = tab !== "board";
   $("#view-tasks").hidden = tab !== "tasks";
-  $("#view-review").hidden = tab === "board" || tab === "tasks";
+  $("#view-work").hidden = tab !== "work";
+  $("#view-review").hidden = tab === "board" || tab === "tasks" || tab === "work";
   drawTabs();
   if (tab === "board") {
     const back = S.boardLive;
     if (!quiet && back && !S.live && paneById(back)) expand(back);
     else requestAnimationFrame(fitLive);
   } else if (tab === "tasks") window.SBTasks?.draw();
+  else if (tab === "work") window.SBWork?.draw();
   else window.SBReview?.draw(tab);
 }
 
@@ -136,6 +138,7 @@ function drawTabs() {
   $("#tabs").innerHTML = [
     `<button class="tab" role="tab" data-tab="board" aria-selected="${S.tab === "board"}">Board</button>`,
     `<button class="tab" role="tab" data-tab="tasks" aria-selected="${S.tab === "tasks"}">Tasks</button>`,
+    `<button class="tab" role="tab" data-tab="work" aria-selected="${S.tab === "work"}" title="nvim, Claude and a terminal in one repo (Leader w)">Work environment</button>`,
     `<span class="revtab"><button class="tab" role="tab" id="revtab" aria-haspopup="menu" aria-expanded="${open}" aria-selected="${!!cur}">Code reviews${cur ? `<b class="cur">${reviewLabel(cur)}</b>` : list.length ? `<b class="count">${list.length}</b>` : ""}${list.some(reviewBusy) ? '<i class="busy"></i>' : ""}<i class="caret"></i></button>` +
       `<div class="menu revmenu" id="revmenu" role="menu"${open ? "" : " hidden"}>${items.join("")}</div></span>`,
   ].join("");
@@ -485,6 +488,7 @@ const stripNow = () => $("#board").getBoundingClientRect().height;
 // Puts the live section back on the board.
 function parkLive() {
   const live = $("#live");
+  live.classList.remove("work");
   if (live.parentElement !== $("#view-board")) $("#view-board").prepend(live);
 }
 
@@ -499,6 +503,8 @@ async function expand(id, host) {
     window.SBParts?.reset();
     S.termHost = S.tab;
     if ($("#live").parentElement !== host) host.appendChild($("#live"));
+    // The work tab turns the parts around: nvim on the left (SPEC 30).
+    $("#live").classList.toggle("work", S.tab === "work");
   } else {
     parkLive();
     S.termHost = null;
@@ -525,7 +531,7 @@ async function expand(id, host) {
     held.splice(0).forEach((b) => term.write(b));
     drawn = true;
     term.focus();
-    if (!host) window.SBParts?.afterExpand(id);
+    if (!host || S.termHost === "work") window.SBParts?.afterExpand(id);
     log("info", "expanded", id, "cols", term.cols, "rows", term.rows, "focus in terminal:", document.activeElement === term.textarea);
   } catch (e) {
     if (seq !== expandSeq) return;
@@ -543,7 +549,8 @@ function collapse(keep) {
   $("#live").hidden = true;
   invoke("pane_collapse").catch(() => {});
   drawBoardNow();
-  if (S.termHost) window.SBReview?.termWait(S.termHost);
+  if (S.termHost === "work") window.SBWork?.collapsed();
+  else if (S.termHost) window.SBReview?.termWait(S.termHost);
   if (was) $(`.pane[data-id="${CSS.escape(was)}"]`)?.focus();
 }
 
@@ -671,6 +678,7 @@ window.addEventListener("keydown", (e) => {
     case "n": return openLauncher();
     case "b": return setTab("board");
     case "t": return setTab("tasks");
+    case "w": return setTab("work");
     case "r": { const ids = [...S.reviews.keys()]; return ids.length && setTab(ids[(ids.indexOf(S.tab) + 1) % ids.length]); }
     case "a": return cycleConnection();
     case "<": return nudgeTile(-1);
@@ -1010,6 +1018,7 @@ listen("panes", (e) => {
   window.SBParts?.panes();
   window.SBReview?.panes?.();
   window.SBTasks?.panes();
+  window.SBWork?.panes();
 });
 listen("pane", (e) => {
   upsert(e.payload);
@@ -1017,6 +1026,7 @@ listen("pane", (e) => {
   window.SBParts?.panes();
   window.SBReview?.panes?.();
   window.SBTasks?.panes();
+  window.SBWork?.panes();
 });
 // The first message of Start agent did not go in: it goes to the clipboard.
 // A click on Copy is a user gesture, so the copy works in every webview.

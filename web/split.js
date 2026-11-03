@@ -36,6 +36,8 @@
   // Keys: arrows 16 px, Shift 64 px; Home and End the smallest and largest size;
   // Enter the smallest size and back. A double-click resets.
   function bind(el, { axis, dir, size, apply: set, limits, reset, done, controls }) {
+    // `dir` can be a function: a handle whose side changes with the layout.
+    const d = () => (typeof dir === "function" ? dir() : dir);
     el.tabIndex = 0;
     el.setAttribute("role", "separator");
     el.setAttribute("aria-orientation", axis === "x" ? "vertical" : "horizontal");
@@ -58,7 +60,7 @@
       const start = pos(e);
       const from = size();
       document.body.classList.add("is-sizing", axis === "x" ? "size-x" : "size-y");
-      const move = (m) => apply(from + dir * (pos(m) - start));
+      const move = (m) => apply(from + d() * (pos(m) - start));
       const up = () => {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
@@ -74,7 +76,7 @@
     el.addEventListener("keydown", (e) => {
       const keys = axis === "x" ? { ArrowLeft: -1, ArrowRight: 1 } : { ArrowUp: -1, ArrowDown: 1 };
       const [lo, hi] = limits();
-      if (e.key in keys) apply(size() + dir * keys[e.key] * (e.shiftKey ? 64 : 16));
+      if (e.key in keys) apply(size() + d() * keys[e.key] * (e.shiftKey ? 64 : 16));
       else if (e.key === "Home") apply(lo);
       else if (e.key === "End") apply(hi);
       else if (e.key === "Enter") {

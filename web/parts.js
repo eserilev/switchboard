@@ -8,6 +8,10 @@
   const KINDS = ["nvim", "term"];
   const PANE_KIND = { nvim: "nvim", term: "shell" };
   const KEY = { nvim: "e", term: "s" };
+  // Parts show on the board, and in the Work environment tab (SPEC 30); a review
+  // tab's live pane has none.
+  const parted = () => !S.termHost || S.termHost === "work";
+  const work = () => S.termHost === "work";
 
   // The live pane's layout. `shown` is what the window shows; `zoom` is the one part
   // that fills the pane, or null.
@@ -171,8 +175,9 @@
   async function show(kind, agentId) {
     const a = paneById(agentId);
     if (!a || a.kind !== "claude" || (kind === "nvim" && !S.settings.nvim)) return;
-    if (S.live !== agentId || S.termHost) await window.SB.expand(agentId);
-    if (S.live !== agentId || S.termHost) return;
+    // The work tab shows its own agent; it opens that pane itself first.
+    if ((S.live !== agentId || !parted()) && !work()) await window.SB.expand(agentId);
+    if (S.live !== agentId || !parted()) return;
     if (P.shown[kind]) return focusPart(kind);
     let id;
     try {
@@ -193,7 +198,7 @@
   }
 
   function toggle(kind, agentId) {
-    if (S.live === agentId && !S.termHost && P.shown[kind]) hide(kind, false);
+    if (S.live === agentId && parted() && P.shown[kind]) hide(kind, false);
     else show(kind, agentId);
   }
 
@@ -223,6 +228,8 @@
   // Leader h and l: the part on the left or the right.
   let lastLeft = "agent";
   function side(d) {
+    // In the work tab nvim is on the left, so the keys turn around.
+    if (work()) d = -d;
     if (d > 0 && P.focus !== "nvim") { lastLeft = P.focus; focusPart("nvim"); }
     else if (d < 0 && P.focus === "nvim") focusPart(visible(lastLeft) ? lastLeft : visible("agent") ? "agent" : "term");
   }
@@ -259,7 +266,7 @@
   function afterExpand(id) {
     reset();
     const p = paneById(id);
-    if (!p || p.kind !== "claude" || S.termHost) return;
+    if (!p || p.kind !== "claude" || !parted()) return;
     P.tree = p.tree;
     sizes();
     const m = saved(p.tree);
@@ -312,7 +319,7 @@
 
   // The nvim and term switches in the live title.
   function toggles(p) {
-    if (p.kind !== "claude" || S.termHost) return null;
+    if (p.kind !== "claude" || !parted()) return null;
     const b = (k) => `<button class="tool ptog" data-ptoggle="${k}" aria-pressed="${P.shown[k]}" title="Show or hide ${k === "nvim" ? "nvim" : "the terminal"} (Leader ${KEY[k]})">${k}</button>`;
     return `<span class="ptoggles" role="group" aria-label="Parts of this pane">${S.settings.nvim ? b("nvim") : ""}${b("term")}</span>`;
   }
@@ -333,7 +340,8 @@
 
   // The divider sizes, for each worktree. A double-click resets them.
   SBSplit.bind($("#gnvim"), {
-    axis: "x", dir: -1, controls: "pnvim",
+    // nvim is on the right on the board and on the left in the work tab.
+    axis: "x", dir: () => (work() ? 1 : -1), controls: "pnvim",
     size: () => $("#pnvim").getBoundingClientRect().width,
     limits: () => [240, Math.max(240, $("#lparts").getBoundingClientRect().width - 240)],
     apply: (v) => {
