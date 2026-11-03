@@ -470,7 +470,7 @@ tr.noted-nit td.ln::after { color: var(--muted); }
 /* ---------- tasks (SPEC 27) ---------- */
 /* The Work environment tab (SPEC 30): the live pane, turned around. nvim takes the
    left half; Claude and the terminal share the right half. */
-.work { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+.workenv { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
 .wbar { display: flex; align-items: center; gap: 10px; padding: 10px 14px 0; flex-wrap: wrap; }
 .wpick { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .wpick select { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: 13px/1.4 var(--mono); padding: 6px 8px; max-width: 360px; }

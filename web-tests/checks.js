@@ -88,8 +88,12 @@
   {
     await wait(150);
     const t = window.SB.term;
-    const box = $("#term").getBoundingClientRect().height, part = $("#pagent").getBoundingClientRect().height;
     const cell = t._core._renderService.dimensions.css.cell.height;
+    // The tiles above went: the pane grows, and the fit follows 60 ms after the
+    // resize observer. Wait for it, up to a second, as for the review terminal.
+    const fits = () => { const h = $("#term").getBoundingClientRect().height; return t.rows * cell <= h - 6 && (t.rows + 1) * cell > h - 6; };
+    for (let i = 0; i < 20 && !fits(); i++) await wait(50);
+    const box = $("#term").getBoundingClientRect().height, part = $("#pagent").getBoundingClientRect().height;
     const sent = window.__calls.filter((c) => c[0] === "pane_resize").at(-1)?.[1];
     check("the live terminal fills the pane in height", box === part && t.rows * cell <= box - 6 && (t.rows + 1) * cell > box - 6 && sent?.rows === t.rows, JSON.stringify({ box, part, rows: t.rows, cell, sent }));
     // At every height the last row shows: the fit takes off the 6 px of padding.
