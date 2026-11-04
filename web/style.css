@@ -477,6 +477,7 @@ tr.noted-nit td.ln::after { color: var(--muted); }
 .wnote { color: var(--muted); font-size: 12px; }
 .whost { min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); padding-bottom: 12px; }
 .wempty { margin: 12px; display: grid; place-items: center; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 13px; }
+.wended { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; }
 .live.work .lparts { flex-direction: row-reverse; }
 .live.work #pterm { flex-basis: var(--term-h, 50%); }
 .tasks { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; overflow: hidden; }

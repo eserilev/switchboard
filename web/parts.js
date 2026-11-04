@@ -2,7 +2,7 @@
 // worktree. While an agent runs in a worktree, its nvim and its shell have no tile.
 // app.js calls in here through `SBParts`.
 (() => {
-  const { S, invoke, call, esc, paneById, toast, bytes } = window.SB;
+  const { S, invoke, call, esc, setHTML, paneById, toast, bytes } = window.SB;
   const $ = (s) => document.querySelector(s);
   const NARROW = 1100;
   const KINDS = ["nvim", "term"];
@@ -115,9 +115,11 @@
     const rel = Date.now() - P.reloaded < 6000 ? `<span class="prel">changed on disk, reloaded</span>` : "";
     const sh = paneById(T.term.id);
     const busy = sh?.busy ? `<span class="pmod" title="A command runs">▸ busy</span>` : "";
+    // Only a change is written: a pane event comes about once a second, and a new
+    // button under the mouse (Stop, Cancel) drops the click.
     const set = (part, html) => {
       const h = $(`#p${part} .parthead`);
-      h.innerHTML = html;
+      setHTML(h, html);
       h.classList.toggle("on", P.focus === part);
     };
     set("agent", head("agent", "claude", ""));
