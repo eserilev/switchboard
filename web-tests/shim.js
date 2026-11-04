@@ -161,6 +161,8 @@ window.__TAURI__ = {
       window.__calls.push([cmd, args || {}]);
       // A check can make the next command fail, as a down link does.
       if (window.__failNext) { const e = window.__failNext; window.__failNext = null; throw e; }
+      // A check can hold a command until it lets go, to act while it is on its way.
+      if (window.__hold && window.__hold[cmd]) await window.__hold[cmd](args);
       const d = window.__data;
       switch (cmd) {
         case "panes": return structuredClone(d.panes);

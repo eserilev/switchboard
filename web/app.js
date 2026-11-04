@@ -116,6 +116,8 @@ function setTab(tab, quiet) {
   $("#view-review").hidden = tab === "board" || tab === "tasks" || tab === "work";
   drawTabs();
   if (tab === "board") {
+    // The pane of the tab before (work, Ask) has no tile: it is no focus here.
+    if (S.focus && !tiles().some((p) => p.id === S.focus)) S.focus = null;
     const back = S.boardLive;
     if (!quiet && back && !S.live && paneById(back)) expand(back);
     else requestAnimationFrame(fitLive);
@@ -227,17 +229,35 @@ function meta(p) {
   return parts.join(" · ");
 }
 
+// A tile is built once and then changed in place (see drawBoardNow).
 function tile(p) {
   const nvimBtn = p.kind === "claude" && window.SBParts ? SBParts.chips(p) : p.kind !== "nvim" && S.settings.nvim ? `<button class="tool" data-nvim>nvim</button>` : "";
   const state = p.lamp === "none" ? p.kind : LABEL[p.lamp] || p.lamp;
   const reviewBtn = p.kind === "claude" ? `<button class="tool" data-lreview title="Review the commits that are not pushed">review</button>` : "";
   const taskBtn = p.kind !== "nvim" ? `<button class="tool" data-ptaskmenu title="Link this pane to a task">task</button>` : "";
-  const cls = ["pane", p.unseen && "unseen", S.focus === p.id && "focused", p.id === S.live && "is-live"].filter(Boolean).join(" ");
-  return `<div class="${cls}" data-id="${esc(p.id)}" data-lamp="${esc(p.lamp)}" tabindex="0">
-    <div class="ptitle"><span class="name" title="${esc(paneName(p))}">${esc(paneName(p))}</span><span class="state">${esc(state)}</span><button class="tool x" data-close aria-label="Close">×</button></div>
-    <div class="psum">${taskLine(p)}<div class="pmeta"><span class="meta">${esc(meta(p))}</span><span class="ptools">${taskBtn}${reviewBtn}${nvimBtn}</span></div><span class="text">${esc(p.summary || "")}</span>${actions(p)}</div>
-    <pre class="term-tail">${esc(p.tail.map(strip).join("\n"))}</pre>
-  </div>`;
+  return {
+    cls: ["pane", p.unseen && "unseen", S.focus === p.id && "focused", p.id === S.live && "is-live"].filter(Boolean).join(" "),
+    title: `<span class="name" title="${esc(paneName(p))}">${esc(paneName(p))}</span><span class="state">${esc(state)}</span><button class="tool x" data-close aria-label="Close">×</button>`,
+    // The buttons of the info line. The meta and the summary text change more often:
+    // they change as text, so a button under the mouse stays.
+    tools: `${taskLine(p)}<div class="pmeta"><span class="meta"></span><span class="ptools">${taskBtn}${reviewBtn}${nvimBtn}</span></div><span class="text"></span>${actions(p)}`,
+    meta: meta(p),
+    text: p.summary || "",
+    tail: p.tail.map(strip).join("\n"),
+  };
+}
+
+// Changes a tile element to show `t`, the parts of `tile(p)`.
+function fillTile(el, p, t) {
+  if (el.className !== t.cls) el.className = t.cls;
+  if (el.dataset.lamp !== p.lamp) el.dataset.lamp = p.lamp;
+  const [head, sum, tail] = el.children;
+  setHTML(head, t.title);
+  setHTML(sum, t.tools);
+  const text = (sel, v) => { const n = sum.querySelector(sel); if (n && n.textContent !== v) n.textContent = v; };
+  text(".pmeta .meta", t.meta);
+  text(":scope > .text", t.text);
+  if (tail.textContent !== t.tail) tail.textContent = t.tail;
 }
 
 // The task of a pane, under its title (SPEC 27.6). A click opens the task.
@@ -261,7 +281,24 @@ function drawBoardNow() {
   // A redraw in the middle of a drag throws away the tile under the pointer.
   if (drag?.on) { drawLater = true; return; }
   // The open pane keeps its tile, so the other tiles do not move (SPEC 6).
-  $("#board").innerHTML = tiles().map(tile).join("");
+  // Each tile element stays, and only what changed is written: a pane event comes
+  // about once a second, and a new element under the mouse drops the click.
+  const board = $("#board");
+  const list = tiles();
+  const old = new Map([...board.children].map((el) => [el.dataset.id, el]));
+  const want = new Set(list.map((p) => p.id));
+  for (const [id, el] of old) if (!want.has(id)) el.remove();
+  list.forEach((p, i) => {
+    let el = old.get(p.id);
+    if (!el) {
+      el = document.createElement("div");
+      el.dataset.id = p.id;
+      el.tabIndex = 0;
+      el.innerHTML = '<div class="ptitle"></div><div class="psum"></div><pre class="term-tail"></pre>';
+    }
+    fillTile(el, p, tile(p));
+    if (board.children[i] !== el) board.insertBefore(el, board.children[i] || null);
+  });
   $("#view-board").classList.toggle("has-live", !!S.live);
   $("#bgutter").hidden = !S.live || S.termHost !== null;
   drawTally();
@@ -323,6 +360,7 @@ window.addEventListener("pointerup", () => {
   drag = null;
   if (!d.on) return;
   document.body.classList.remove("is-dragging");
+  $("#board .dragging")?.classList.remove("dragging");
   clearMarks();
   justDragged = true;
   setTimeout(() => (justDragged = false), 0);
@@ -390,6 +428,8 @@ document.addEventListener("dblclick", (e) => {
     if (!renaming) return;
     renaming = false;
     name.contentEditable = "false";
+    // The name was edited by hand: the next draw writes the title again.
+    $("#livetitle")._html = null;
     if (save) call("pane_rename", { id, title: name.textContent.trim() || null });
     else drawBoard();
   };
@@ -594,9 +634,9 @@ function drawLiveTitle() {
   const state = p.lamp === "none" ? p.kind : LABEL[p.lamp] || p.lamp;
   const nvimBtn = window.SBParts?.toggles(p) ?? (p.kind !== "nvim" && S.settings.nvim ? `<button class="tool" data-nvim>nvim</button>` : "");
   const reviewBtn = p.kind === "claude" && !S.termHost ? `<button class="tool" data-lreview title="Review the commits that are not pushed">review</button>` : "";
-  $("#livetitle").innerHTML = `<span class="name">${esc(paneName(p))}</span><span class="state" style="color:var(--muted)">${esc(state)}</span>
+  setHTML($("#livetitle"), `<span class="name">${esc(paneName(p))}</span><span class="state" style="color:var(--muted)">${esc(state)}</span>
     ${taskLine(p)}<span class="psum meta" style="border:0;padding:0;font:500 11px/1 var(--mono);color:var(--muted)">${esc(meta(p))}</span>${actions(p).replace('class="tact"', 'class="tact" style="margin:0"')}
-    ${reviewBtn}${nvimBtn}<button class="tool" data-collapse aria-label="Collapse">⤡</button>`;
+    ${reviewBtn}${nvimBtn}<button class="tool" data-collapse aria-label="Collapse">⤡</button>`);
 }
 $("#livetitle").addEventListener("click", (e) => {
   const b = e.target.closest("button");
@@ -635,8 +675,10 @@ async function openNvim(tree, file, line) {
   expand(id);
 }
 
+// The most urgent state first. A state that is not urgent (an ended pane) comes last.
+const urgency = (p) => { const i = URGENT.indexOf(p.lamp); return i < 0 ? URGENT.length : i; };
 function nextUnseen(dir) {
-  const list = S.panes.filter((p) => p.unseen && p.id !== S.live).sort((a, b) => URGENT.indexOf(a.lamp) - URGENT.indexOf(b.lamp));
+  const list = S.panes.filter((p) => p.unseen && p.id !== S.live).sort((a, b) => urgency(a) - urgency(b));
   if (!list.length) return;
   const p = dir > 0 ? list[0] : list[list.length - 1];
   // A review's Claude pane has no tile: go to its review tab.
@@ -686,7 +728,10 @@ window.addEventListener("keydown", (e) => {
   if (!fresh) return;
   e.preventDefault();
   e.stopPropagation();
-  const focused = document.activeElement?.closest?.(".pane")?.dataset.id || S.focus || S.live;
+  // S.focus counts only for a tile or the pane that shows: a work or Ask pane stays
+  // in S.focus after its tab is gone.
+  const own = S.focus && (S.focus === S.live || tiles().some((p) => p.id === S.focus)) ? S.focus : null;
+  const focused = document.activeElement?.closest?.(".pane")?.dataset.id || own || S.live;
   switch (e.key) {
     case "x":
       if (S.live && (!focused || focused === S.live) && window.SBParts?.unzoom()) return;
@@ -1102,7 +1147,7 @@ function copyText(text) {
   return ok;
 }
 
-window.SB = { S, LINK, invoke, call, listen, esc, toast, setTab, WORK_TITLE, workOf, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, openLauncher, paneName, copyText, LABEL, term, isLeader, bytes, $ };
+window.SB = { S, LINK, invoke, call, listen, esc, setHTML, toast, setTab, WORK_TITLE, workOf, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, openLauncher, paneName, copyText, LABEL, term, isLeader, bytes, $ };
 
 (async function start() {
   try {

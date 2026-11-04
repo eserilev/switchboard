@@ -1770,6 +1770,142 @@
     await wait(100);
     window.SB.collapse();
   }
+  {
+    // Redraws change things in place: a pane event comes about once a second, and a
+    // new element under the mouse drops the click.
+    const S = window.SB.S;
+    const W = window.SBWork.W;
+    const now = (id) => S.panes.find((p) => p.id === id);
+    const upto = async (ok) => { for (let i = 0; i < 40 && !ok(); i++) await wait(50); };
+    const leaderKey = (k) => { key(" ", { ctrl: true, code: "Space" }); key(k); };
+    window.SB.setTab("board");
+    await window.SB.expand("pb1");
+    await wait(100);
+    const t = $('#board .pane[data-id="p2"]');
+    const x = t.querySelector("[data-close]");
+    const col = $("#livetitle [data-collapse]");
+    window.__emit("pane", { ...now("p2"), tail: ["a new tail line"], summary: "a new summary", rss: 3 * 1073741824 });
+    window.__emit("pane", { ...now("pb1"), tail: ["more"], summary: "pb1 works" });
+    await wait(100);
+    check("a pane event keeps the tile and its buttons, and shows the change", $('#board .pane[data-id="p2"]') === t && x.isConnected && t.textContent.includes("a new tail line") && t.textContent.includes("a new summary") && t.textContent.includes("ra 3.0 GB"), t.textContent);
+    check("a pane event keeps the buttons of the live title", col.isConnected && $("#livetitle [data-collapse]") === col);
+    {
+      const list = structuredClone(S.panes);
+      list.splice(list.findIndex((p) => p.id === "p1") + 1, 0, { ...list.find((p) => p.id === "p1"), id: "px", tree: "/c/px", title: "px", unseen: false });
+      window.__emit("panes", list);
+      await wait(100);
+      const ids = $$("#board .pane").map((p) => p.dataset.id);
+      check("a new tile goes in its place, and the others stay", ids[ids.indexOf("p1") + 1] === "px" && $('#board .pane[data-id="p2"]') === t, ids.join());
+      window.__emit("panes", list.filter((p) => p.id !== "px"));
+      await wait(100);
+      check("a gone tile goes", !$('#board .pane[data-id="px"]') && $('#board .pane[data-id="p2"]') === t);
+    }
+
+    // The work tab: its bar and the part heads stay too.
+    $('#tabs [data-tab="work"]').click();
+    await upto(() => S.live === "p9" && S.termHost === "work" && window.SBParts.P.shown.term);
+    await wait(100);
+    const sel = $("#wrepo"), go = $("#wgo"), stop = $("#pterm .parthead [data-stop]");
+    window.__emit("panes", structuredClone(S.panes));
+    window.__emit("pane", { ...now("p9"), tail: ["busy"] });
+    await wait(100);
+    check("a pane event keeps the repo picker, the button and the part heads", $("#wrepo") === sel && $("#wgo") === go && go.hidden && !!stop && stop.isConnected, $("#wbar").innerHTML);
+    {
+      sel.focus();
+      const first = sel.options[1];
+      const repos = S.repos;
+      S.repos = [...repos, { name: "extra", path: "/c/extra", branch: "main", dirty: false, worktrees: [], last_used: 0, rust: false }];
+      window.SBWork.panes();
+      check("a repo picker that has the focus keeps its list", sel.options[1] === first && sel.options.length === repos.length + 1, sel.options.length);
+      sel.blur();
+      window.SBWork.panes();
+      check("the picker takes the new list after it lets go", sel.options.length === repos.length + 2 && sel.value === W.repo, sel.options.length + " " + sel.value);
+      S.repos = repos;
+      window.SBWork.panes();
+    }
+
+    // An open stops when you pick another repo or leave the tab while it runs.
+    const tw = "/c/timeways";
+    try { localStorage.removeItem(`sb.parts.work.${tw}`); } catch (_) { /* no storage */ }
+    window.__data.panes.push({ ...window.__data.panes[0], id: "pw2", repo: "timeways", tree: tw, branch: "master", title: window.SB.WORK_TITLE, lamp: "turn", unseen: false, session: "s2" });
+    window.__emit("panes", structuredClone(window.__data.panes));
+    await wait(100);
+    const pick = (v) => { sel.value = v; sel.dispatchEvent(new Event("change", { bubbles: true })); };
+    let release = null;
+    window.__hold = { nvim_open: () => new Promise((r) => (release = r)) };
+    pick(tw);
+    await upto(() => release);
+    check("the open of the new repo waits at nvim", !!release && S.live === "pw2", S.live);
+    pick("/c/lighthouse");
+    window.__hold = null;
+    release?.();
+    await upto(() => S.live === "p9" && S.termHost === "work" && window.SBParts.P.shown.term);
+    check("a repo picked while another opens wins: its agent opens, and the old open stops", S.tab === "work" && S.live === "p9" && W.repo === "/c/lighthouse" && !called("shell_open").some((c) => c[1].tree === tw), JSON.stringify({ live: S.live, repo: W.repo }));
+    release = null;
+    window.__hold = { nvim_open: () => new Promise((r) => (release = r)) };
+    pick(tw);
+    await upto(() => release);
+    window.SB.setTab("board");
+    window.__hold = null;
+    release?.();
+    await wait(400);
+    check("leaving the tab while it opens stops the open: the board stays", S.tab === "board" && S.live === "pb1" && !called("shell_open").some((c) => c[1].tree === tw), JSON.stringify({ tab: S.tab, live: S.live }));
+
+    // The pane of the work tab is no focus on the board.
+    S.focus = "pw2";
+    window.SB.setTab("tasks");
+    window.SB.setTab("board");
+    check("the board drops a focus on the work tab's pane", S.focus !== "pw2", S.focus);
+    S.focus = "pw2";
+    leaderKey("s");
+    await wait(300);
+    check("Leader s acts on the board's pane, not on a work pane left in the focus", S.tab === "board" && S.live === "pb1", JSON.stringify({ tab: S.tab, live: S.live }));
+    if (window.SBParts.P.shown.term) { leaderKey("s"); await wait(100); }
+
+    // An ended agent of the tab: Leader j goes to an urgent pane first, then shows
+    // the ended one in its tab with Resume and Close, and does not come back to it.
+    for (const p of window.__data.panes) p.unseen = false;
+    const pw = window.__data.panes.find((p) => p.id === "pw2");
+    Object.assign(pw, { lamp: "ended", unseen: true });
+    const d1 = window.__data.panes.find((p) => p.id === "p1");
+    Object.assign(d1, { lamp: "turn", unseen: true });
+    window.__emit("panes", structuredClone(window.__data.panes));
+    await wait(100);
+    leaderKey("j");
+    await wait(300);
+    check("Leader j takes an urgent pane before an ended one", S.tab === "board" && called("pane_expand").at(-1)?.[1].id === "p1", JSON.stringify({ tab: S.tab, last: called("pane_expand").at(-1) }));
+    d1.unseen = false;
+    window.__emit("panes", structuredClone(window.__data.panes));
+    await wait(100);
+    leaderKey("j");
+    await upto(() => S.tab === "work" && $("#whost [data-wclose]"));
+    check("an ended agent of the tab shows there with Resume and Close", S.tab === "work" && W.repo === tw && !!$('#whost [data-wresume="pw2"]') && !!$('#whost [data-wclose="pw2"]'), $("#whost").innerHTML);
+    check("it is seen, so Leader j does not come back to it", called("pane_seen").some((c) => c[1].id === "pw2") && now("pw2")?.unseen === false);
+    pw.unseen = false;
+    const n = called("pane_expand").length;
+    leaderKey("j");
+    await wait(300);
+    check("a second Leader j has nothing to go to", called("pane_expand").length === n && S.tab === "work", JSON.stringify({ tab: S.tab, n: called("pane_expand").length - n }));
+    // The hub's answer to Resume: the pane runs again.
+    pw.lamp = "idle";
+    $('#whost [data-wresume="pw2"]').click();
+    await upto(() => S.live === "pw2" && S.termHost === "work");
+    check("Resume starts it again, and it opens in the tab", called("pane_resume").some((c) => c[1].id === "pw2") && S.live === "pw2" && S.termHost === "work", JSON.stringify({ live: S.live, host: S.termHost }));
+    await wait(200);
+    window.SB.setTab("board");
+    await wait(150);
+    pw.lamp = "ended";
+    window.__emit("panes", structuredClone(window.__data.panes));
+    window.SB.setTab("work");
+    await upto(() => $('#whost [data-wclose="pw2"]'));
+    window.__data.panes = window.__data.panes.filter((p) => p.id !== "pw2" && !(p.kind === "shell" && p.tree === tw));
+    $('#whost [data-wclose="pw2"]')?.click();
+    await upto(() => !$("#whost [data-wclose]"));
+    check("Close ends it, and the tab offers Start Claude", called("pane_close").some((c) => c[1].id === "pw2") && !now("pw2") && $("#wgo").textContent === "Start Claude" && !$("#wgo").hidden, $("#wbar").innerHTML + $("#whost").textContent);
+    window.SB.setTab("board");
+    await wait(100);
+    window.SB.collapse();
+  }
   check("no script errors", window.__errors.length === 0, window.__errors);
   const pre = document.createElement("pre");
   pre.id = "__results";
