@@ -71,7 +71,8 @@
   const hiddenCount = () => S.panes.filter((p) => isPart(p) && T.nvim.id !== p.id && T.term.id !== p.id).length;
 
   // The layout of each worktree, for the next open. A convenience of this window only.
-  const key = (tree) => `sb.parts.${tree}`;
+  // The work tab keeps its own, so it never changes the board's.
+  const key = (tree) => `sb.parts.${work() ? "work." : ""}${tree}`;
   const saved = (tree) => SBSplit.load(key(tree)) || {};
   const remember = (patch) => { if (P.tree) SBSplit.save(key(P.tree), { ...saved(P.tree), ...patch }); };
   const narrow = () => window.innerWidth < NARROW;

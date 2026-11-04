@@ -2,14 +2,15 @@
 // the top right and a terminal under it. It is the live pane with its parts, moved
 // into this tab and turned around. app.js calls in here through `SBWork`.
 (() => {
-  const { S, invoke, esc, paneById, toast } = window.SB;
+  const { S, invoke, esc, paneById, toast, WORK_TITLE, workOf } = window.SB;
   const $ = (s) => document.querySelector(s);
 
   // `repo`: the path you picked, kept for the next start. `pane`: its Claude pane.
   const W = { repo: null, pane: null, opening: false };
   try { W.repo = localStorage.getItem("sb.work.repo"); } catch (_) { /* no storage: start empty */ }
 
-  const agentIn = (path) => S.panes.find((p) => p.kind === "claude" && p.tree === path && p.lamp !== "ended");
+  // Only the tab's own agent: an agent of the board stays on the board.
+  const agentIn = (path) => S.panes.find((p) => workOf(p) && p.tree === path && p.lamp !== "ended");
   const shows = () => S.tab === "work" && S.termHost === "work" && !!S.live && S.live === W.pane;
 
   function drawBar() {
@@ -45,7 +46,7 @@
     try {
       let a = agentIn(W.repo);
       if (!a) {
-        const v = await invoke("pane_open", { req: { repo: W.repo, place: "main", branch: null, tree: null, run: "claude", title: null, task: null, first: null } });
+        const v = await invoke("pane_open", { req: { repo: W.repo, place: "main", branch: null, tree: null, run: "claude", title: WORK_TITLE, task: null, first: null } });
         await window.SB.refreshPanes();
         a = paneById(v.id);
       }
@@ -89,9 +90,22 @@
   });
   $("#wbar").addEventListener("click", (e) => { if (e.target.closest("#wgo")) open(); });
 
+  // Shows a work agent from elsewhere (a notice, the next pane that waits): its repo
+  // in this tab.
+  function go(p) {
+    if (W.repo !== p.tree) {
+      W.repo = p.tree;
+      try { localStorage.setItem("sb.work.repo", W.repo); } catch (_) { /* a convenience only */ }
+    }
+    W.pane = p.id;
+    if (S.tab === "work") draw();
+    else window.SB.setTab("work");
+  }
+
   window.SBWork = {
     W,
     draw,
+    go,
     // The live pane left this tab (a collapse, or its pane ended).
     collapsed: () => { if (S.tab === "work") { drawBar(); drawEmpty(); } },
     // The repo list or the panes changed: the bar names the right button.

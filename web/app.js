@@ -210,9 +210,14 @@ function nextConnection(current) {
 // its review tab, not on the board.
 const askOf = (p) => p.kind === "claude" && [...S.reviews.values()].find((r) => r.tree === p.tree && p.title === `Ask #${r.number}`);
 
+// The Claude pane of the Work environment tab (SPEC 30). It has no tile: the board
+// and the work tab never share an agent.
+const WORK_TITLE = "Work environment";
+const workOf = (p) => p.kind === "claude" && p.title === WORK_TITLE;
+
 // The tiles on the board. The nvim and shell of an agent are its parts (SPEC 28).
 // A part that is the live pane itself keeps its tile, as every live pane does.
-const tiles = () => S.panes.filter((p) => p.id === S.live || (!window.SBParts?.isPart(p) && !askOf(p)));
+const tiles = () => S.panes.filter((p) => p.id === S.live || (!window.SBParts?.isPart(p) && !askOf(p) && !workOf(p)));
 
 function meta(p) {
   const parts = [p.repo];
@@ -523,6 +528,8 @@ function parkLive() {
 async function expand(id, host) {
   log("info", "expand", id, host ? "in review" : "");
   if (!paneById(id)) return;
+  // A work tab agent shows in its own tab, never on the board.
+  if (!host && workOf(paneById(id))) return window.SBWork?.go(paneById(id));
   if (host) {
     // A host of a tab that no longer shows: do nothing.
     if (S.tab === "board" || !host.isConnected) return;
@@ -1095,7 +1102,7 @@ function copyText(text) {
   return ok;
 }
 
-window.SB = { S, LINK, invoke, call, listen, esc, toast, setTab, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, openLauncher, paneName, copyText, LABEL, term, isLeader, bytes, $ };
+window.SB = { S, LINK, invoke, call, listen, esc, toast, setTab, WORK_TITLE, workOf, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, openLauncher, paneName, copyText, LABEL, term, isLeader, bytes, $ };
 
 (async function start() {
   try {

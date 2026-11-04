@@ -1718,53 +1718,57 @@
   }
   {
     // The Work environment tab (SPEC 30): nvim on the left, Claude top right, the
-    // terminal under it, in the repo you pick.
+    // terminal under it, in the repo you pick. It never shares an agent with the board.
     const S = window.SB.S;
-    let agent = S.panes.find((p) => p.kind === "claude" && p.lamp !== "ended" && S.repos.some((r) => r.path === p.tree));
-    if (!agent) {
-      window.__data.panes.push({ ...window.__data.panes[0], id: "pw1", kind: "claude", tree: S.repos[0].path, lamp: "turn" });
-      window.__emit("panes", window.__data.panes);
-      await wait(100);
-      agent = S.panes.find((p) => p.id === "pw1");
-    }
-    const other = S.repos.find((r) => !S.panes.some((p) => p.kind === "claude" && p.tree === r.path && p.lamp !== "ended"));
+    const repo = S.repos[0].path;
+    const base = window.__data.panes[0];
+    // A board agent in the repo, live on the board, with a layout of its own.
+    window.__data.panes.push({ ...base, id: "pb1", kind: "claude", tree: repo, title: null, lamp: "turn" });
+    window.__emit("panes", window.__data.panes);
+    await wait(100);
+    const layoutKey = `sb.parts.${repo}`;
+    const boardLayout = JSON.stringify({ nvim: false, term: false });
+    try { localStorage.setItem(layoutKey, boardLayout); } catch (_) { /* no storage */ }
+    window.SB.setTab("board");
+    await window.SB.expand("pb1");
+    await wait(100);
     $('#tabs [data-tab="work"]').click();
     await wait(150);
-    check("the Work environment tab shows a repo picker", !$("#view-work").hidden && $("#view-board").hidden && $$("#wrepo option").length === S.repos.length + 1 && !!$("#whost .wempty"), $("#wbar").innerHTML);
-    if (other) {
-      const n = called("pane_open").length;
-      const sel = $("#wrepo");
-      sel.value = other.path;
-      sel.dispatchEvent(new Event("change", { bubbles: true }));
-      await wait(100);
-      check("a repo with no agent offers Start Claude, and starts nothing yet", $("#wgo")?.textContent === "Start Claude" && called("pane_open").length === n);
-      $("#wgo").click();
-      await wait(150);
-      const req = called("pane_open").at(-1)?.[1].req;
-      check("Start Claude opens Claude in the repo's main checkout", called("pane_open").length === n + 1 && req?.repo === other.path && req?.place === "main" && req?.run === "claude", JSON.stringify(req));
-    }
-    const opens = called("pane_open").length;
+    check("the Work environment tab shows a repo picker", !$("#view-work").hidden && $("#view-board").hidden && $$("#wrepo option").length === S.repos.length + 1, $("#wbar").innerHTML);
     const sel = $("#wrepo");
-    sel.value = agent.tree;
+    sel.value = repo;
     sel.dispatchEvent(new Event("change", { bubbles: true }));
-    for (let i = 0; i < 30 && !(S.live === agent.id && window.SBParts.P.shown.term); i++) await wait(50);
+    await wait(100);
+    const n = called("pane_open").length;
+    check("an agent of the board is not taken: the tab offers Start Claude", $("#wgo")?.textContent === "Start Claude" && S.live !== "pb1" && called("pane_open").length === n, $("#wbar").innerHTML);
+    $("#wgo").click();
+    const req = called("pane_open").at(-1)?.[1].req;
+    check("Start Claude opens the tab's own Claude in the repo's main checkout", called("pane_open").length === n + 1 && req?.repo === repo && req?.place === "main" && req?.run === "claude" && req?.title === window.SB.WORK_TITLE, JSON.stringify(req));
+    // The hub's answer: the new pane is in the list.
+    window.__data.panes.push({ ...base, id: "p9", kind: "claude", tree: repo, title: window.SB.WORK_TITLE, lamp: "turn" });
+    window.__emit("panes", window.__data.panes);
+    for (let i = 0; i < 30 && !(S.live === "p9" && window.SBParts.P.shown.term); i++) await wait(50);
     await wait(150);
     const box = (id) => $(id).getBoundingClientRect();
     const [nv, ag, tm, lp] = ["#pnvim", "#pagent", "#pterm", "#lparts"].map(box);
-    check("the repo's agent shows in the tab, with nvim and the terminal", $("#live").parentElement === $("#whost") && $("#live").classList.contains("work") && S.live === agent.id && S.termHost === "work" && !$("#pnvim").hidden && !$("#pterm").hidden && !$("#pagent").hidden,
+    check("the tab's agent shows, with nvim and the terminal", $("#live").parentElement === $("#whost") && $("#live").classList.contains("work") && S.live === "p9" && S.termHost === "work" && !$("#pnvim").hidden && !$("#pterm").hidden && !$("#pagent").hidden,
       JSON.stringify({ live: S.live, host: S.termHost, parent: $("#live").parentElement?.id, shown: window.SBParts.P.shown }));
     check("nvim takes the left half", nv.right <= ag.left + 1 && Math.abs(nv.width - lp.width / 2) < lp.width * 0.08, JSON.stringify({ nv, lp }));
     check("Claude is top right and the terminal under it", tm.top >= ag.bottom - 1 && Math.abs(tm.left - ag.left) < 2 && ag.left > lp.left + lp.width / 3, JSON.stringify({ ag, tm }));
-    check("nvim and the shell open in the repo", called("nvim_open").some((c) => c[1].tree === agent.tree) && called("shell_open").some((c) => c[1].tree === agent.tree));
-    check("the agent that runs there is used, not a new one", called("pane_open").length === opens);
+    check("nvim and the shell open in the repo", called("nvim_open").some((c) => c[1].tree === repo) && called("shell_open").some((c) => c[1].tree === repo));
+    let kept = boardLayout;
+    try { kept = localStorage.getItem(layoutKey); } catch (_) { /* no storage */ }
+    check("the tab keeps its own layout, not the board's", kept === boardLayout, kept);
     window.SB.setTab("board");
-    await wait(150);
-    check("the board takes the live pane back, the right way round", $("#live").parentElement === $("#view-board") && !$("#live").classList.contains("work") && S.termHost === null);
-    window.SB.setTab("work");
-    for (let i = 0; i < 30 && !(S.live === agent.id && S.termHost === "work"); i++) await wait(50);
-    check("back in the tab, the same repo opens again", S.live === agent.id && $("#live").parentElement === $("#whost") && $("#wrepo").value === agent.tree);
+    for (let i = 0; i < 30 && S.live !== "pb1"; i++) await wait(50);
+    check("the board gets its own live pane back, the right way round", S.live === "pb1" && $("#live").parentElement === $("#view-board") && !$("#live").classList.contains("work") && S.termHost === null && !window.SBParts.P.shown.nvim, JSON.stringify({ live: S.live, shown: window.SBParts.P.shown }));
+    check("the tab's agent has no tile on the board", !$('#board .pane[data-id="p9"]') && !!$('#board .pane[data-id="pb1"]'));
+    window.SB.expand("p9");
+    for (let i = 0; i < 30 && !(S.live === "p9" && S.termHost === "work"); i++) await wait(50);
+    check("a work agent opened from elsewhere shows in its tab, not on the board", S.tab === "work" && S.live === "p9" && $("#live").parentElement === $("#whost"));
     window.SB.setTab("board");
     await wait(100);
+    window.SB.collapse();
   }
   check("no script errors", window.__errors.length === 0, window.__errors);
   const pre = document.createElement("pre");
