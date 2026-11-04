@@ -320,11 +320,13 @@ The review header shows the state of the guide session: fetching, writing, updat
 ### 11.2 Guide session
 
 - The app runs `claude -p` in the review worktree with the review prompt (11.3).
-- Flags: `--output-format stream-json --verbose --include-partial-messages --mcp-config <sb mcp> --allowedTools <list>`.
+- Flags: `--output-format stream-json --verbose --include-partial-messages --setting-sources user --mcp-config <sb mcp> --strict-mcp-config --allowedTools <list>`.
+- `--setting-sources user`: the review worktree holds the PR's own files, and `-p` skips the trust dialog. Without it, the PR's `.claude/settings.json` and `.claude/settings.local.json` would load: their hooks would run and their allow rules would count. `--strict-mcp-config` is always on, so the PR's `.mcp.json` starts no server.
 - stdin is `/dev/null`. With any other stdin, `claude -p` waits 3 s for input (S3).
-- `--allowedTools`: `Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(git merge-base:*),Bash(git rev-parse:*),mcp__sb__guide_set_steps,mcp__sb__guide_update_step`, plus `WebFetch(domain:<d>)` for each site in `review.web_domains`, plus `WebSearch` when `review.web_search` is on.
-- `--disallowedTools`: `Edit,Write,NotebookEdit,Bash(gh:*)`, plus `WebSearch` when `review.web_search` is off. Claude Code has WebSearch on by default, so off must be a deny.
-- In `-p` mode a tool that is not allowed is denied with no prompt. A Bash command that joins others (`;`, `&&`, `|`, `$(...)`) is denied too, even when each part is allowed (checked on 2026-11-02). The prompt asks for one git command in each call.
+- `--allowedTools`: `Read,Grep,Glob,mcp__sb__git,mcp__sb__guide_set_steps,mcp__sb__guide_update_step`, plus `WebFetch(domain:<d>)` for each site in `review.web_domains`, plus `WebSearch` when `review.web_search` is on.
+- `--disallowedTools`: `Edit,Write,NotebookEdit,MultiEdit,Bash`, plus `WebSearch` when `review.web_search` is off. Claude Code has WebSearch on by default, so off must be a deny.
+- The agent has no Bash. It runs git through the `git` tool of `sb mcp` (11.4). A rule such as `Bash(git diff:*)` cannot keep it read-only: `git diff --output=<file>` writes a file, and `--ext-diff`, `--textconv` and `--no-index` run programs or read files outside the tree.
+- In `-p` mode a tool that is not allowed is denied with no prompt.
 - Spec context comes from local clones that the config names, for example `consensus-specs`. The prompt gives their paths.
 - Web context comes from the sites in `review.web_domains` (default: `github.com`, `raw.githubusercontent.com`, `ethereum.github.io`, `eips.ethereum.org`). Only plain host names count. Other sites, `curl` and `wget` are refused. The list is short on purpose: the PR body and the code can hold instructions, and a fetch to any site could send the code out.
 - The `result` event lists the refused tool calls (`permission_denials`). When the guide is ready, the review header names the refused `WebFetch` and `WebSearch` calls, so a spec page that did not load is not a silent gap. A thread answer gets the same line at its end. Other refused calls, such as a Bash command that is not on the list, are only in the log: the agent tries another way, and the config cannot fix them.
@@ -369,6 +371,15 @@ The prompt lives in `prompts/review.md` in the repo. You can override it in the 
 
 `guide_update_step(id, fields)`: changes the named fields of one step. Pins and threads are not fields of a step, so an update never removes them.
 
+`git(subcommand, args)`: runs one read-only git command in the review worktree (`SB_DIR`) and returns its output. It runs in `sb mcp` itself, not in the core (`review_git`).
+
+- `subcommand` is one of `diff`, `log`, `show`, `blame`, `merge-base`, `rev-parse`.
+- `args` is a list. No shell runs, so there are no quotes, pipes or `$(...)`.
+- Each arg that starts with `-` must be on a list of read options for that subcommand, for example `-U0`, `--stat`, `--name-only`, `--format=...`, `-n20` or `-L10,20:file`. Every other option is refused: `--output`, `-o`, `-O`, `-c`, `--ext-diff`, `--textconv`, `--no-index`, `--exec-path`, `--git-dir`, `--work-tree`, `--contents`, and the short forms git would take for them. This holds after `--` too, because an option can take `--` as its value.
+- Any other arg is a rev, a range or a path. A path that starts with `/` or `~`, or that has a `..` part, is refused: `git diff` with a path outside the tree compares files on disk, as with `--no-index`.
+- `diff`, `log` and `show` always get `--no-ext-diff --no-textconv`; `blame` gets `--no-textconv`. git runs with `--no-pager`, `--no-optional-locks`, `core.fsmonitor=false`, `GIT_CONFIG_NOSYSTEM=1`, and with `GIT_EXTERNAL_DIFF`, `GIT_DIR`, `GIT_WORK_TREE`, `GIT_CONFIG_*` and the other path variables unset.
+- The output is cut at 256 KB, and a call is killed after 60 s.
+
 Validation:
 
 - `file` must exist at `head` for `side: "new"`, or at the base for `side: "old"`. `file` is null only for a step with no code, for example the PR description.
@@ -382,7 +393,7 @@ The question column is a real Claude Code pane, as on the board. It replaces the
 
 1. The pane starts when the guide is ready: interactive `claude` in the review worktree, with `--resume <guide> --fork-session`, so it has the context of the review. The guide session file does not change (S3).
 2. Its first message names the current step and asks Claude to wait for a question.
-3. It gets the spec clones with `--add-dir` and the pane hooks. Its settings allow `WebFetch` for the sites in `review.web_domains` with no prompt; other sites ask. It runs on the connection of the guide session, because the session file is in that connection's folder. It has no `sb` MCP tools, so it cannot change the guide.
+3. It gets the spec clones with `--add-dir` and the pane hooks. Its settings allow `WebFetch` for the sites in `review.web_domains` with no prompt; other sites ask. It runs on the connection of the guide session, because the session file is in that connection's folder. It has no `sb` MCP tools, so it cannot change the guide. It runs with `--setting-sources user`, so the PR's own `.claude/settings.json` and `settings.local.json` do not load, even after you trust the folder. The pane hooks still load: they come from `--settings`.
 4. It runs with the rust-analyzer plugin off: it answers questions, and rust-analyzer takes 1 to 4 GB for each copy.
 5. One pane for each review worktree and PR number, titled `Ask #<number>`. It shows only in its review tab: the board has no tile for it while the review is open. When it waits on you, the tally counts it, and a jump to it opens the review tab. The app finds it again by its title and worktree. After a rename, the app starts a new one. An ended pane with no session id is not used again.
 6. With `--fork-session`, the hooks report the new session id (checked on 2026-10-11). A later resume of the pane uses that id, so it never writes into the guide session. A resume does not pass `--add-dir` again.
@@ -605,7 +616,7 @@ There is no separate local LLM setting. A local model is one more connection (8.
 ┌───────────────┴──────────── Rust core ───────┴─────────────────────┐
 │ tmux     tmux -L switchboard, one control client, a window per pane │
 │ state    socket + ~/.switchboard/state/<pane>  ← sb state           │
-│ mcp      sb mcp: guide_set_steps, guide_update_step                 │
+│ mcp      sb mcp: guide_set_steps, guide_update_step, git            │
 │ review   PR fetch + worktree, head polling, claude -p runner        │
 │ nvim     msgpack-RPC to one nvim for each worktree                  │
 │ store    SQLite: panes, connections, reviews, threads, pins, drafts │
@@ -918,6 +929,11 @@ Where the build differs from the text above:
 - A thread fork and the pin and draft summaries use the active connection.
 - A review run stops at once when Claude reports that the `sb` MCP server failed, and before the start when the `sb` binary is missing. A missing `sb` once made the agent run on without its guide tools.
 - Review runs get each spec clone with `--add-dir`.
+- Review runs and the Ask pane use `--setting-sources user` (11.2, 11.5). Before, a PR could ship `.claude/settings.json` with hooks that ran during its review. The PR's `CLAUDE.md` still loads: it is text, like the PR body, and the rules say it never changes them.
+- The guide agent runs git through the `git` tool of `sb mcp`, not Bash (11.4). Before, `Bash(git diff:*)` let `git diff --output=<file>` write a file.
+- The Ask pane is interactive, so it asks you before each Bash command, as any pane does. It has no `git` tool.
+- Review Markdown (the guide, takes, threads) and task notes use one rule: raw HTML and images show as text, and only `http(s)` links are links. A remote image in the agent's Markdown would load at once, and its URL could carry the code out.
+- The window has a CSP (`crates/app/tauri.conf.json`): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'`. Scripts, styles and fonts all come from `web/`. Styles need `'unsafe-inline'`: the markup has `style` attributes, and xterm.js adds `<style>` elements. `ipc:` and `http://ipc.localhost` are the Tauri IPC; without them Tauri falls back to its slower postMessage path. `dangerousDisableAssetCspModification: ["style-src"]` stops Tauri from adding a nonce to `style-src`: with a nonce there, the browser drops `'unsafe-inline'`. No remote site loads in the window.
 - Start agent waits for the trust dialog, a permission prompt and Needs you before it pastes the first message. It does not see other startup dialogs of Claude Code, for example "New MCP server found in .mcp.json". A paste into such a dialog has no Enter and no control characters, but its newlines can still move the choice. Answer such a dialog before the 1.5 s after the session starts, or paste the message again.
 - Tasks (27): a new sprint opens when no sprint is open. With one open, the new sprint is the planned one. So a planned sprint exists only while a sprint is open.
 - Tasks (27): the filter syntax is words, `#tag`, `repo:name` and `prio:high`. A `#tag` word matches the start of a tag, so it works while you type. The filter stays in memory only.
@@ -949,7 +965,7 @@ Where the build differs from the text above:
 
 Tests:
 
-- 61 core unit tests, 11 tmux tests on real servers, 5 MCP tests.
+- 61 core unit tests, 11 tmux tests on real servers, 6 MCP tests. `review_git::tests` checks that the `git` tool refuses the options that write or run a program, and that normal ranges and paths pass.
 - An end-to-end test: hub, tmux, the `sb` binary, hooks, permits, worktrees, nvim, layouts, a crash, and a board with every tile closed.
 - A review of the code by a second agent found 15 bugs and no deadlocks. All 15 are fixed.
 - 50 window checks in headless Chromium (`web-tests/run.sh`), with a stand-in for the Tauri API.
