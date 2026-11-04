@@ -16,8 +16,8 @@ Sites you can fetch:
 
 Rules:
 - You only read. Never edit, build, test, commit, push, or post anything. Never call gh.
-- Use git diff, git log, git show and Read to understand the change. The merge base is `git merge-base HEAD {{base_ref}}` when that ref exists; otherwise compare against HEAD~ for each commit.
-- Run one git command in each Bash call, with no `;`, `&&`, `|` or `$(...)`: a command that joins others is refused. Run `git merge-base` alone first, then put the hash it prints in the next command.
+- Use the `git` tool and Read to understand the change. You have no Bash. The `git` tool runs one git command in the current folder: `subcommand` is diff, log, show, blame, merge-base or rev-parse, and `args` is a list with one item for each arg, with no quotes. For example `{"subcommand": "diff", "args": ["-U0", "<merge base>", "HEAD", "--", "src/lib.rs"]}`. Options that write a file or run a program are refused, and so are paths outside the current folder.
+- The merge base is `git merge-base HEAD {{base_ref}}` when that ref exists; otherwise compare against HEAD~ for each commit. Call `git` with `merge-base` and `["HEAD", "{{base_ref}}"]` first, then put the hash it prints in the next call.
 - Every claim names a file and line at {{head}}.
 - Read the spec in the clones first. Then, before you write the guide, fetch every spec, EIP or PR link in the PR description that is on the sites above and that the clones do not have. This is required: a spec rule you did not read is a gap in the review. You have no WebFetch tool of your own: call the Agent tool with `subagent_type: "web-fetch"`, the URL, and what you need from the page. Other sites are refused. Never use curl or wget.
 - If a fetch fails, say which link and why in the guide's `take`. Never write "check against" a link you could have fetched.
@@ -48,7 +48,7 @@ The guide object has: `pr` {repo, number, head}, `context` [{label, ref}], `take
 - `files`: paths of binary files that the step covers. Binary files have no lines.
 
 The app checks the guide with a verified checker before the reviewer sees it:
-- Every added line (side "new") and every removed line (side "old") of the diff must be inside a range. Use `git diff -U0 <merge base> HEAD` to see every changed line.
+- Every added line (side "new") and every removed line (side "old") of the diff must be inside a range. Call the `git` tool with `diff` and `["-U0", "<merge base>", "HEAD"]` to see every changed line.
 - Every range must hold at least one changed line, and every line of a range must be at most 20 lines from a changed line. So split a step into several ranges instead of one large range.
 - Every binary file must be in some step's `files`.
 - Every take note with a `line` must name a changed file, and the line must exist on that side.

@@ -1190,7 +1190,7 @@ impl Hub {
         let mut p = format!(
             "\n\nThis is round {} of the review. Round {prev} reviewed commit {since}. This round covers only the changes since then. \
              The rules above about the merge base and the changed files do not apply. \
-             The diff of this round is `git diff -U0 {} {}`. Old line numbers are in {}, new line numbers are at the head. \
+             The diff of this round is `git diff -U0 {} {}` (the `git` tool, with `diff`). Old line numbers are in {}, new line numbers are at the head. \
              Every changed line of this diff must be in a range, and no other line.\n",
             row.round, row.base, row.head, row.base
         );
@@ -2613,6 +2613,8 @@ impl Hub {
                 connection,
                 // It answers questions; rust-analyzer would take 1 to 4 GB for each review.
                 rust: Some(false),
+                // The worktree holds the PR's files: its settings must not load.
+                setting_sources: Some(review::SETTING_SOURCES),
             },
         )?;
         Ok(Some(view.id))
