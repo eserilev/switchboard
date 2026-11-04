@@ -124,24 +124,50 @@ function setTab(tab, quiet) {
   else window.SBReview?.draw(tab);
 }
 
-// Board, Tasks, and Code reviews: a menu of the open reviews. The tab shows the
-// review that is open, and a dot while any review works.
 const reviewBusy = (r) => ["fetching", "writing", "updating"].includes(r.status);
 const reviewLabel = (r) => (r.kind === "local" ? `${esc(r.repo)} commits` : `#${esc(r.number)}${r.round > 1 ? ` R${r.round}` : ""}`);
+// Writes the HTML only when it changed. A review sends many updates while it
+// works: a full redraw would replace the menu item under the mouse, and a click in
+// that moment lands outside the menu and closes it.
+function setHTML(el, html) {
+  if (el._html === html) return;
+  el._html = html;
+  el.innerHTML = html;
+}
+// Board, Tasks, and Code reviews: a menu of the open reviews. The tab shows the
+// review that is open, and a dot while any review works. The bar is built once and
+// then changed in place.
 function drawTabs() {
+  if (!$("#revtab")) {
+    $("#tabs").innerHTML = [
+      '<button class="tab" role="tab" data-tab="board">Board</button>',
+      '<button class="tab" role="tab" data-tab="tasks">Tasks</button>',
+      '<button class="tab" role="tab" data-tab="work" title="nvim, Claude and a terminal in one repo (Leader w)">Work environment</button>',
+      '<span class="revtab"><button class="tab" role="tab" id="revtab" aria-haspopup="menu" aria-expanded="false"></button><div class="menu revmenu" id="revmenu" role="menu" hidden></div></span>',
+    ].join("");
+  }
+  for (const t of document.querySelectorAll("#tabs > .tab")) t.setAttribute("aria-selected", String(S.tab === t.dataset.tab));
   const list = [...S.reviews.values()];
   const cur = S.reviews.get(S.tab);
-  const open = !!$("#revmenu") && !$("#revmenu").hidden;
-  const items = list.map((r) => `<button role="menuitemradio" data-tab="${esc(r.id)}" aria-selected="${S.tab === r.id}" aria-checked="${S.tab === r.id}"><span class="rname">${reviewLabel(r)}${reviewBusy(r) ? '<i class="busy"></i>' : ""}<small>${esc(r.title || "")}</small></span><span class="at">${esc(r.status === "ready" ? "" : r.status || "")}</span></button>`);
-  if (!list.length) items.push('<div class="mnone">No open reviews</div>');
-  items.push('<button role="menuitem" data-newreview>New review…</button>');
-  $("#tabs").innerHTML = [
-    `<button class="tab" role="tab" data-tab="board" aria-selected="${S.tab === "board"}">Board</button>`,
-    `<button class="tab" role="tab" data-tab="tasks" aria-selected="${S.tab === "tasks"}">Tasks</button>`,
-    `<button class="tab" role="tab" data-tab="work" aria-selected="${S.tab === "work"}" title="nvim, Claude and a terminal in one repo (Leader w)">Work environment</button>`,
-    `<span class="revtab"><button class="tab" role="tab" id="revtab" aria-haspopup="menu" aria-expanded="${open}" aria-selected="${!!cur}">Code reviews${cur ? `<b class="cur">${reviewLabel(cur)}</b>` : list.length ? `<b class="count">${list.length}</b>` : ""}${list.some(reviewBusy) ? '<i class="busy"></i>' : ""}<i class="caret"></i></button>` +
-      `<div class="menu revmenu" id="revmenu" role="menu"${open ? "" : " hidden"}>${items.join("")}</div></span>`,
-  ].join("");
+  const tab = $("#revtab");
+  tab.setAttribute("aria-selected", String(!!cur));
+  setHTML(tab, `Code reviews${cur ? `<b class="cur">${reviewLabel(cur)}</b>` : list.length ? `<b class="count">${list.length}</b>` : ""}${list.some(reviewBusy) ? '<i class="busy"></i>' : ""}<i class="caret"></i>`);
+  const menu = $("#revmenu");
+  const ids = list.map((r) => r.id).join("\n");
+  // Another set of reviews: new items. The same set: each item changes in place.
+  if (menu._ids !== ids) {
+    menu._ids = ids;
+    menu.innerHTML = list.map((r) => `<button role="menuitemradio" data-tab="${esc(r.id)}"></button>`).join("") +
+      (list.length ? "" : '<div class="mnone">No open reviews</div>') +
+      '<button role="menuitem" data-newreview>New review…</button>';
+  }
+  const items = menu.querySelectorAll("[data-tab]");
+  list.forEach((r, i) => {
+    const b = items[i];
+    b.setAttribute("aria-selected", String(S.tab === r.id));
+    b.setAttribute("aria-checked", String(S.tab === r.id));
+    setHTML(b, `<span class="rname">${reviewLabel(r)}${reviewBusy(r) ? '<i class="busy"></i>' : ""}<small>${esc(r.title || "")}</small></span><span class="at">${esc(r.status === "ready" ? "" : r.status || "")}</span>`);
+  });
 }
 $("#tabs").addEventListener("click", (e) => {
   if (e.target.closest("#revtab")) { $("#revmenu").hidden = !$("#revmenu").hidden; $("#revtab").setAttribute("aria-expanded", String(!$("#revmenu").hidden)); return; }

@@ -208,6 +208,13 @@
     check("the review menu starts closed", $("#revmenu").hidden);
     $("#revtab").click();
     check("a click opens the menu of open reviews", !$("#revmenu").hidden && $$('#revmenu [data-tab]').length === window.SB.S.reviews.size && $("#revmenu").textContent.includes("Add IL transactions"), $("#revmenu").textContent);
+    // A review that works sends many updates: the open menu and its items stay.
+    const item = $('#revmenu [data-tab]');
+    const r = window.SB.S.reviews.get(item.dataset.tab);
+    window.__emit("review", { ...r, status: "writing" });
+    window.__emit("review", { ...r, status: "writing" });
+    check("a review update keeps the open menu and the item under the mouse", !$("#revmenu").hidden && $('#revmenu [data-tab]') === item && item.isConnected && item.textContent.includes("writing"), item.textContent);
+    window.__emit("review", r);
     document.body.click();
     check("a click outside closes the menu", $("#revmenu").hidden);
     $("#revtab").click();
