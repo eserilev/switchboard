@@ -87,6 +87,9 @@ pub(crate) struct Start {
     pub rust: Option<bool>,
     /// Tool rules that run with no prompt, for the pane settings.
     pub allow: Vec<String>,
+    /// `--setting-sources`. A review pane runs in the PR's own files, so it takes
+    /// only your user settings: the PR's `.claude/settings.json` could hold hooks.
+    pub setting_sources: Option<&'static str>,
 }
 
 pub(crate) struct Pane {
@@ -691,6 +694,10 @@ impl Hub {
         let mut argv = vec!["claude".to_owned()];
         argv.extend(start.first.clone());
         argv.extend(["--settings".to_owned(), settings.to_string_lossy().into_owned()]);
+        // The pane hooks come from `--settings`, which loads with any sources.
+        if let Some(s) = start.setting_sources {
+            argv.extend(["--setting-sources".to_owned(), s.to_owned()]);
+        }
         if let Some(s) = &start.resume {
             argv.extend(["--resume".into(), s.clone()]);
             if start.fork {

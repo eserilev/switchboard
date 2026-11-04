@@ -27,9 +27,13 @@
   const stepState = (r, sid) => r.steps.find((s) => s.id === sid) || { checked: false, stale: false };
   const short = (h) => (h || "").slice(0, 9);
 
-  // Markdown from the agent. Raw HTML in it is shown as text, never run.
+  // Markdown from the agent. Raw HTML in it is shown as text, never run. An image
+  // shows as its text: a remote image would load at once, and its URL could carry
+  // the code out. Only http(s) links are links, and a click opens the browser.
   const mdr = new marked.Renderer();
   mdr.html = (h) => esc(typeof h === "string" ? h : h?.text ?? "");
+  mdr.image = (href, title, text) => esc(text || href || "");
+  mdr.link = (href, title, text) => (/^https?:\/\//.test(href || "") ? `<a href="${esc(href)}">${text}</a>` : text);
   const md = (s) => { try { return marked.parse(String(s ?? ""), { renderer: mdr, gfm: true }); } catch (_) { return esc(s); } };
   const mdi = (s) => { try { return marked.parseInline(String(s ?? ""), { renderer: mdr, gfm: true }); } catch (_) { return esc(s); } };
   // Links open in the browser, not in the app window.

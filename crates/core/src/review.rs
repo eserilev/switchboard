@@ -8,9 +8,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// The tools a review agent may use. Everything else is denied in `-p` mode.
-pub const ALLOWED: &str = "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(git merge-base:*),Bash(git rev-parse:*),mcp__sb__guide_set_steps,mcp__sb__guide_update_step";
-pub const DENIED: &str =
-    "Edit,Write,NotebookEdit,MultiEdit,Bash(gh:*),Bash(git push:*),Bash(git commit:*)";
+/// git goes through the `git` tool of `sb mcp` (`review_git`), not Bash: a Bash
+/// rule such as `Bash(git diff:*)` also lets `git diff --output=<file>` write.
+pub const ALLOWED: &str = "Read,Grep,Glob,mcp__sb__git,mcp__sb__guide_set_steps,mcp__sb__guide_update_step";
+pub const DENIED: &str = "Edit,Write,NotebookEdit,MultiEdit,Bash";
+
+/// The setting sources of a review agent. The review worktree holds the PR's own
+/// files, and `-p` skips the trust dialog, so its `.claude/settings.json` (hooks,
+/// allow rules) and `settings.local.json` must not load.
+pub const SETTING_SOURCES: &str = "user";
 
 /// The `WebFetch` rules for the sites of `review.web_domains`. A name that is not a
 /// plain host name is left out: a comma or a paren would break the tool list.
@@ -866,6 +872,8 @@ pub fn args(run: &Run) -> Vec<String> {
             "--include-partial-messages",
             "--permission-mode",
             "default",
+            "--setting-sources",
+            SETTING_SOURCES,
         ]
         .map(String::from),
     );
@@ -895,14 +903,17 @@ pub fn args(run: &Run) -> Vec<String> {
     if let Some((sb, review, sock)) = run.mcp {
         let cfg = json!({ "mcpServers": { "sb": {
             "command": sb.to_string_lossy(), "args": ["mcp"],
-            "env": { "SB_REVIEW": review, "SB_SOCK": sock.to_string_lossy() }
+            "env": {
+                "SB_REVIEW": review,
+                "SB_SOCK": sock.to_string_lossy(),
+                // The `git` tool runs here.
+                "SB_DIR": run.cwd.to_string_lossy(),
+            }
         }}});
-        a.extend([
-            "--mcp-config".into(),
-            cfg.to_string(),
-            "--strict-mcp-config".into(),
-        ]);
+        a.extend(["--mcp-config".into(), cfg.to_string()]);
     }
+    // Always: the PR's own `.mcp.json` never starts a server.
+    a.push("--strict-mcp-config".into());
     a
 }
 
@@ -1491,10 +1502,17 @@ mod tests {
         assert!(s.contains("--resume g1 --fork-session"));
         assert!(s.contains("--disallowedTools Edit,Write"));
         // Search off is a deny: Claude Code has WebSearch on by default.
-        assert!(a.last().unwrap().ends_with(",WebSearch"));
+        let i = a.iter().position(|x| x == "--disallowedTools").unwrap();
+        assert_eq!(a[i + 1], format!("{DENIED},WebSearch"));
         assert!(!s.contains("WebFetch"));
         assert!(s.contains("--verbose"));
         assert_eq!(&a[..2], ["-p", "q"]);
+        // The PR's own settings and MCP servers never load.
+        assert!(s.contains("--setting-sources user "));
+        assert_eq!(a.last().unwrap(), "--strict-mcp-config");
+        // git is a tool of `sb mcp`; Bash is denied, so `git diff --output=` cannot run.
+        assert!(!ALLOWED.contains("Bash") && DENIED.split(',').any(|d| d == "Bash"));
+        assert!(ALLOWED.split(',').any(|t| t == "mcp__sb__git"));
         let b = args(&Run {
             cwd: Path::new("/"),
             prompt: "q",
@@ -1518,6 +1536,8 @@ mod tests {
         let i = b.iter().position(|x| x == "--mcp-config").unwrap();
         let cfg: Value = serde_json::from_str(&b[i + 1]).unwrap();
         assert_eq!(cfg["mcpServers"]["sb"]["env"]["SB_REVIEW"], "r1");
+        assert_eq!(cfg["mcpServers"]["sb"]["env"]["SB_DIR"], "/");
+        assert_eq!(b.iter().filter(|x| *x == "--strict-mcp-config").count(), 1);
     }
 
     #[test]

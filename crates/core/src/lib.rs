@@ -21,6 +21,7 @@ pub mod proto;
 pub mod remote;
 pub mod repos;
 pub mod review;
+pub mod review_git;
 pub mod store;
 pub mod take;
 pub mod tasks;

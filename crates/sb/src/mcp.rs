@@ -1,12 +1,17 @@
 //! `sb mcp`: the MCP server with the guide tools (SPEC 11.4), over stdio.
 //!
-//! Each tool call goes to the app over the socket. The app checks the guide
+//! Each guide call goes to the app over the socket. The app checks the guide
 //! and keeps it. The agent never writes a file.
+//!
+//! The `git` tool runs here, in the review worktree (`SB_DIR`). It takes the place
+//! of Bash for the guide agent: see `switchboard_core::review_git`.
 
 use crate::send;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
 use switchboard_core::proto::{Ack, Request};
+use switchboard_core::review_git;
 
 pub fn tools() -> Value {
     let range = json!({
@@ -81,6 +86,18 @@ pub fn tools() -> Value {
                 "properties": { "id": { "type": "string" }, "fields": { "type": "object" } },
                 "required": ["id", "fields"]
             }
+        },
+        {
+            "name": "git",
+            "description": "Run one read-only git command in the review worktree. No shell: each arg is one item, with no quotes. Args are revs, ranges, paths in the tree, and read options such as -U0, --stat, --name-only, --format=..., -n20, -L10,20:file. An option that writes a file or runs a program is refused. The output is cut at 256 KB.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "subcommand": { "type": "string", "enum": review_git::SUBCOMMANDS },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "For example [\"-U0\", \"abc123\", \"HEAD\", \"--\", \"src/lib.rs\"]." }
+                },
+                "required": ["subcommand"]
+            }
         }
     ])
 }
@@ -89,6 +106,7 @@ pub fn tools() -> Value {
 pub fn handle(
     msg: &Value,
     review: &str,
+    dir: &Path,
     call: &dyn Fn(Request) -> Result<Ack, String>,
 ) -> Option<Value> {
     let id = msg.get("id")?.clone();
@@ -112,6 +130,9 @@ pub fn handle(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or(json!({}));
+            if name == "git" {
+                return Some(json!({ "jsonrpc": "2.0", "id": id, "result": git_call(dir, &args) }));
+            }
             let req = match name {
                 "guide_set_steps" => Some(Request::GuideSet {
                     review: review.into(),
@@ -141,8 +162,33 @@ pub fn handle(
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
 }
 
+/// Runs the `git` tool. A bad call is a tool error, so the agent can try again.
+fn git_call(dir: &Path, args: &Value) -> Value {
+    let sub = args.get("subcommand").and_then(Value::as_str).unwrap_or("");
+    let list: Option<Vec<String>> = match args.get("args") {
+        None | Some(Value::Null) => Some(vec![]),
+        Some(Value::Array(a)) => a.iter().map(|x| x.as_str().map(String::from)).collect(),
+        Some(_) => None,
+    };
+    let (text, error) = match list {
+        None => ("args must be a list of strings".to_owned(), true),
+        Some(list) => match review_git::run(dir, sub, &list) {
+            Ok(t) if t.is_empty() => ("(no output)".to_owned(), false),
+            Ok(t) => (t, false),
+            Err(e) => (e, true),
+        },
+    };
+    json!({ "content": [{ "type": "text", "text": text }], "isError": error })
+}
+
 pub fn serve() -> i32 {
     let review = std::env::var("SB_REVIEW").unwrap_or_default();
+    // The review worktree. Claude starts the server there too, so the current
+    // folder is the fallback.
+    let dir = std::env::var_os("SB_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
     let call = |req: Request| -> Result<Ack, String> {
         let line = send(&req, true)?.unwrap_or_default();
         serde_json::from_str(&line).map_err(|e| e.to_string())
@@ -153,7 +199,7 @@ pub fn serve() -> i32 {
         let Ok(msg) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if let Some(reply) = handle(&msg, &review, &call) {
+        if let Some(reply) = handle(&msg, &review, &dir, &call) {
             let _ = writeln!(out, "{reply}");
             let _ = out.flush();
         }
@@ -171,7 +217,7 @@ mod tests {
 
     #[test]
     fn initialize_echoes_the_version() {
-        let r = handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}), "r1", &ok).unwrap();
+        let r = handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}), "r1", Path::new("."), &ok).unwrap();
         assert_eq!(r["result"]["protocolVersion"], "2025-03-26");
         assert!(r["result"]["capabilities"]["tools"].is_object());
     }
@@ -181,16 +227,18 @@ mod tests {
         assert!(handle(
             &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
             "r1",
+            Path::new("."),
             &ok
         )
         .is_none());
     }
 
     #[test]
-    fn list_has_both_tools() {
+    fn list_has_the_tools() {
         let r = handle(
             &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
             "r1",
+            Path::new("."),
             &ok,
         )
         .unwrap();
@@ -200,7 +248,7 @@ mod tests {
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, vec!["guide_set_steps", "guide_update_step"]);
+        assert_eq!(names, vec!["guide_set_steps", "guide_update_step", "git"]);
     }
 
     #[test]
@@ -213,6 +261,7 @@ mod tests {
         let r = handle(
             &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"guide_update_step","arguments":{"id":"s1","fields":{"lines":[9,9]}}}}),
             "r7",
+            Path::new("."),
             &call,
         )
         .unwrap();
@@ -230,10 +279,49 @@ mod tests {
     }
 
     #[test]
+    fn git_runs_here_and_refuses_a_write() {
+        let sent = std::cell::Cell::new(false);
+        let call = |_: Request| {
+            sent.set(true);
+            Ok(Ack::ok())
+        };
+        let r = handle(
+            &json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"git","arguments":{"subcommand":"diff","args":["--output=x.txt","HEAD"]}}}),
+            "r1",
+            Path::new("."),
+            &call,
+        )
+        .unwrap();
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("not allowed"));
+        assert!(!Path::new("x.txt").exists());
+        let r = handle(
+            &json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"git","arguments":{"subcommand":"rev-parse","args":["--verify","HEAD"]}}}),
+            "r1",
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            &call,
+        )
+        .unwrap();
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        assert_eq!(r["result"]["content"][0]["text"].as_str().unwrap().trim().len(), 40);
+        let r = handle(
+            &json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"git","arguments":{"subcommand":"push","args":"x"}}}),
+            "r1",
+            Path::new("."),
+            &call,
+        )
+        .unwrap();
+        assert_eq!(r["result"]["isError"], true);
+        // The git tool never goes to the app.
+        assert!(!sent.get());
+    }
+
+    #[test]
     fn unknown_method_is_an_error() {
         let r = handle(
             &json!({"jsonrpc":"2.0","id":4,"method":"resources/list"}),
             "r1",
+            Path::new("."),
             &ok,
         )
         .unwrap();
