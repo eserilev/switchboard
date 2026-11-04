@@ -451,6 +451,15 @@ next_steps() {
   elif ! gh auth status >/dev/null 2>&1; then
     echo "- Log in to GitHub for PR reviews: gh auth login"
   fi
+  # Sandbox mode (SPEC 31) needs these on Linux. The script does not install them.
+  if [ "$1" = Linux ]; then
+    local sbx=()
+    have bwrap || sbx+=(bubblewrap)
+    have socat || sbx+=(socat)
+    if [ ${#sbx[@]} -gt 0 ]; then
+      echo "- For sandbox mode (review Ask panes by default), install: ${sbx[*]}   (without them those agents stop at start)"
+    fi
+  fi
   if [ "$1" = Darwin ]; then
     echo "- Start it: open ~/Applications/Switchboard.app"
   else

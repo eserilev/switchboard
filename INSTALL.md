@@ -39,6 +39,8 @@ curl -fsSL https://raw.githubusercontent.com/eserilev/switchboard/master/scripts
 
 Optional: `nvim` for nvim panes, `notify-send` for desktop notifications, `secret-tool` for endpoint tokens (Linux).
 
+Sandbox: by default the review Ask panes run their commands in Claude Code's sandbox (`[sandbox]` in the config, or Settings; SPEC 31). macOS needs nothing more. Linux needs `bubblewrap` and `socat` (for example `sudo apt-get install bubblewrap socat`); without them those panes stop at start. The script tells you when they are missing, but does not install them. To turn the sandbox off, set `mode = "off"` under `[sandbox]`.
+
 ## After the install
 
 1. Log in to Claude Code once: run `claude` in a terminal.

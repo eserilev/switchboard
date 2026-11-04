@@ -22,6 +22,9 @@
   check("permit buttons on the tile", !!$('[data-allow="p2-1"]') && !!$('[data-deny="p2-1"]'));
   check("nvim tile has no nvim button", !$('.pane[data-id="p3"] [data-nvim]'));
   check("connection button shows a", $("#conn").textContent === "a");
+  check("a sandboxed agent says sandbox on its info line, others do not (SPEC 31)",
+    $('.pane[data-id="p2"] .pmeta .meta')?.textContent.endsWith("· sandbox") && !$('.pane[data-id="p1"] .pmeta .meta')?.textContent.includes("sandbox"),
+    $('.pane[data-id="p2"] .pmeta .meta')?.textContent);
   {
     // The title row has only the name, the state and Close: the tool buttons sit on
     // the info line, so a long name keeps its room.
@@ -1711,6 +1714,35 @@
     await wait(100);
     $("#settings").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     check("Escape closes Settings", $("#settings").hidden);
+  }
+  {
+    // Settings, the sandbox part (SPEC 31): the mode, the lists, the Linux warning.
+    $("#gear").click();
+    await wait(100);
+    const rows = (k) => $$(`#sbody input[data-list="${k}"]`).map((i) => i.value);
+    check("Settings shows the sandbox mode and its lists", $("#ssandbox")?.value === "review" && rows("sandbox_domains").join() === "github.com,*.githubusercontent.com" && rows("sandbox_unsandboxed").join() === "gh *" && !!$('#sbody [data-add="sandbox_write"]'),
+      JSON.stringify({ mode: $("#ssandbox")?.value, d: rows("sandbox_domains") }));
+    check("a missing sandbox tool shows a warning", $("#ssandboxwarn")?.textContent.includes("socat"));
+    const mode = (v) => { $("#ssandbox").value = v; $("#ssandbox").dispatchEvent(new Event("change", { bubbles: true })); };
+    mode("off");
+    check("Off hides the sandbox lists and the warning", !$('#sbody [data-add="sandbox_domains"]') && !$("#ssandboxwarn") && $("#ssandbox").value === "off");
+    mode("all");
+    $('#sbody [data-add="sandbox_write"]').click();
+    const dir = $$('#sbody input[data-list="sandbox_write"]').at(-1);
+    dir.value = "build";
+    dir.dispatchEvent(new Event("input", { bubbles: true }));
+    $("#ssave").click();
+    await wait(100);
+    check("a folder that is not a full path is refused", !$("#settings").hidden && $("#serr").textContent.includes("not a full path"), $("#serr").textContent);
+    dir.value = "~/.cache/build";
+    dir.dispatchEvent(new Event("input", { bubbles: true }));
+    $("#ssave").click();
+    await wait(100);
+    const sent = called("settings_save").at(-1)?.[1].set;
+    check("Save sends the sandbox table", $("#settings").hidden && sent?.sandbox?.mode === "all" && JSON.stringify(sent.sandbox.write) === JSON.stringify(["~/.cache/build"]) && JSON.stringify(sent.sandbox.unsandboxed) === JSON.stringify(["gh *"]) && !("sandbox_mode" in sent),
+      JSON.stringify(sent));
+    // Back to the first state, for the checks after this one.
+    window.__data.settings.sandbox = { mode: "review", domains: ["github.com", "*.githubusercontent.com"], write: [], unsandboxed: ["gh *"] };
   }
   {
     // A repo made while the app runs shows after the window gets the focus back.

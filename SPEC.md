@@ -741,6 +741,12 @@ web_search = false              # the default
 [tasks]                         # SPEC 27
 sprint_days = 14
 branch_prefix = "sb/"
+
+[sandbox]                       # SPEC 31; these are the defaults
+mode = "review"                 # "off", "review" (review Ask panes) or "all" (every agent)
+domains = ["github.com", "api.github.com", "*.githubusercontent.com", "crates.io", "index.crates.io", "static.crates.io", "registry.npmjs.org", "pypi.org", "files.pythonhosted.org"]
+write = []                      # more folders that commands can write
+unsandboxed = ["git push *", "git fetch *", "git pull *", "gh *", "docker *"]
 ```
 
 `remote = "me@box"` runs the window against a hub on that host, and `remote_command` replaces the ssh command (29.1).
@@ -749,12 +755,13 @@ A missing file gives the defaults. An unknown key is an error with the key name.
 
 ### 14.1 Settings
 
-The gear at the top right opens Settings. It changes four keys, so nobody has to find and edit the file:
+The gear at the top right opens Settings. It changes these keys, so nobody has to find and edit the file:
 
 - Repo folders: `scan`. A folder that does not exist shows "not found".
 - Spec clones: `review.spec_clones`.
 - Sites the review agent can fetch: `review.web_domains`. Only plain host names: `https://` or a path is refused with a reason, and Settings stays open.
 - Let the review agent search the web: `review.web_search`.
+- Sandbox (31): the mode (`sandbox.mode`: Off, Review panes, All agents), and with a mode that is not Off, three lists: the sites that commands can reach (`sandbox.domains`, a host name or `*.` and a host name), more folders that commands can write (`sandbox.write`, a full path that starts with `/` or `~/`), and the commands that run outside the sandbox (`sandbox.unsandboxed`). On Linux, a warning names `bwrap` or `socat` when one is not on `PATH`. A new agent gets the change; an agent that runs keeps the sandbox it started with.
 
 Save writes the config file with `toml_edit`: every other key and every comment stays. Items are trimmed, and empty items and repeats go. The new text must parse with the same rules as at start, else nothing is written. The write is a new file and a rename, so a crash never leaves half a config. A file that does not parse is not changed: the error says to fix it first.
 
@@ -965,6 +972,9 @@ Where the build differs from the text above:
 - Drag a tile onto another tile to move it. A move of less than 6 px is a click. The order is saved in the store (schema version 2) and kept after a restart.
 - Each `claude -p` run is killed after 30 minutes. Its stderr goes to its own thread.
 - In Claude Code 2.1.311 the main agent of a `claude -p` run has no `WebFetch` tool. It gives a fetch to the `web-fetch` sub-agent, and the `WebFetch(domain:…)` rules still hold there: an allowed site loads, and another site shows in `permission_denials` (checked on 2026-10-27). A prompt that only says it may fetch is not enough: the first guide of PR 10174 fetched nothing. The prompt now makes the fetch a step and names the sub-agent.
+- Sandbox (31): not checked with a real `claude` yet. The keys follow the Claude Code docs (code.claude.com/docs/en/sandboxing, read on 2026-11-03). Not verified: that a blocked site in an interactive pane comes to the `PermissionRequest` hook, so the tile shows Allow and Deny; that `git commit` in a worktree works with the git folder in `allowWrite`; that the `Read(~/.ssh/**)` rules stop the Read tool; and that `failIfUnavailable` stops a pane on Linux with no `bwrap`.
+- Sandbox (31): a pane that starts again (resume, restart, a new connection) keeps the sandbox of its settings file, whatever the mode is now. A resumed Ask pane has no Ask mark in its start, so the mode alone would drop it.
+- Sandbox (31): the `credentials` key of the sandbox is not used. `denyRead` and the permission deny rules cover the same folders, and an older Claude Code may not know the key.
 - A diff header `@@ old N · new M @@` gives the number of the next old line and of the next new line, also on a side where the next row has no line. The "No newline at end of file" note follows its line and does not count for the context cut.
 
 Tests:
@@ -1541,3 +1551,21 @@ A tab for working in one repo yourself: nvim takes the left half, Claude Code th
 
 Tests: window checks for the tab, the picker, a board agent in the repo that is not taken, Start Claude (the request and its title), no tile on the board, an expand from elsewhere, the board's own layout and live pane after a visit, the layout (nvim on the left half, Claude above the terminal on the right), nvim and the shell in the repo, and the trip to the board and back. Also: tiles, the live title, the part heads and the bar that stay through a pane event; a focused picker that keeps its list; an open that stops when you pick another repo or leave; a work pane left in the focus; Leader `j` with an ended work agent; and its Resume and Close.
 
+## 31. Sandbox
+
+Status: built. Not yet checked with a real `claude` (23).
+
+Sandbox mode runs the Bash of the agents that Switchboard starts in Claude Code's own sandbox. A PR body, a web page or a file can hold instructions for the agent. In the sandbox, a command that follows them can write only the tree and reach only the listed sites.
+
+- **Which panes.** `sandbox.mode`: `off`, `review` (the default: only the review Ask panes, 11), or `all` (every Claude pane, the Work environment agent too). Shells and nvim never. A pane that starts again keeps the sandbox it had (23).
+- **How.** The pane's settings file (13.2) gets a `sandbox` block: `enabled`, `failIfUnavailable` (no sandbox on this computer: claude stops at start, it does not run open), `allowUnsandboxedCommands: false` (a command that fails in the sandbox can not try again outside it), `excludedCommands`, `filesystem` and `network.allowedDomains`.
+- **Writes.** Claude Code lets commands write the tree of the pane and the temp folder. Switchboard adds `sandbox.write` (with `~` expanded) and the git folder that all worktrees share (`git rev-parse --path-format=absolute --git-common-dir`), when it is outside the tree. Without it, `git commit` in a worktree fails: the objects and refs live in the main checkout. Its `hooks` folder and `config` file stay closed (`denyWrite`), since a hook written there runs later outside the sandbox.
+- **Reads.** Commands read everything except `~/.ssh`, `~/.aws`, `~/.gnupg` and `~/.config/gh` (`denyRead`). The sandbox covers only Bash, so the settings also deny `Read(...)` and `Edit(...)` of the same folders to the tools.
+- **Sites.** Commands reach only `sandbox.domains`. `*.x.org` takes every host under x.org. The default list is GitHub and the crates, npm and PyPI registries. Another site, in an interactive pane, asks: Allow or Deny on the tile, through the permit flow (25). Not verified (23).
+- **Outside the sandbox.** `sandbox.unsandboxed` (Claude Code's `excludedCommands`) run with no sandbox, and ask as usual. The default list holds what breaks in it: `git push`, `git fetch` and `git pull` (git over ssh fails on macOS, and the keys in `~/.ssh` are closed), `gh` (TLS can fail on macOS, and its login is closed) and `docker` (it does not work in the sandbox). A chained command runs outside only when each part matches.
+- **What it does not cover.** The Read, Edit, Write and WebFetch tools, MCP servers and hooks follow the permission rules, not the sandbox. The hooks (`sb state`, `sb permit`) run outside it, so the lamps and the permit buttons work as before. Commands outside the sandbox have no limits. Claude Code runs Bash in the sandbox with no prompt (`autoAllowBashIfSandboxed`, its default).
+- **The mark.** A tile and the live title of a sandboxed agent end their info line with `sandbox` (`sandboxed` in the pane view).
+- **Settings.** The mode and the three lists (14.1). A new agent gets a change.
+- **Linux.** The sandbox needs `bubblewrap` (`bwrap`) and `socat`. macOS has Seatbelt built in. Settings warns when one is missing, and `scripts/install.sh` says so; it does not install them. Without them a sandboxed agent stops at start (`failIfUnavailable`).
+
+Tests: unit tests for the block (there or not, the deny rules, the git folder of a worktree), the config (defaults, parse, Settings save, bad sites, bad folders, bad mode), a hub test on real tmux (mode `all` and `review`, the settings file, the mark), and window checks for the Settings fields, the warning and the mark.

@@ -7,11 +7,37 @@ use std::path::Path;
 
 pub const RUST_PLUGIN: &str = "rust-analyzer-lsp@claude-plugins-official";
 
+/// The folders with keys and logins. A pane in the sandbox can not read them,
+/// with Bash or with the Read tool (SPEC 31).
+pub const SECRET_DIRS: [&str; 4] = ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/gh"];
+
+/// What goes in the settings file of one pane.
+pub struct PaneSettings<'a> {
+    /// The `sb` program that the hooks run.
+    pub sb: &'a Path,
+    /// False for repos with no `Cargo.toml`: then the rust-analyzer plugin is off.
+    pub rust: bool,
+    /// Tool rules that run with no prompt, such as `WebFetch(domain:x)`.
+    pub allow: &'a [String],
+    /// With none, Bash runs outside Claude Code's sandbox.
+    pub sandbox: Option<Sandbox<'a>>,
+}
+
+/// The sandbox of one pane (SPEC 31).
+pub struct Sandbox<'a> {
+    /// The hosts that commands can reach.
+    pub domains: &'a [String],
+    /// Commands that run outside the sandbox.
+    pub unsandboxed: &'a [String],
+    /// Full paths that commands can write, beside the tree of the pane.
+    pub write: Vec<String>,
+    /// Full paths under `write` that commands can not write, such as `.git/hooks`.
+    pub deny_write: Vec<String>,
+}
+
 /// The settings file for one pane, passed with `claude --settings`.
-/// `rust` is false for repos with no `Cargo.toml`: then the rust-analyzer plugin is off.
-/// `allow` are tool rules that run with no prompt, such as `WebFetch(domain:x)`.
-pub fn settings(sb: &Path, rust: bool, allow: &[String]) -> Value {
-    let sb = sb.to_string_lossy();
+pub fn settings(p: &PaneSettings) -> Value {
+    let sb = p.sb.to_string_lossy();
     let cmd = |arg: &str| json!([{ "hooks": [{ "type": "command", "command": format!("'{sb}' {arg}") }] }]);
     let with = |matcher: &str, arg: &str, timeout: Option<u64>| {
         let mut h = json!({ "type": "command", "command": format!("'{sb}' {arg}") });
@@ -32,11 +58,36 @@ pub fn settings(sb: &Path, rust: bool, allow: &[String]) -> Value {
             "StopFailure": cmd("state failure"),
         }
     });
-    if !allow.is_empty() {
-        s["permissions"] = json!({ "allow": allow });
+    if !p.allow.is_empty() {
+        s["permissions"] = json!({ "allow": p.allow });
     }
-    if !rust {
+    if !p.rust {
         s["enabledPlugins"] = json!({ RUST_PLUGIN: false });
+    }
+    if let Some(b) = &p.sandbox {
+        s["sandbox"] = json!({
+            "enabled": true,
+            // With no sandbox on this computer, claude stops at start, not runs open.
+            "failIfUnavailable": true,
+            // A command that fails in the sandbox can not try again outside it.
+            "allowUnsandboxedCommands": false,
+            "excludedCommands": b.unsandboxed,
+            "filesystem": {
+                "allowWrite": b.write,
+                "denyWrite": b.deny_write,
+                "denyRead": SECRET_DIRS,
+            },
+            "network": { "allowedDomains": b.domains },
+        });
+        // The sandbox covers only Bash: these rules keep the Read and Edit tools out too.
+        let deny: Vec<String> = SECRET_DIRS
+            .iter()
+            .flat_map(|d| [format!("Read({d}/**)"), format!("Edit({d}/**)")])
+            .collect();
+        if !s["permissions"].is_object() {
+            s["permissions"] = json!({});
+        }
+        s["permissions"]["deny"] = json!(deny);
     }
     s
 }
@@ -115,6 +166,43 @@ pub fn permit_summary(tool: &str, input: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn settings(sb: &Path, rust: bool, allow: &[String]) -> Value {
+        super::settings(&PaneSettings { sb, rust, allow, sandbox: None })
+    }
+
+    #[test]
+    fn sandbox_block_only_when_asked() {
+        let s = settings(Path::new("/sb"), true, &[]);
+        assert!(s.get("sandbox").is_none());
+        let domains = ["github.com".to_owned(), "*.npmjs.org".to_owned()];
+        let out = ["gh *".to_owned()];
+        let allow = ["WebFetch(domain:github.com)".to_owned()];
+        let s = super::settings(&PaneSettings {
+            sb: Path::new("/sb"),
+            rust: true,
+            allow: &allow,
+            sandbox: Some(Sandbox {
+                domains: &domains,
+                unsandboxed: &out,
+                write: vec!["/c/repo/.git".into()],
+                deny_write: vec!["/c/repo/.git/hooks".into()],
+            }),
+        });
+        let b = &s["sandbox"];
+        assert_eq!((&b["enabled"], &b["failIfUnavailable"], &b["allowUnsandboxedCommands"]), (&json!(true), &json!(true), &json!(false)));
+        assert_eq!(b["network"]["allowedDomains"], json!(domains));
+        assert_eq!(b["excludedCommands"], json!(out));
+        assert_eq!(b["filesystem"]["allowWrite"], json!(["/c/repo/.git"]));
+        assert_eq!(b["filesystem"]["denyWrite"], json!(["/c/repo/.git/hooks"]));
+        assert_eq!(b["filesystem"]["denyRead"], json!(SECRET_DIRS));
+        // The allow rules stay, and the Read tool can not read the keys either.
+        assert_eq!(s["permissions"]["allow"], json!(allow));
+        let deny = s["permissions"]["deny"].as_array().unwrap();
+        assert!(deny.contains(&json!("Read(~/.ssh/**)")) && deny.contains(&json!("Edit(~/.aws/**)")), "{deny:?}");
+        // The hooks stay: they run outside the sandbox.
+        assert!(s["hooks"]["PermissionRequest"].is_array());
+    }
 
     #[test]
     fn settings_have_every_hook_and_quote_the_path() {

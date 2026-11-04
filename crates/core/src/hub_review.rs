@@ -2605,6 +2605,8 @@ impl Hub {
                 rust: Some(false),
                 // The worktree holds the PR's files: its settings must not load.
                 setting_sources: Some(review::SETTING_SOURCES),
+                // The PR can hold instructions: sandbox mode `review` covers this pane (SPEC 31).
+                ask: true,
             },
         )?;
         Ok(Some(view.id))

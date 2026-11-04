@@ -15,6 +15,7 @@ pub struct Config {
     pub connections: BTreeMap<String, ConnectionCfg>,
     pub review: ReviewCfg,
     pub tasks: TasksCfg,
+    pub sandbox: SandboxCfg,
     /// Remote mode (SPEC 29): the ssh host of the hub, for example `me@box`. With
     /// none, the hub runs here.
     pub remote: Option<String>,
@@ -71,6 +72,74 @@ impl Default for ReviewCfg {
     }
 }
 
+/// The `[sandbox]` table (SPEC 31): which agents run Bash in Claude Code's sandbox.
+#[derive(Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields, default)]
+pub struct SandboxCfg {
+    /// `off`, `review` (only the review Ask panes) or `all` (every agent).
+    pub mode: String,
+    /// The hosts that commands in the sandbox can reach. `*.x.org` takes every
+    /// host under x.org.
+    pub domains: Vec<String>,
+    /// More folders that commands in the sandbox can write. The tree of the pane
+    /// and its git folder are always writable.
+    pub write: Vec<String>,
+    /// Commands that run outside the sandbox, as `Bash` rule patterns such as `gh *`.
+    pub unsandboxed: Vec<String>,
+}
+
+pub const SANDBOX_MODES: [&str; 3] = ["off", "review", "all"];
+
+impl Default for SandboxCfg {
+    fn default() -> Self {
+        SandboxCfg {
+            mode: "review".into(),
+            domains: [
+                "github.com",
+                "api.github.com",
+                "*.githubusercontent.com",
+                "crates.io",
+                "index.crates.io",
+                "static.crates.io",
+                "registry.npmjs.org",
+                "pypi.org",
+                "files.pythonhosted.org",
+            ]
+            .map(String::from)
+            .to_vec(),
+            write: Vec::new(),
+            unsandboxed: ["git push *", "git fetch *", "git pull *", "gh *", "docker *"].map(String::from).to_vec(),
+        }
+    }
+}
+
+impl SandboxCfg {
+    /// True when a claude pane runs in the sandbox. `ask` is true for a review Ask pane.
+    pub fn covers(&self, ask: bool) -> bool {
+        match self.mode.as_str() {
+            "all" => true,
+            "review" => ask,
+            _ => false,
+        }
+    }
+
+    /// The rules of the Settings window for the sandbox fields.
+    fn clean(&self) -> Result<SandboxCfg, String> {
+        if !SANDBOX_MODES.contains(&self.mode.as_str()) {
+            return Err(format!("Sandbox mode {} is not off, review or all.", self.mode));
+        }
+        let domains: Vec<String> = tidy(&self.domains).iter().map(|d| d.to_ascii_lowercase()).collect();
+        if let Some(bad) = domains.iter().find(|d| !host_ok(d.strip_prefix("*.").unwrap_or(d))) {
+            return Err(format!("{bad} is not a host name. Write it like github.com or *.github.com, with no https:// and no path."));
+        }
+        let write = tidy(&self.write);
+        if let Some(bad) = write.iter().find(|w| !crate::expand(w).is_absolute()) {
+            return Err(format!("{bad} is not a full path. Start it with / or ~/."));
+        }
+        Ok(SandboxCfg { mode: self.mode.clone(), domains, write, unsandboxed: tidy(&self.unsandboxed) })
+    }
+}
+
 /// The fields that the Settings window changes (SPEC 14.1).
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
@@ -79,26 +148,33 @@ pub struct SettingsEdit {
     pub spec_clones: Vec<String>,
     pub web_domains: Vec<String>,
     pub web_search: bool,
+    /// With none, the `[sandbox]` table stays as it is.
+    #[serde(default)]
+    pub sandbox: Option<SandboxCfg>,
+}
+
+/// Trims each item and drops empty items and repeats.
+fn tidy(v: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for s in v.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if !out.iter().any(|o| o == s) {
+            out.push(s.to_owned());
+        }
+    }
+    out
+}
+
+/// True for a plain host name such as `github.com`.
+fn host_ok(d: &str) -> bool {
+    !d.is_empty() && d.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
 }
 
 impl SettingsEdit {
     /// Trims each item and drops empty items and repeats. A site must be a plain
     /// host name: anything else would break the tool list of the review agent.
     fn clean(&self) -> Result<SettingsEdit, String> {
-        let tidy = |v: &[String]| {
-            let mut out: Vec<String> = vec![];
-            for s in v.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                if !out.iter().any(|o| o == s) {
-                    out.push(s.to_owned());
-                }
-            }
-            out
-        };
         let web_domains: Vec<String> = tidy(&self.web_domains).iter().map(|d| d.to_ascii_lowercase()).collect();
-        if let Some(bad) = web_domains
-            .iter()
-            .find(|d| !d.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-'))
-        {
+        if let Some(bad) = web_domains.iter().find(|d| !host_ok(d)) {
             return Err(format!("{bad} is not a host name. Write it like github.com, with no https:// and no path."));
         }
         Ok(SettingsEdit {
@@ -106,6 +182,7 @@ impl SettingsEdit {
             spec_clones: tidy(&self.spec_clones),
             web_domains,
             web_search: self.web_search,
+            sandbox: self.sandbox.as_ref().map(SandboxCfg::clean).transpose()?,
         })
     }
 }
@@ -136,6 +213,7 @@ impl Default for Config {
             connections: BTreeMap::new(),
             review: ReviewCfg::default(),
             tasks: TasksCfg::default(),
+            sandbox: SandboxCfg::default(),
             remote: None,
             remote_command: None,
         }
@@ -194,6 +272,18 @@ impl Config {
         doc["review"]["spec_clones"] = list(&set.spec_clones);
         doc["review"]["web_domains"] = list(&set.web_domains);
         doc["review"]["web_search"] = toml_edit::value(set.web_search);
+        if let Some(sb) = &set.sandbox {
+            if !doc.get("sandbox").is_some_and(toml_edit::Item::is_table) {
+                if doc.contains_key("sandbox") {
+                    return Err(format!("{}: sandbox is not a table.", path.display()));
+                }
+                doc["sandbox"] = toml_edit::table();
+            }
+            doc["sandbox"]["mode"] = toml_edit::value(sb.mode.as_str());
+            doc["sandbox"]["domains"] = list(&sb.domains);
+            doc["sandbox"]["write"] = list(&sb.write);
+            doc["sandbox"]["unsandboxed"] = list(&sb.unsandboxed);
+        }
         let text = doc.to_string();
         // The app reads the file with the same rules at its next start.
         let config = Config::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -216,6 +306,9 @@ impl Config {
                 "endpoint" => return Err(format!("connection {name}: an endpoint needs url")),
                 other => return Err(format!("connection {name}: unknown kind {other}")),
             }
+        }
+        if !SANDBOX_MODES.contains(&c.sandbox.mode.as_str()) {
+            return Err(format!("sandbox: mode {} is not off, review or all", c.sandbox.mode));
         }
         Ok(c)
     }
@@ -273,6 +366,7 @@ mod tests {
             spec_clones: vec![],
             web_domains: vec!["GitHub.com".into()],
             web_search: true,
+            sandbox: None,
         };
         let c = Config::edit(&path, &set).unwrap();
         assert_eq!(c.scan, vec!["~/code", "~/notes"]);
@@ -291,6 +385,52 @@ mod tests {
         std::fs::write(&path, "scan = [").unwrap();
         assert!(Config::edit(&path, &set).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "scan = [");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sandbox_defaults_parse_and_edit() {
+        let d = Config::default().sandbox;
+        assert_eq!(d.mode, "review");
+        assert!(d.covers(true) && !d.covers(false));
+        assert!(d.domains.contains(&"*.githubusercontent.com".to_owned()));
+        assert!(d.unsandboxed.contains(&"gh *".to_owned()));
+        let c = Config::parse("[sandbox]\nmode = \"all\"\nwrite = [\"~/.kube\"]").unwrap();
+        assert!(c.sandbox.covers(false));
+        assert_eq!(c.sandbox.write, vec!["~/.kube"]);
+        // Fields left out keep their defaults.
+        assert_eq!(c.sandbox.domains, d.domains);
+        assert!(!Config::parse("[sandbox]\nmode = \"off\"").unwrap().sandbox.covers(true));
+        assert!(Config::parse("[sandbox]\nmode = \"some\"").unwrap_err().contains("mode"));
+
+        let dir = std::env::temp_dir().join(format!("sb-config-sandbox-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "# top\n[sandbox]\nmode = \"off\" # mine\n").unwrap();
+        let base = SettingsEdit { scan: vec!["~/c".into()], ..SettingsEdit::default() };
+        // With no sandbox fields, the table stays as it is.
+        assert_eq!(Config::edit(&path, &base).unwrap().sandbox.mode, "off");
+        let sb = SandboxCfg {
+            mode: "all".into(),
+            domains: vec![" *.Example.org ".into(), "x.io".into(), "x.io".into()],
+            write: vec!["~/out".into(), "/tmp/b".into()],
+            unsandboxed: vec!["make deploy".into(), "".into()],
+        };
+        let c = Config::edit(&path, &SettingsEdit { sandbox: Some(sb.clone()), ..base.clone() }).unwrap();
+        assert_eq!(c.sandbox.mode, "all");
+        assert_eq!(c.sandbox.domains, vec!["*.example.org", "x.io"]);
+        assert_eq!(c.sandbox.write, vec!["~/out", "/tmp/b"]);
+        assert_eq!(c.sandbox.unsandboxed, vec!["make deploy"]);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("# top"));
+        assert_eq!(Config::load(&path).unwrap(), c);
+        // Bad fields change nothing.
+        let bad = |s: SandboxCfg| Config::edit(&path, &SettingsEdit { sandbox: Some(s), ..base.clone() }).unwrap_err();
+        assert!(bad(SandboxCfg { mode: "most".into(), ..sb.clone() }).contains("mode"));
+        assert!(bad(SandboxCfg { domains: vec!["https://x.org".into()], ..sb.clone() }).contains("not a host name"));
+        assert!(bad(SandboxCfg { domains: vec!["a.*.org".into()], ..sb.clone() }).contains("not a host name"));
+        assert!(bad(SandboxCfg { write: vec!["out".into()], ..sb.clone() }).contains("full path"));
+        assert_eq!(Config::load(&path).unwrap(), c);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
