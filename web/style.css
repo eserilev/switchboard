@@ -208,6 +208,8 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .sgroup > .btn { justify-self: start; }
 .scheck { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .scheck input { width: auto; }
+#ssandbox { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: 13px/1.4 var(--mono); padding: 6px 8px; justify-self: start; }
+.sgroup .swarn { color: var(--limit); }
 .sfile { color: var(--muted); font: 11px/1.4 var(--mono); word-break: break-all; }
 .lfoot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--panel-2); }
 .lerr { margin-right: auto; color: var(--error); font-size: 12px; }

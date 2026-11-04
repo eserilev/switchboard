@@ -62,6 +62,8 @@ pub struct PaneView {
     pub busy: bool,
     /// nvim has a buffer that is not saved (SPEC 28).
     pub modified: bool,
+    /// Bash runs in Claude Code's sandbox (SPEC 31).
+    pub sandboxed: bool,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -87,6 +89,8 @@ pub(crate) struct Start {
     pub rust: Option<bool>,
     /// Tool rules that run with no prompt, for the pane settings.
     pub allow: Vec<String>,
+    /// A review Ask pane: sandbox mode `review` covers it (SPEC 31).
+    pub ask: bool,
 }
 
 pub(crate) struct Pane {
@@ -103,6 +107,7 @@ pub(crate) struct Pane {
     pub dead: bool,
     pub busy: bool,
     pub modified: bool,
+    pub sandboxed: bool,
 }
 
 impl Pane {
@@ -460,7 +465,9 @@ impl Hub {
     fn pane_from(&self, row: PaneRow, tmux: Option<String>, pid: Option<u32>) -> Pane {
         let branch =
             repos::git(Path::new(&row.tree), &["branch", "--show-current"]).unwrap_or_default();
+        let sandboxed = row.kind == "claude" && self.sandbox_file_on(&row.id);
         Pane {
+            sandboxed,
             row,
             tmux,
             pid,
@@ -499,7 +506,13 @@ impl Hub {
             live,
             busy: p.busy,
             modified: p.modified,
+            sandboxed: p.sandboxed,
         }
+    }
+
+    /// True when the settings file of a pane turns the sandbox on (SPEC 31).
+    fn sandbox_file_on(&self, id: &str) -> bool {
+        crate::sandbox::file_on(&self.paths.settings_dir().join(format!("{id}.json")))
     }
 
     pub fn views(&self) -> Vec<PaneView> {
@@ -682,7 +695,17 @@ impl Hub {
         }
         let settings = self.paths.settings_dir().join(format!("{id}.json"));
         let rust = start.rust.unwrap_or_else(|| tree.join("Cargo.toml").exists());
-        std::fs::write(&settings, hooks::settings(&self.sb, rust, &start.allow).to_string()).map_err(e)?;
+        let config = self.config();
+        // A pane that starts again keeps its sandbox: a resumed Ask pane has no `ask`.
+        let sandboxed = config.sandbox.covers(start.ask) || crate::sandbox::file_on(&settings);
+        let pane = hooks::PaneSettings {
+            sb: &self.sb,
+            rust,
+            allow: &start.allow,
+            sandbox: sandboxed.then(|| crate::sandbox::block(&config.sandbox, tree)),
+        };
+        std::fs::write(&settings, hooks::settings(&pane).to_string()).map_err(e)?;
+        tracing::info!(target: "sb::hub", pane = id, sandboxed, "pane settings");
         env.extend(connections::env(
             &self.config(),
             connection.unwrap_or(connections::DEFAULT),
@@ -1178,9 +1201,11 @@ impl Hub {
                 l.1 = tid.clone();
             }
         }
+        let sandboxed = self.sandbox_file_on(id);
         self.with_pane(id, false, |p| {
             p.tmux = Some(tid);
             p.pid = pid;
+            p.sandboxed = sandboxed;
             p.row.connection = Some(connection.to_owned());
             p.row.lamp = Lamp::Idle.as_str().into();
             p.row.unseen = false;
@@ -1465,6 +1490,9 @@ impl Hub {
             "spec_clones": c.review.spec_clones,
             "web_domains": c.review.web_domains,
             "web_search": c.review.web_search,
+            "sandbox": c.sandbox,
+            // Linux needs these for the sandbox (SPEC 31).
+            "sandbox_missing": crate::sandbox::missing_tools(),
             "missing": missing,
             "config": self.paths.config.to_string_lossy(),
         })

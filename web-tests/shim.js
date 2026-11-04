@@ -7,11 +7,12 @@ const pane = (o) => Object.assign({ kind: "claude", repo: "lighthouse", tree: "/
 window.__data = {
   panes: [
     pane({ id: "p1", lamp: "turn", unseen: true, summary: "PR 1 rewritten. 48 tests pass.", tail: ["\x1b[32mtest result: ok\x1b[0m", "Done."], rss: 2.4 * 1073741824 }),
-    pane({ id: "p2", tree: "/c/lighthouse-il", branch: "il", lamp: "needs", unseen: true, summary: "Bash: cargo nextest", permit: { id: "p2-1", summary: "Bash: cargo nextest" } }),
+    pane({ id: "p2", tree: "/c/lighthouse-il", branch: "il", lamp: "needs", unseen: true, summary: "Bash: cargo nextest", permit: { id: "p2-1", summary: "Bash: cargo nextest" }, sandboxed: true }),
     pane({ id: "p3", kind: "nvim", lamp: "none", repo: "timeways", tree: "/c/timeways", branch: "master", session: null }),
   ],
   connections: { active: "a", list: [{ name: "a", kind: "claude", limit_until: null }, { name: "b", kind: "claude", limit_until: null }] },
-  settings: { leader: "ctrl+space", nvim: true, scan: ["~/code", "~/gone"], spec_clones: [], web_domains: ["github.com"], web_search: false, missing: ["~/gone"], config: "/home/me/.config/switchboard/config.toml" },
+  settings: { leader: "ctrl+space", nvim: true, scan: ["~/code", "~/gone"], spec_clones: [], web_domains: ["github.com"], web_search: false, missing: ["~/gone"],
+    sandbox: { mode: "review", domains: ["github.com", "*.githubusercontent.com"], write: [], unsandboxed: ["gh *"] }, sandbox_missing: ["socat"], config: "/home/me/.config/switchboard/config.toml" },
   repos: [
     { name: "lighthouse", path: "/c/lighthouse", branch: "unstable", dirty: true, worktrees: [{ path: "/c/lighthouse-il", branch: "il" }], last_used: 9, rust: true },
     { name: "timeways", path: "/c/timeways", branch: "master", dirty: false, worktrees: [], last_used: 5, rust: true },
@@ -172,6 +173,13 @@ window.__TAURI__ = {
           const bad = args.set.web_domains.find((x) => !/^[A-Za-z0-9.-]+$/.test(x.trim()));
           if (bad) throw `${bad} is not a host name. Write it like github.com, with no https:// and no path.`;
           const clean = (v) => [...new Set(v.map((x) => x.trim()).filter(Boolean))];
+          // The sandbox rules: a host may start with *., a folder must be a full path.
+          const sb = args.set.sandbox;
+          const badHost = sb?.domains.find((x) => !/^(\*\.)?[A-Za-z0-9.-]+$/.test(x.trim()));
+          if (badHost) throw `${badHost} is not a host name. Write it like github.com or *.github.com, with no https:// and no path.`;
+          const badDir = sb?.write.find((x) => x.trim() && !/^[~/]/.test(x.trim()));
+          if (badDir) throw `${badDir} is not a full path. Start it with / or ~/.`;
+          if (sb) d.settings.sandbox = { mode: sb.mode, domains: clean(sb.domains), write: clean(sb.write), unsandboxed: clean(sb.unsandboxed) };
           Object.assign(d.settings, { scan: clean(args.set.scan), spec_clones: clean(args.set.spec_clones), web_domains: clean(args.set.web_domains), web_search: args.set.web_search, leader: "server-key", missing: [] });
           return { ...d.settings };
         }

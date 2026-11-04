@@ -224,6 +224,8 @@ function meta(p) {
   if (p.branch) parts.push(p.branch);
   if (p.connection && S.conn.list.length > 1) parts.push(p.connection);
   if (p.rss) parts.push(`ra ${(p.rss / 1073741824).toFixed(1)} GB`);
+  // Bash of this agent runs in Claude Code's sandbox (SPEC 31).
+  if (p.sandboxed) parts.push("sandbox");
   return parts.join(" · ");
 }
 
@@ -941,12 +943,23 @@ const SET_LISTS = [
   ["spec_clones", "Spec clones", "Folders that the review agent reads first, such as a consensus-specs clone.", "~/code/consensus-specs"],
   ["web_domains", "Sites the review agent can fetch", "Host names only, such as github.com. Other sites are refused.", "github.com"],
 ];
-const SET = { draft: null, missing: new Set(), config: "" };
+// The lists of the sandbox part (SPEC 31). They show when the mode is not Off.
+const SET_SANDBOX_LISTS = [
+  ["sandbox_domains", "Sites that commands in the sandbox can reach", "Host names, such as github.com. *.example.com takes every host under example.com.", "crates.io"],
+  ["sandbox_write", "More folders that commands can write", "Full paths. The tree of the agent and its git folder can always be written.", "~/.cache/build"],
+  ["sandbox_unsandboxed", "Commands that run outside the sandbox", "Patterns like Bash rules, such as gh *. They ask as usual.", "docker *"],
+];
+const SANDBOX_MODES = [["off", "Off"], ["review", "Review panes"], ["all", "All agents"]];
+const SET = { draft: null, missing: new Set(), config: "", sandboxMissing: [] };
 
 async function openSettings() {
   const s = await invoke("settings").catch((e) => { toast(e); return null; });
   if (!s) return;
-  SET.draft = { scan: [...s.scan], spec_clones: [...s.spec_clones], web_domains: [...s.web_domains], web_search: !!s.web_search };
+  const sb = s.sandbox || { mode: "review", domains: [], write: [], unsandboxed: [] };
+  SET.draft = { scan: [...s.scan], spec_clones: [...s.spec_clones], web_domains: [...s.web_domains], web_search: !!s.web_search,
+    sandbox_mode: sb.mode, sandbox_domains: [...sb.domains], sandbox_write: [...sb.write], sandbox_unsandboxed: [...sb.unsandboxed] };
+  SET.hasSandbox = !!s.sandbox;
+  SET.sandboxMissing = s.sandbox_missing || [];
   SET.missing = new Set(s.missing || []);
   SET.config = s.config || "";
   $("#serr").textContent = "";
@@ -966,7 +979,27 @@ function drawSettings() {
     `<div class="srow"><input data-list="${key}" data-i="${i}" value="${esc(v)}" placeholder="${esc(eg)}" spellcheck="false" autocomplete="off" aria-label="${esc(title)} ${i + 1}">${SET.missing.has(v) ? '<span class="miss">not found</span>' : ""}<button class="btn small" type="button" data-del="${key}" data-i="${i}" aria-label="Remove">×</button></div>`).join("")}<button class="btn small" type="button" data-add="${key}">Add</button></div>`;
   $("#sbody").innerHTML = SET_LISTS.map(group).join("") +
     `<label class="scheck"><input type="checkbox" id="swebsearch"${d.web_search ? " checked" : ""}> Let the review agent search the web</label>` +
+    sandboxSettings(d, group) +
     `<div class="sfile">Saved in ${esc(SET.config)}. A change works at once, with no restart.</div>`;
+}
+
+// The sandbox part of Settings (SPEC 31): the mode, a warning when Linux lacks
+// the tools, and the lists when the mode is not Off.
+function sandboxSettings(d, group) {
+  if (!SET.hasSandbox) return "";
+  const opts = SANDBOX_MODES.map(([v, t]) => `<option value="${v}"${d.sandbox_mode === v ? " selected" : ""}>${t}</option>`).join("");
+  const warn = SET.sandboxMissing.length && d.sandbox_mode !== "off"
+    ? `<p class="swarn" id="ssandboxwarn">Not on PATH: ${esc(SET.sandboxMissing.join(", "))}. Install bubblewrap and socat, or a sandboxed agent stops at start.</p>` : "";
+  return `<div class="sgroup"><h4>Sandbox</h4><p>Bash of these agents runs in Claude Code's sandbox: it writes only its tree, and reaches only the sites below. A new agent gets the change.</p>` +
+    `<select id="ssandbox" aria-label="Sandbox mode">${opts}</select>${warn}</div>` +
+    (d.sandbox_mode === "off" ? "" : SET_SANDBOX_LISTS.map(group).join(""));
+}
+
+// The fields that Save sends: the sandbox lists go in one table.
+function settingsToSend(d) {
+  const out = { scan: d.scan, spec_clones: d.spec_clones, web_domains: d.web_domains, web_search: d.web_search };
+  if (SET.hasSandbox) out.sandbox = { mode: d.sandbox_mode, domains: d.sandbox_domains, write: d.sandbox_write, unsandboxed: d.sandbox_unsandboxed };
+  return out;
 }
 
 $("#gear").addEventListener("click", openSettings);
@@ -978,7 +1011,13 @@ $("#sbody").addEventListener("input", (e) => {
   if (t.dataset.list) SET.draft[t.dataset.list][+t.dataset.i] = t.value;
   else if (t.id === "swebsearch") SET.draft.web_search = t.checked;
 });
-$("#sbody").addEventListener("change", (e) => { if (e.target.id === "swebsearch") SET.draft.web_search = e.target.checked; });
+$("#sbody").addEventListener("change", (e) => {
+  if (e.target.id === "swebsearch") SET.draft.web_search = e.target.checked;
+  else if (e.target.id === "ssandbox") {
+    SET.draft.sandbox_mode = e.target.value;
+    drawSettings();
+  }
+});
 $("#sbody").addEventListener("click", (e) => {
   const add = e.target.closest("[data-add]"), del = e.target.closest("[data-del]");
   if (add) {
@@ -995,7 +1034,7 @@ $("#ssave").addEventListener("click", async () => {
   if (!SET.draft) return;
   $("#serr").textContent = "";
   try {
-    const s = await invoke("settings_save", { set: SET.draft });
+    const s = await invoke("settings_save", { set: settingsToSend(SET.draft) });
     // The leader comes from the config of this computer (SPEC 29.1): keep it.
     S.settings = { ...S.settings, ...s, leader: S.settings?.leader ?? s.leader };
     closeSettings();

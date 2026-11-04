@@ -2613,6 +2613,8 @@ impl Hub {
                 connection,
                 // It answers questions; rust-analyzer would take 1 to 4 GB for each review.
                 rust: Some(false),
+                // The PR can hold instructions: sandbox mode `review` covers this pane (SPEC 31).
+                ask: true,
             },
         )?;
         Ok(Some(view.id))
