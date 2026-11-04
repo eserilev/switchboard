@@ -201,6 +201,21 @@ fn parts_stream_at_their_own_size() {
         wait_for("modified", 8, || hub.views().iter().any(|p| p.id == nv && p.modified));
         hub.input(&nv, b":bd!\r").unwrap();
         wait_for("saved again", 8, || hub.views().iter().any(|p| p.id == nv && !p.modified));
+
+        // An nvim at "Press ENTER" does not answer, but it still runs: an open
+        // keeps it, with its unsaved buffer, and the file opens after Enter.
+        let file = repo.join("open-me.txt");
+        std::fs::write(&file, "1\n2\n3\n").unwrap();
+        hub.input(&nv, b":enew\rihello\x1b:!true\r").unwrap();
+        wait_for("the prompt", 8, || events.text_of(&nv).contains("Press ENTER"));
+        let t = Instant::now();
+        let again = hub.nvim_open(&repo, Some((&file.to_string_lossy(), 2))).unwrap();
+        assert_eq!(again, nv, "a new nvim took the place of the one at the prompt");
+        assert!(t.elapsed() >= Duration::from_millis(2500), "nvim answered at its prompt");
+        assert!(hub.views().iter().any(|p| p.id == nv));
+        hub.input(&nv, b"\r").unwrap();
+        wait_for("the file opens", 20, || events.text_of(&nv).contains("open-me.txt"));
+        wait_for("the unsaved buffer stays", 8, || hub.views().iter().any(|p| p.id == nv && p.modified));
         hub.close(&nv).unwrap();
     }
 

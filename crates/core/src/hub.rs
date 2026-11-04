@@ -1331,11 +1331,25 @@ impl Hub {
                     && p.tmux.is_some()
                     && p.lamp() != Lamp::Ended
             })
-            .map(|p| p.row.id.clone());
-        if let Some(id) = existing {
+            .map(|p| (p.row.id.clone(), p.tmux.clone(), p.dead));
+        if let Some((id, tid, dead)) = existing {
             if nvim::alive(&sock) {
                 if let Some((f, l)) = file {
                     nvim::expr(&sock, &nvim::edit_expr(f, l))?;
+                }
+                return Ok(id);
+            }
+            // No answer is not a dead nvim: one that is busy or waits at "Press
+            // ENTER" never answers. Its buffers may hold unsaved work, so it stays.
+            // The window shows it, and the file opens once it answers again.
+            let runs = !dead
+                && tid
+                    .as_deref()
+                    .is_some_and(|t| self.tmux.display(t, "#{pane_dead}").is_ok_and(|d| d == "0"));
+            if runs {
+                tracing::warn!(target: "sb::hub", pane = %id, "nvim does not answer; it may wait at a prompt");
+                if let Some((f, l)) = file {
+                    nvim::when_ready(sock, nvim::edit_expr(f, l), Duration::from_secs(60), "open file");
                 }
                 return Ok(id);
             }

@@ -2534,19 +2534,9 @@ impl Hub {
         std::fs::write(&lua, nvim::DIFF_LUA).map_err(e)?;
         let sock = nvim::socket(&self.paths.nvim_dir(), &tree);
         let expr = nvim::diff_expr(&lua, &tree, &base, path, line.max(1));
-        // A new nvim needs a moment before it listens. The pane shows at once.
-        std::thread::spawn(move || {
-            for _ in 0..50 {
-                if nvim::alive(&sock) {
-                    if let Err(err) = nvim::expr(&sock, &expr) {
-                        tracing::warn!(target: "sb::nvim", %err, "review diff failed");
-                    }
-                    return;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            tracing::warn!(target: "sb::nvim", "nvim did not start in 5 s: no review diff");
-        });
+        // A new nvim needs a moment before it listens, and one at a "Press ENTER"
+        // prompt answers after you press Enter. The pane shows at once.
+        nvim::when_ready(sock, expr, std::time::Duration::from_secs(60), "review diff");
         Ok(pane)
     }
 

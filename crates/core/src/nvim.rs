@@ -52,6 +52,25 @@ pub fn alive(sock: &Path) -> bool {
     sock.exists() && expr(sock, "1").map(|r| r == "1").unwrap_or(false)
 }
 
+/// Runs `e` in a thread once the nvim on `sock` answers. A new nvim needs a
+/// moment before it listens, and an nvim at a "Press ENTER" prompt answers only
+/// after you press Enter. Gives up after `wait`. `what` names the call in the log.
+pub fn when_ready(sock: PathBuf, e: String, wait: Duration, what: &'static str) {
+    std::thread::spawn(move || {
+        let end = Instant::now() + wait;
+        while Instant::now() < end {
+            if alive(&sock) {
+                if let Err(err) = expr(&sock, &e) {
+                    tracing::warn!(target: "sb::nvim", %err, what, "nvim call failed");
+                }
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        tracing::warn!(target: "sb::nvim", what, "nvim did not answer in time: call dropped");
+    });
+}
+
 /// The argv for a new nvim pane.
 pub fn argv(sock: &Path, file: Option<(&str, u32)>) -> Vec<String> {
     let mut a = vec![
@@ -62,6 +81,8 @@ pub fn argv(sock: &Path, file: Option<(&str, u32)>) -> Vec<String> {
     match file {
         Some((f, line)) => {
             a.push(format!("+{line}"));
+            // `--`: a file name that starts with `-` or `+` is still a file.
+            a.push("--".into());
             a.push(f.to_owned());
         }
         None => a.push(".".into()),
@@ -117,6 +138,16 @@ mod tests {
         let d = Path::new("/run/sb");
         assert_eq!(socket(d, Path::new("/a")), socket(d, Path::new("/a")));
         assert_ne!(socket(d, Path::new("/a")), socket(d, Path::new("/b")));
+    }
+
+    #[test]
+    fn argv_ends_options_before_the_file() {
+        let s = Path::new("/run/n.sock");
+        assert_eq!(
+            argv(s, Some(("--cmd=evil", 3))),
+            ["nvim", "--listen", "/run/n.sock", "+3", "--", "--cmd=evil"]
+        );
+        assert_eq!(argv(s, None), ["nvim", "--listen", "/run/n.sock", "."]);
     }
 
     #[test]
