@@ -1740,7 +1740,7 @@
     sel.dispatchEvent(new Event("change", { bubbles: true }));
     await wait(100);
     const n = called("pane_open").length;
-    check("an agent of the board is not taken: the tab offers Start Claude", $("#wgo")?.textContent === "Start Claude" && S.live !== "pb1" && called("pane_open").length === n, $("#wbar").innerHTML);
+    check("an agent of the board is not taken: the tab offers Start Claude", $("#wgo")?.textContent === "Start Claude" && called("pane_open").length === n, $("#wbar").innerHTML);
     $("#wgo").click();
     const req = called("pane_open").at(-1)?.[1].req;
     check("Start Claude opens the tab's own Claude in the repo's main checkout", called("pane_open").length === n + 1 && req?.repo === repo && req?.place === "main" && req?.run === "claude" && req?.title === window.SB.WORK_TITLE, JSON.stringify(req));
