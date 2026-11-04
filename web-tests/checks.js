@@ -233,6 +233,11 @@
     check("the place is saved for a restart", JSON.parse(localStorage.getItem("sb.review.place.r1") || "{}").cur === 1);
   }
   check("guide text renders markdown", !!$("#rguide .what strong") && !!$("#rguide .check code"));
+  {
+    // A remote image would load at once and could carry the code out in its URL.
+    const w = $("#rguide .what");
+    check("guide markdown shows an image as text and keeps only http(s) links", !!w && !w.querySelector("img") && w.textContent.includes("leak") && !w.querySelector('a[href^="javascript"]') && !!w.querySelector('a[href="https://example.com/spec"]'), w?.innerHTML);
+  }
   // Why, Claude's answers to the checks, and Claude's take (SPEC 11.12).
   check("the step shows why it matters and why it is a step", $("#rguide .why").textContent.includes("Why it matters") && $("#rguide .why").textContent.includes("wrong inclusion list") && $("#rguide .why").textContent.includes("Why a separate step"));
   check("each check item shows Claude's answer", [...$$("#rguide .check .ans")].map((x) => x.textContent).join("|") === "Claude: matches the spec|Claude: see the note on line 11");
