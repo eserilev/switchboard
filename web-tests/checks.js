@@ -4,7 +4,15 @@
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => [...document.querySelectorAll(s)];
   const results = [];
-  const check = (name, ok, info) => results.push({ name, ok: !!ok, info: ok ? undefined : info });
+  // The results so far stay in the page, with a last line that says the checks did
+  // not finish: a check that hangs past the time budget still shows where.
+  const out = document.createElement("pre");
+  out.id = "__results";
+  out.hidden = true;
+  document.body.appendChild(out);
+  const show = (end) => { out.textContent = JSON.stringify(end ? results : [...results, { name: `the checks did not finish (last: ${results.at(-1)?.name ?? "none"})`, ok: false }]); };
+  const check = (name, ok, info) => { results.push({ name, ok: !!ok, info: ok ? undefined : info }); show(false); };
+  show(false);
   const called = (cmd) => window.__calls.filter((c) => c[0] === cmd);
   const local_mode = () => $("#rsteps .fileitem, #rsteps [data-f]") ? "files" : "guide";
   const key = (k, o = {}) => window.dispatchEvent(new KeyboardEvent("keydown", { key: k, code: o.code || (k === " " ? "Space" : "Key" + k.toUpperCase()), ctrlKey: !!o.ctrl, shiftKey: !!o.shift, bubbles: true }));
@@ -1944,13 +1952,10 @@
     window.SB.collapse();
   }
   check("no script errors", window.__errors.length === 0, window.__errors);
-  const pre = document.createElement("pre");
-  pre.id = "__results";
-  pre.textContent = JSON.stringify(results);
-  document.body.appendChild(pre);
+  show(true);
 })().catch((e) => {
-  const pre = document.createElement("pre");
-  pre.id = "__results";
-  pre.textContent = JSON.stringify([{ name: "checks crashed", ok: false, info: String(e && e.stack || e) }]);
-  document.body.appendChild(pre);
+  const out = document.getElementById("__results");
+  const done = out ? JSON.parse(out.textContent).filter((r) => !r.name.startsWith("the checks did not finish")) : [];
+  const pre = out || document.body.appendChild(Object.assign(document.createElement("pre"), { id: "__results", hidden: true }));
+  pre.textContent = JSON.stringify([...done, { name: "checks crashed", ok: false, info: String(e && e.stack || e) }]);
 });

@@ -22,7 +22,7 @@ TZ="${SB_TEST_TZ:-America/New_York}" "$browser" --headless --disable-gpu --no-sa
 python3 - "$work/dom.html" <<'PY'
 import html, json, re, sys
 dom = open(sys.argv[1]).read()
-m = re.search(r'<pre id="__results">(.*?)</pre>', dom, re.S)
+m = re.search(r'<pre id="__results"[^>]*>(.*?)</pre>', dom, re.S)
 if not m:
     print("FAIL: no results in the page"); sys.exit(1)
 results = json.loads(html.unescape(m.group(1)))
