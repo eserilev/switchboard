@@ -326,7 +326,14 @@ fn open(args: &[String]) -> i32 {
             p => path = Some(p.to_owned()),
         }
     }
-    let path = std::fs::canonicalize(path.unwrap_or_else(|| ".".into())).unwrap_or_default();
+    let path = path.unwrap_or_else(|| ".".into());
+    let path = match std::fs::canonicalize(&path) {
+        Ok(p) if p.is_dir() => p,
+        _ => {
+            eprintln!("sb open: no such folder: {path}");
+            return 1;
+        }
+    };
     let req = Request::Open {
         path: path.to_string_lossy().into_owned(),
         worktree,

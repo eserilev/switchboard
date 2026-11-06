@@ -281,7 +281,7 @@ If a closed round of the PR exists and no review of it is open, the launcher off
 
 ### 9.3 `sb open`
 
-- `sb open .` opens the current folder as a Claude pane.
+- `sb open .` opens the current folder as a Claude pane. A path that is not a folder gives "no such folder" and exit code 1.
 - `sb open <path> -w <branch>` opens a new worktree.
 - `sb open <path> --nvim` and `--shell` open the other pane kinds.
 - If the app is not running, `sb open` starts it.
