@@ -10,6 +10,8 @@ set -euo pipefail
 
 REPO_SLUG=eserilev/switchboard
 REPO_URL="https://github.com/$REPO_SLUG"
+# The bundle id of the macOS app (crates/app/tauri.conf.json).
+BUNDLE_ID=dev.switchboard.app
 
 usage() {
   cat <<'EOF'
@@ -64,6 +66,9 @@ main() {
   # The files that this script installed, one path on each line. Install and
   # uninstall only replace or remove a file in this list, or a new file.
   manifest="$data_home/switchboard/installed-files"
+  # The check sum of each installed file, so a file that another tool put in its
+  # place since is not ours any more. One "CRC SIZE PATH" on each line.
+  sums="$data_home/switchboard/installed-sums"
 
   if [ "$uninstall" = 1 ]; then
     do_uninstall
@@ -264,10 +269,70 @@ check_dependencies() {
   fi
 }
 
-# True when we can write `path`: it does not exist, or this script put it there.
+# True when we can write `path`: it does not exist, or this script put it there
+# and it is still the file that the script put there.
 ours() {
   [ ! -e "$1" ] && [ ! -L "$1" ] && return 0
-  [ -f "$manifest" ] && grep -qxF "$1" "$manifest"
+  [ -f "$manifest" ] && grep -qxF "$1" "$manifest" && still_ours "$1"
+}
+
+# The check sum and size of a file, as "CRC SIZE".
+sum_of() {
+  local crc size rest
+  read -r crc size rest < <(cksum < "$1")
+  printf '%s %s\n' "$crc" "$size"
+}
+
+# The sum that the install recorded for a path, or nothing.
+recorded_sum() {
+  local crc size p
+  [ -f "$sums" ] || return 0
+  while read -r crc size p; do
+    if [ "$p" = "$1" ]; then printf '%s %s\n' "$crc" "$size"; return 0; fi
+  done < "$sums"
+}
+
+# True when a path of the list is still what the script put there: a link into
+# the app, the app itself, or a file with the sum the install recorded. A file
+# from an install before the sums has none: the list alone counts for it.
+still_ours() {
+  local f=$1 s
+  if [ -L "$f" ]; then
+    case "$(readlink "$f")" in "$mac_app"/*) return 0 ;; esac
+    return 1
+  fi
+  if [ -d "$f" ]; then
+    [ "$f" = "$mac_app" ] && grep -q "<string>$BUNDLE_ID</string>" "$f/Contents/Info.plist" 2>/dev/null
+    return
+  fi
+  s=$(recorded_sum "$f")
+  [ -z "$s" ] || [ "$s" = "$(sum_of "$f")" ]
+}
+
+# The sums file again: the old lines of paths not installed now, then the sums
+# of the files installed now.
+write_sums() {
+  local crc size p f keep new
+  new=$(mktemp)
+  if [ -f "$sums" ]; then
+    while read -r crc size p; do
+      keep=1
+      for f in "${installed[@]+"${installed[@]}"}"; do [ "$f" = "$p" ] && keep=0; done
+      [ "$keep" = 1 ] && printf '%s %s %s\n' "$crc" "$size" "$p"
+    done < "$sums" > "$new"
+  fi
+  for f in "${installed[@]+"${installed[@]}"}"; do
+    if [ -f "$f" ] && [ ! -L "$f" ]; then printf '%s %s\n' "$(sum_of "$f")" "$f" >> "$new"; fi
+  done
+  mv "$new" "$sums"
+}
+
+# A TOML string: in double quotes, with \ and " escaped.
+toml_str() {
+  local v=$1
+  v=${v//\\/\\\\}
+  v=${v//\"/\\\"}
+  printf '"%s"' "$v"
 }
 
 # put <from> <to> <mode>: installs a file, or a link with mode "link".
@@ -334,6 +399,7 @@ do_install() {
   mkdir -p "$(dirname "$manifest")"
   { [ -f "$manifest" ] && cat "$manifest"; printf '%s\n' "${installed[@]+"${installed[@]}"}"; } | sort -u > "$manifest.new"
   mv "$manifest.new" "$manifest"
+  write_sums
   case ":$PATH:" in
     *":$bin_dir:"*) ;;
     *) warn "$bin_dir is not on your PATH. Add it to use 'sb' in a terminal." ;;
@@ -348,9 +414,14 @@ do_uninstall() {
   local f
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    rm -rf "$f"
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    if still_ours "$f"; then
+      rm -rf "$f"
+    else
+      warn "$f changed since the install (another tool put a file there?), so it stays."
+    fi
   done < "$manifest"
-  rm -f "$manifest"
+  rm -f "$manifest" "$sums"
   say "Removed Switchboard."
   echo "Kept: $config_home/switchboard (config), $data_home/switchboard (store), ~/.switchboard (state)."
   if [ -d "$data_home/switchboard/src" ]; then
@@ -371,14 +442,28 @@ config_path() {
 # The folders that hold git repos, from a search of the home folder 4 levels
 # deep. A repo right in the home folder is listed itself: a scan of the whole
 # home folder would read Library and the rest.
+# The home folder itself is never listed (a dotfiles repo at ~/.git), nor any
+# folder above it, nor a repo inside another repo (a submodule or a vendored copy).
 find_code_dirs() {
-  local g repo parent
-  find "$HOME" -maxdepth 4 \( -name .git -prune -print \) -o \( -type d \( -name '.*' -o -name Library \
-    -o -name Applications -o -name Pictures -o -name Music -o -name Movies -o -name Downloads \
-    -o -name node_modules -o -name target \) -prune \) 2>/dev/null | while read -r g; do
+  local g repo parent o nested repos=()
+  while IFS= read -r g; do
     repo=$(dirname "$g")
+    [ "$repo" = "$HOME" ] && continue
+    repos+=("$repo")
+  done < <(find "$HOME" -maxdepth 4 \( -name .git -prune -print \) -o \( -type d \( -name '.*' -o -name Library \
+    -o -name Applications -o -name Pictures -o -name Music -o -name Movies -o -name Downloads \
+    -o -name node_modules -o -name target \) -prune \) 2>/dev/null)
+  for repo in "${repos[@]+"${repos[@]}"}"; do
+    nested=0
+    for o in "${repos[@]}"; do
+      case "$repo" in "$o"/*) nested=1; break ;; esac
+    done
+    [ "$nested" = 1 ] && continue
     parent=$(dirname "$repo")
-    if [ "$parent" = "$HOME" ]; then echo "$repo"; else echo "$parent"; fi
+    case "$parent" in
+      "$HOME") echo "$repo" ;;
+      "$HOME"/*) echo "$parent" ;;
+    esac
   done | sort -u
 }
 
@@ -387,14 +472,33 @@ write_config() {
   local d real r dup
   if [ -f "$config" ]; then
     # --scan with a config already there: add the folders to its scan line.
+    local q line tmp done_ inner
     for d in "${scan_dirs[@]+"${scan_dirs[@]}"}"; do
       r=$(config_path "$d")
-      if grep -qF "\"$r\"" "$config"; then continue; fi
+      q=$(toml_str "$r")
+      if grep -qF "$q" "$config"; then continue; fi
       if grep -qE '^scan = \[.*\]$' "$config"; then
-        sed -i.bak -E "s|^scan = \[(.*)\]$|scan = [\1, \"$r\"]|; s|^scan = \[, |scan = [|" "$config" && rm -f "$config.bak"
+        # Line by line in bash, not sed: the path goes in as text, so & | \ in
+        # it stay as they are. `cat >` keeps a symlinked config and its mode.
+        tmp=$(mktemp)
+        done_=0
+        while IFS= read -r line || [ -n "$line" ]; do
+          if [ "$done_" = 0 ] && [ "${line#"scan = ["}" != "$line" ] && [ "${line%"]"}" != "$line" ]; then
+            inner=${line#"scan = ["}
+            inner=${inner%"]"}
+            case "$inner" in
+              *[![:space:]]*) line="scan = [$inner, $q]" ;;
+              *) line="scan = [$q]" ;;
+            esac
+            done_=1
+          fi
+          printf '%s\n' "$line"
+        done < "$config" > "$tmp"
+        cat "$tmp" > "$config"
+        rm -f "$tmp"
         say "Added $r to scan in $config"
       else
-        warn "Add \"$r\" to scan in $config yourself: the scan line has a form this script does not change."
+        warn "Add $q to scan in $config yourself: the scan line has a form this script does not change."
       fi
     done
     return 0
@@ -417,7 +521,7 @@ write_config() {
     for r in "${seen[@]+"${seen[@]}"}"; do [ "$r" = "$real" ] && dup=1; done
     [ "$dup" = 1 ] && continue
     seen+=("$real")
-    roots+=("\"$(config_path "$real")\"")
+    roots+=("$(toml_str "$(config_path "$real")")")
   done
   local leader='ctrl+space'
   # On macOS ctrl+space often switches the input language.

@@ -18,7 +18,7 @@ The script:
 4. Writes a starter config, if you have no config yet. `scan` gets the folders you give with `--scan`. Without them, it gets the usual code folders that exist (`~/Documents/Code`, `~/code`, `~/src`, `~/dev`, `~/projects`, `~/workspace`). With none of those, the script looks for git repos in your home folder, 4 levels deep, and lists the folders that hold them.
 5. Tells you the steps that are left, for example `gh auth login`.
 
-It does not change your shell files or your Claude Code settings. It keeps a list of the files it installs (`~/.local/share/switchboard/installed-files`), and it never replaces a file that is not on the list. The whole script runs only after the download is complete.
+It does not change your shell files or your Claude Code settings. It keeps a list of the files it installs (`~/.local/share/switchboard/installed-files`) with a check sum of each (`installed-sums`), and it never replaces or removes a file that is not on the list or that changed since the install. The whole script runs only after the download is complete.
 
 To install the missing tools too:
 
