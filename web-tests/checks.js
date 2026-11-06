@@ -115,7 +115,9 @@
       window.dispatchEvent(new Event("resize"));
       // The fit runs 60 ms later, and xterm repaints a moment after it.
       const fitted = () => t.rows * cell <= h - 6 && (t.rows + 1) * cell > h - 6;
-      const bottom = () => $("#term .xterm-screen").getBoundingClientRect().bottom, edge = () => $("#term").getBoundingClientRect().bottom;
+      // Where the last row ends: the screen's top plus the rows. Headless Chrome on
+      // newer runners can leave the painted screen at its old size for a while.
+      const bottom = () => $("#term .xterm-screen").getBoundingClientRect().top + t.rows * cell, edge = () => $("#term").getBoundingClientRect().bottom;
       await wait(100);
       for (let i = 0; i < 15 && !(fitted() && bottom() <= edge() + 0.5); i++) await wait(40);
       if (!fitted() || bottom() > edge() + 0.5) cut.push({ h, rows: t.rows, bottom: bottom(), edge: edge() });
