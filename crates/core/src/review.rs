@@ -266,7 +266,7 @@ pub fn fetch_refs(repo_dir: &Path, remote: &str, pr: &PrInfo) -> Result<(String,
         oid
     };
     // The branch is for you, to find the PR in the clone. Nothing here reads it.
-    git(repo_dir, &["update-ref", &format!("refs/heads/{branch}"), &head])?;
+    point_pr_branch(repo_dir, &branch, &head);
     let base_tip = if have(&pr.base_ref_oid) {
         tracing::info!(target: "sb::review", base = %pr.base_ref_oid, "PR base is already local");
         pr.base_ref_oid.clone()
@@ -279,6 +279,35 @@ pub fn fetch_refs(repo_dir: &Path, remote: &str, pr: &PrInfo) -> Result<(String,
     };
     let base = git(repo_dir, &["merge-base", &base_tip, &head])?;
     Ok((head, base))
+}
+
+/// Points the branch `branch` at `head`, but never moves work of yours: it moves only
+/// when no worktree has it checked out and its tip is a head that a review pinned
+/// (`pin`), so it holds no commit of yours. The move names the old tip, so a commit
+/// that lands in between stops it. A branch that stays only logs: nothing reads it.
+pub fn point_pr_branch(repo_dir: &Path, branch: &str, head: &str) {
+    let full = format!("refs/heads/{branch}");
+    let tip = git(repo_dir, &["rev-parse", "--verify", "-q", &format!("{full}^{{commit}}")]).ok();
+    let why = match tip.as_deref() {
+        Some(t) if t == head => return,
+        // An empty old value: the branch must still not exist.
+        None => git(repo_dir, &["update-ref", &full, head, ""]).err(),
+        Some(t) => {
+            let list = git(repo_dir, &["worktree", "list", "--porcelain"]).unwrap_or_default();
+            let pinned = git(repo_dir, &["for-each-ref", "--format=%(refname)", &format!("--points-at={t}"), "refs/switchboard/"])
+                .unwrap_or_default();
+            if list.lines().any(|l| l == format!("branch {full}")) {
+                Some("it is checked out".to_owned())
+            } else if pinned.trim().is_empty() {
+                Some("its tip is not a head that a review pinned".to_owned())
+            } else {
+                git(repo_dir, &["update-ref", &full, head, t]).err()
+            }
+        }
+    };
+    if let Some(why) = why {
+        tracing::info!(target: "sb::review", %branch, %head, %why, "the PR branch stays where it is");
+    }
 }
 
 /// Fetches `src` of `remote` and returns its commit. The fetch goes to a ref of its
@@ -437,7 +466,8 @@ pub fn remove_tree(main: &Path, tree: &Path, force: bool) -> Result<(), String> 
 }
 
 /// The prompt for the guide session.
-pub fn prompt(template: &str, pr: &PrInfo, head: &str, specs: &[String], web: &[String]) -> String {
+/// `base` is the merge base that the checker uses: the agent diffs against it.
+pub fn prompt(template: &str, pr: &PrInfo, head: &str, base: &str, specs: &[String], web: &[String]) -> String {
     let files: Vec<String> = pr
         .files
         .iter()
@@ -464,6 +494,7 @@ pub fn prompt(template: &str, pr: &PrInfo, head: &str, specs: &[String], web: &[
         .replace("{{number}}", &pr.number.to_string())
         .replace("{{title}}", &pr.title)
         .replace("{{head}}", head)
+        .replace("{{base}}", base)
         .replace("{{base_ref}}", &pr.base_ref_name)
         .replace("{{files}}", &files.join("\n"))
         .replace("{{body}}", pr.body.trim())
@@ -820,10 +851,19 @@ pub fn snap_ref(review: &str, name: &str) -> String {
 
 /// Deletes every snapshot ref of a review. Worktrees share one ref store, so this
 /// works from any folder of the repo.
+/// A failure only logs: with the folder gone there is no repo to clean.
 pub fn drop_snap_refs(tree: &Path, review: &str) {
-    let refs = git(tree, &["for-each-ref", "--format=%(refname)", &format!("refs/sb/review/{review}/")]).unwrap_or_default();
+    let refs = match git(tree, &["for-each-ref", "--format=%(refname)", &format!("refs/sb/review/{review}/")]) {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::warn!(target: "sb::review", review, tree = %tree.display(), %err, "the snapshot refs stay: git cannot read the folder");
+            return;
+        }
+    };
     for r in refs.lines().filter(|r| !r.is_empty()) {
-        let _ = git(tree, &["update-ref", "-d", r]);
+        if let Err(err) = git(tree, &["update-ref", "-d", r]) {
+            tracing::warn!(target: "sb::review", review, %r, %err, "a snapshot ref stays");
+        }
     }
 }
 
@@ -871,7 +911,7 @@ pub fn args(run: &Run) -> Vec<String> {
             "--verbose",
             "--include-partial-messages",
             "--permission-mode",
-            "default",
+            "manual",
             "--setting-sources",
             SETTING_SOURCES,
         ]
@@ -1507,6 +1547,8 @@ mod tests {
         assert!(!s.contains("WebFetch"));
         assert!(s.contains("--verbose"));
         assert_eq!(&a[..2], ["-p", "q"]);
+        // `default` is a hidden old name; Claude Code lists `manual`.
+        assert!(s.contains("--permission-mode manual"));
         // The PR's own settings and MCP servers never load.
         assert!(s.contains("--setting-sources user "));
         assert_eq!(a.last().unwrap(), "--strict-mcp-config");
@@ -1556,10 +1598,13 @@ mod tests {
                 deletions: 1,
             }],
         };
-        let p = prompt(DEFAULT_PROMPT, &pr, "abc123", &["~/specs".into()], &["eips.ethereum.org".into()]);
+        let p = prompt(DEFAULT_PROMPT, &pr, "abc123", "def456", &["~/specs".into()], &["eips.ethereum.org".into()]);
         assert!(!p.contains("{{"), "unfilled field in:\n{p}");
         assert!(p.contains("- eips.ethereum.org"));
-        let none = prompt(DEFAULT_PROMPT, &pr, "abc123", &[], &[]);
+        // The agent diffs against the base the checker uses, not a branch that can be old.
+        assert!(p.contains(r#"["-U0", "def456", "HEAD"]"#), "{p}");
+        assert!(!p.contains("merge-base HEAD"), "{p}");
+        let none = prompt(DEFAULT_PROMPT, &pr, "abc123", "def456", &[], &[]);
         assert!(none.contains("Sites you can fetch:\n(none)"));
         assert!(p.contains("a.rs (+3 -1)") && p.contains("abc123") && p.contains("~/specs"));
         assert!(p.contains("guide_set_steps"));
@@ -1602,6 +1647,43 @@ mod tests {
             .unwrap_err()
             .contains("twice"));
         assert!(validate(&json!({"steps":[]}), &dir, &head, &head).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_pr_branch_never_moves_your_work() {
+        let dir = std::env::temp_dir().join(format!("sb-prbranch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let commit = |d: &Path, m: &str| {
+            git(d, &["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", m]).unwrap();
+            git(d, &["rev-parse", "HEAD"]).unwrap()
+        };
+        git(&dir, &["init", "-q", "-b", "main"]).unwrap();
+        let h1 = commit(&dir, "h1");
+        let h2 = commit(&dir, "h2");
+        let h3 = commit(&dir, "h3");
+        let tip = || git(&dir, &["rev-parse", "refs/heads/sb-pr-7"]).unwrap();
+        // No branch: it is made.
+        point_pr_branch(&dir, "sb-pr-7", &h1);
+        assert_eq!(tip(), h1);
+        // A tip that no review pinned can be a commit of yours: it stays.
+        point_pr_branch(&dir, "sb-pr-7", &h2);
+        assert_eq!(tip(), h1);
+        // A pinned tip moves to the new head.
+        pin(&dir, "r1", &h1, "").unwrap();
+        point_pr_branch(&dir, "sb-pr-7", &h2);
+        assert_eq!(tip(), h2);
+        // You check the branch out and commit on it: it stays, even at a pinned tip.
+        pin(&dir, "r2", &h2, "").unwrap();
+        let wt = dir.join("wt");
+        git(&dir, &["worktree", "add", "-q", &wt.to_string_lossy(), "sb-pr-7"]).unwrap();
+        point_pr_branch(&dir, "sb-pr-7", &h3);
+        assert_eq!(tip(), h2, "a checked-out branch stays");
+        let mine = commit(&wt, "mine");
+        git(&wt, &["checkout", "-q", "--detach"]).unwrap();
+        point_pr_branch(&dir, "sb-pr-7", &h3);
+        assert_eq!(tip(), mine, "your commit stays");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -185,12 +185,52 @@ fn review_local_commits_send_to_the_agent_and_keep_its_worktree() {
     let files: Vec<String> = hub.review_files(&id).unwrap().into_iter().map(|f| f.path).collect();
     assert_eq!(files, vec!["a.rs", "b.rs"], "only the agent's commits");
 
+    // A range click during a load changes nothing and says so (the load is claimed
+    // before review_update returns).
+    hub.review_update(&id).unwrap();
+    let err = hub.review_range(&id, "all").unwrap_err();
+    assert!(err.contains("still loading"), "{err}");
+    assert!(hub.review_mark_reviewed(&id).unwrap_err().contains("still loading"));
+    assert_eq!(hub.review_view(&id).unwrap().range, "new");
+    wait_for("the refresh loads", || hub.review_view(&id).map(|v| v.status == "ready").unwrap_or(false));
+    // All survives a restart (SPEC 11.14).
+    hub.review_range(&id, "all").unwrap();
+    wait_for("All loads", || hub.review_view(&id).map(|v| v.status == "ready").unwrap_or(false));
+    hub.debug_reload_reviews();
+    assert_eq!(hub.review_view(&id).unwrap().range, "all");
+    hub.review_mark_reviewed(&id).unwrap();
+    wait_for("Mark reviewed loads", || hub.review_view(&id).map(|v| v.status == "ready").unwrap_or(false));
+    hub.debug_reload_reviews();
+    assert_eq!(hub.review_view(&id).unwrap().range, "new");
+    assert!(!g(&clone, &["for-each-ref", &format!("refs/sb/review/{id}/")]).is_empty());
+
     // Close: the agent's worktree, its commits and its pane stay. No pin is written.
     assert!(hub.review_close(&id, false, None).unwrap().closed);
+    assert!(g(&clone, &["for-each-ref", &format!("refs/sb/review/{id}/")]).is_empty(), "the snapshot refs go");
     std::thread::sleep(Duration::from_millis(300));
     assert!(hub.views().iter().any(|p| p.id == pane), "the agent pane stays");
     assert!(wt.join("b.rs").exists());
     assert!(g(&clone, &["for-each-ref", "refs/switchboard"]).is_empty(), "no pin for a local review");
+    // Mark reviewed and a load race a close: no snapshot ref is left either way.
+    let hub = Arc::new(hub);
+    for i in 0..12u64 {
+        let rid = hub.review_open_local(&pane).unwrap();
+        wait_for("the commits load", || hub.review_view(&rid).map(|v| v.status == "ready").unwrap_or(false));
+        let (h1, r1) = (hub.clone(), rid.clone());
+        let mark = std::thread::spawn(move || {
+            let _ = h1.review_mark_reviewed(&r1);
+        });
+        std::thread::sleep(Duration::from_millis(i * 7));
+        assert!(hub.review_close(&rid, false, None).unwrap().closed);
+        mark.join().unwrap();
+        wait_for(&format!("round {i}: no snapshot ref left"), || {
+            g(&clone, &["for-each-ref", &format!("refs/sb/review/{rid}/")]).is_empty()
+        });
+    }
+    // A load that ends after the close writes its ref and then drops it.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(g(&clone, &["for-each-ref", "refs/sb/review/"]).is_empty(), "a snapshot ref leaked");
+
     // Even with the pane closed, the folder clean and detached, the start sweep keeps it.
     hub.close(&pane).unwrap();
     hub.debug_sweep();
