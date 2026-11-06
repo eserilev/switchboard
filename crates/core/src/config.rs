@@ -220,6 +220,65 @@ impl Default for Config {
     }
 }
 
+/// Makes `doc[key]` a normal table. A missing key gets a new one, and an inline
+/// table (`review = { ... }`) turns into a normal one with the same keys.
+fn table_at(doc: &mut toml_edit::Document, key: &str, path: &Path) -> Result<(), String> {
+    let Some(item) = doc.get_mut(key) else {
+        doc[key] = toml_edit::table();
+        return Ok(());
+    };
+    if item.is_table() {
+        return Ok(());
+    }
+    match std::mem::take(item).into_table() {
+        Ok(t) => {
+            *item = toml_edit::Item::Table(t);
+            Ok(())
+        }
+        Err(old) => {
+            *item = old;
+            Err(format!("{}: {key} is not a table.", path.display()))
+        }
+    }
+}
+
+/// Writes a config file through a new file and a rename, so a crash never leaves
+/// half a config. A symlinked config stays a symlink: the new file goes next to
+/// the file it points to. The file keeps its mode.
+pub fn write_file(path: &Path, text: &str) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let is_link = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+    let target = if is_link {
+        match std::fs::canonicalize(path) {
+            Ok(t) => t,
+            // A link to a file that is not there yet: follow it one step.
+            Err(_) => {
+                let to = std::fs::read_link(path).map_err(|e| format!("{}: {e}", path.display()))?;
+                path.parent().unwrap_or(Path::new("/")).join(to)
+            }
+        }
+    } else {
+        path.to_path_buf()
+    };
+    let dir = target.parent().unwrap_or(Path::new("/"));
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let n = NEXT.fetch_add(1, Ordering::SeqCst);
+    let tmp = dir.join(format!(".{name}.{}.{n}.new", std::process::id()));
+    std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    if let Ok(m) = std::fs::metadata(&target) {
+        if let Err(e) = std::fs::set_permissions(&tmp, m.permissions()) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("{}: {e}", tmp.display()));
+        }
+    }
+    std::fs::rename(&tmp, &target).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("{}: {e}", target.display())
+    })
+}
+
 impl Config {
     /// The argv of the remote link, or `None` when the hub runs here. `SB_REMOTE`
     /// sets the host for one run.
@@ -263,22 +322,12 @@ impl Config {
             .map_err(|e: toml_edit::TomlError| format!("{}: {}. Fix the file, then save again.", path.display(), e.message()))?;
         let list = |v: &[String]| toml_edit::value(v.iter().map(String::as_str).collect::<toml_edit::Array>());
         doc["scan"] = list(&set.scan);
-        if !doc.get("review").is_some_and(toml_edit::Item::is_table) {
-            if doc.contains_key("review") {
-                return Err(format!("{}: review is not a table.", path.display()));
-            }
-            doc["review"] = toml_edit::table();
-        }
+        table_at(&mut doc, "review", path)?;
         doc["review"]["spec_clones"] = list(&set.spec_clones);
         doc["review"]["web_domains"] = list(&set.web_domains);
         doc["review"]["web_search"] = toml_edit::value(set.web_search);
         if let Some(sb) = &set.sandbox {
-            if !doc.get("sandbox").is_some_and(toml_edit::Item::is_table) {
-                if doc.contains_key("sandbox") {
-                    return Err(format!("{}: sandbox is not a table.", path.display()));
-                }
-                doc["sandbox"] = toml_edit::table();
-            }
+            table_at(&mut doc, "sandbox", path)?;
             doc["sandbox"]["mode"] = toml_edit::value(sb.mode.as_str());
             doc["sandbox"]["domains"] = list(&sb.domains);
             doc["sandbox"]["write"] = list(&sb.write);
@@ -287,14 +336,45 @@ impl Config {
         let text = doc.to_string();
         // The app reads the file with the same rules at its next start.
         let config = Config::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        }
-        // A new file and a rename, so a crash never leaves half a config.
-        let tmp = path.with_extension("toml.new");
-        std::fs::write(&tmp, &text).map_err(|e| format!("{}: {e}", tmp.display()))?;
-        std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
+        write_file(path, &text)?;
         Ok(config)
+    }
+
+    /// Adds a `[connections.<name>]` table, written with `toml_edit`, so a value
+    /// with a quote or a backslash stays one TOML string. Keeps every other key
+    /// and the comments. Returns false when the name is there already.
+    pub fn add_connection(path: &Path, name: &str, conn: &ConnectionCfg) -> Result<bool, String> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        let mut doc: toml_edit::Document = text
+            .parse()
+            .map_err(|e: toml_edit::TomlError| format!("{}: {}. Fix the file, then try again.", path.display(), e.message()))?;
+        let fresh = !doc.contains_key("connections");
+        table_at(&mut doc, "connections", path)?;
+        let Some(conns) = doc["connections"].as_table_mut() else {
+            return Err(format!("{}: connections is not a table.", path.display()));
+        };
+        if fresh {
+            conns.set_implicit(true);
+        }
+        if conns.contains_key(name) {
+            return Ok(false);
+        }
+        let mut t = toml_edit::Table::new();
+        t["kind"] = toml_edit::value(conn.kind.as_str());
+        for (k, v) in [("dir", &conn.dir), ("url", &conn.url), ("model", &conn.model), ("token", &conn.token)] {
+            if let Some(v) = v {
+                t[k] = toml_edit::value(v.as_str());
+            }
+        }
+        conns.insert(name, toml_edit::Item::Table(t));
+        let text = doc.to_string();
+        Config::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        write_file(path, &text)?;
+        Ok(true)
     }
 
     pub fn parse(text: &str) -> Result<Config, String> {
@@ -431,6 +511,64 @@ mod tests {
         assert!(bad(SandboxCfg { domains: vec!["a.*.org".into()], ..sb.clone() }).contains("not a host name"));
         assert!(bad(SandboxCfg { write: vec!["out".into()], ..sb.clone() }).contains("full path"));
         assert_eq!(Config::load(&path).unwrap(), c);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edit_takes_inline_tables_and_keeps_a_symlink_and_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("sb-config-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("dots")).unwrap();
+        let real = dir.join("dots/config.toml");
+        std::fs::write(&real, "review = { prompt = \"p.md\" }\nsandbox = { mode = \"off\" }\n").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = dir.join("config.toml");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let set = SettingsEdit {
+            scan: vec!["~/c".into()],
+            web_search: true,
+            sandbox: Some(SandboxCfg { mode: "all".into(), ..SandboxCfg::default() }),
+            ..SettingsEdit::default()
+        };
+        let c = Config::edit(&link, &set).unwrap();
+        assert_eq!(c.review.prompt.as_deref(), Some("p.md"));
+        assert!(c.review.web_search);
+        assert_eq!(c.sandbox.mode, "all");
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(Config::load(&real).unwrap(), c);
+        let mode = std::fs::metadata(&real).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        // No temp file is left.
+        assert_eq!(std::fs::read_dir(dir.join("dots")).unwrap().count(), 1);
+        // A key that is not a table at all is still an error.
+        std::fs::write(&real, "review = 3\n").unwrap();
+        assert!(Config::edit(&link, &set).unwrap_err().contains("review is not a table"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn add_connection_writes_strings_as_toml() {
+        let dir = std::env::temp_dir().join(format!("sb-config-conn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("config.toml");
+        let conn = ConnectionCfg {
+            kind: "endpoint".into(),
+            dir: Some("~/.claude-x".into()),
+            url: Some("https://h/\"a\\b\nscan = 1".into()),
+            model: Some("m\"1".into()),
+            token: None,
+        };
+        assert!(Config::add_connection(&path, "x", &conn).unwrap());
+        let c = Config::load(&path).unwrap();
+        assert_eq!(c.connections["x"], conn);
+        assert_eq!(c.scan, Config::default().scan);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("[connections.x]"));
+        // A second add of the same name changes nothing.
+        assert!(!Config::add_connection(&path, "x", &conn).unwrap());
+        let other = ConnectionCfg { kind: "claude".into(), url: None, model: None, ..conn.clone() };
+        assert!(Config::add_connection(&path, "y", &other).unwrap());
+        assert_eq!(Config::load(&path).unwrap().connections.len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
