@@ -97,10 +97,11 @@ pub fn state_msg(pane: &str, arg: &str, input: &Value, time: u64) -> Option<Stat
     let s = |k: &str| input.get(k).and_then(Value::as_str);
     let (event, summary, detail) = match arg {
         "session" | "working" => (arg, None, Value::Null),
+        // The whole answer goes too: the hub finds what it points to (SPEC 11.15).
         "turn" => (
             "turn",
             s("last_assistant_message").map(|m| first_line(m, 120)),
-            Value::Null,
+            s("last_assistant_message").map_or(Value::Null, |m| json!({ "text": cut(m, crate::mentions::MAX_TEXT) })),
         ),
         "edited" => {
             let file = input
@@ -152,6 +153,42 @@ pub fn state_msg(pane: &str, arg: &str, input: &Value, time: u64) -> Option<Stat
         summary,
         detail,
     })
+}
+
+/// The first `max` bytes of a text, on a char boundary.
+fn cut(text: &str, max: usize) -> &str {
+    let mut n = text.len().min(max);
+    while !text.is_char_boundary(n) {
+        n -= 1;
+    }
+    &text[..n]
+}
+
+/// The text of the last assistant message in a Claude session file (JSON lines).
+/// For a Stop hook input with no `last_assistant_message`. Only the last part of a
+/// long file is read.
+pub fn last_assistant_text(jsonl: &str) -> Option<String> {
+    for line in jsonl.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        if v.get("type").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let content = v.pointer("/message/content");
+        let text = match content {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Array(parts)) => parts
+                .iter()
+                .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|p| p.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        };
+        if !text.trim().is_empty() {
+            return Some(text);
+        }
+    }
+    None
 }
 
 /// The summary for a permission request, for example `Bash: cargo test`.
@@ -253,6 +290,25 @@ mod tests {
             (m.event.as_str(), m.summary.as_deref(), m.session.as_deref()),
             ("turn", Some("Moved links."), Some("s1"))
         );
+        assert_eq!(m.detail["text"], "\nMoved links.\nMore");
+        let long = "é".repeat(crate::mentions::MAX_TEXT);
+        let m = state_msg("p1", "turn", &json!({"last_assistant_message": long}), 9).unwrap();
+        assert!(m.detail["text"].as_str().unwrap().len() <= crate::mentions::MAX_TEXT);
+        assert_eq!(state_msg("p1", "turn", &json!({}), 9).unwrap().detail, Value::Null);
+    }
+
+    #[test]
+    fn the_last_assistant_text_of_a_session_file() {
+        let file = [
+            json!({"type":"user","message":{"content":"where is it?"}}),
+            json!({"type":"assistant","message":{"content":[{"type":"text","text":"See a.rs:3."},{"type":"tool_use","name":"x"}]}}),
+            json!({"type":"assistant","message":{"content":[{"type":"tool_use","name":"y"}]}}),
+            json!({"type":"system"}),
+        ]
+        .map(|v| v.to_string())
+        .join("\n");
+        assert_eq!(last_assistant_text(&format!("{file}\nnot json")).as_deref(), Some("See a.rs:3."));
+        assert_eq!(last_assistant_text(""), None);
     }
 
     #[test]

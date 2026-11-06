@@ -5,6 +5,10 @@
 //!
 //! The `git` tool runs here, in the review worktree (`SB_DIR`). It takes the place
 //! of Bash for the guide agent: see `switchboard_core::review_git`.
+//!
+//! `sb mcp --ask` is the server of the review's Ask pane (SPEC 11.15). It has only
+//! `review_show`, which moves the review window to code. It has no guide tool and no
+//! `git`, and it refuses them by name too.
 
 use crate::send;
 use serde_json::{json, Value};
@@ -102,11 +106,43 @@ pub fn tools() -> Value {
     ])
 }
 
-/// Handles one JSON-RPC message. `None` for a notification.
+/// The one tool of `sb mcp --ask`.
+pub fn ask_tools() -> Value {
+    json!([{
+        "name": "review_show",
+        "description": "Show places in the code to the reviewer: the review window jumps to the first one and the reviewer steps through them with n and p. Use it when asked where something is, what to fix, or what to look at, worst first. It only moves the view; it changes no file and posts nothing. Paths are from the repo root, lines at the reviewed head (side new) or at the base for removed lines (side old).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "points": {
+                    "type": "array",
+                    "maxItems": switchboard_core::hub_show::MAX_POINTS,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "file": { "type": "string", "description": "Path from the repo root, for example beacon_node/store/src/hot_cold_store.rs." },
+                            "line": { "type": "integer", "minimum": 1 },
+                            "end": { "type": "integer", "description": "The last line of a range." },
+                            "side": { "type": "string", "enum": ["new", "old"], "description": "new (the default): the reviewed head. old: a removed line at the base." },
+                            "kind": { "type": "string", "enum": ["must", "should", "nit", "question"] },
+                            "note": { "type": "string", "description": "One or two short sentences: what is here and why it matters." }
+                        },
+                        "required": ["file", "line", "note"]
+                    }
+                }
+            },
+            "required": ["points"]
+        }
+    }])
+}
+
+/// Handles one JSON-RPC message. `None` for a notification. With `ask`, only the
+/// tool of the Ask pane.
 pub fn handle(
     msg: &Value,
     review: &str,
     dir: &Path,
+    ask: bool,
     call: &dyn Fn(Request) -> Result<Ack, String>,
 ) -> Option<Value> {
     let id = msg.get("id")?.clone();
@@ -120,7 +156,7 @@ pub fn handle(
             json!({ "protocolVersion": v, "capabilities": { "tools": {} }, "serverInfo": { "name": "sb", "version": env!("CARGO_PKG_VERSION") } })
         }
         "ping" => json!({}),
-        "tools/list" => json!({ "tools": tools() }),
+        "tools/list" => json!({ "tools": if ask { ask_tools() } else { tools() } }),
         "tools/call" => {
             let name = msg
                 .pointer("/params/name")
@@ -130,10 +166,15 @@ pub fn handle(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or(json!({}));
-            if name == "git" {
+            if name == "git" && !ask {
                 return Some(json!({ "jsonrpc": "2.0", "id": id, "result": git_call(dir, &args) }));
             }
             let req = match name {
+                "review_show" if ask => Some(Request::ReviewShow {
+                    review: review.into(),
+                    points: args.get("points").cloned().unwrap_or(Value::Null),
+                }),
+                _ if ask => None,
                 "guide_set_steps" => Some(Request::GuideSet {
                     review: review.into(),
                     guide: args,
@@ -146,6 +187,7 @@ pub fn handle(
                 _ => None,
             };
             let (text, error) = match req.map(call) {
+                Some(Ok(Ack { ok: true, .. })) if ask => ("The review window shows the places. Now answer in text too.".to_owned(), false),
                 Some(Ok(Ack { ok: true, .. })) => ("ok".to_owned(), false),
                 Some(Ok(Ack { error, .. })) => (error.unwrap_or_else(|| "refused".into()), true),
                 Some(Err(e)) => (format!("Switchboard is not reachable: {e}"), true),
@@ -181,7 +223,7 @@ fn git_call(dir: &Path, args: &Value) -> Value {
     json!({ "content": [{ "type": "text", "text": text }], "isError": error })
 }
 
-pub fn serve() -> i32 {
+pub fn serve(ask: bool) -> i32 {
     let review = std::env::var("SB_REVIEW").unwrap_or_default();
     // The review worktree. Claude starts the server there too, so the current
     // folder is the fallback.
@@ -199,7 +241,7 @@ pub fn serve() -> i32 {
         let Ok(msg) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if let Some(reply) = handle(&msg, &review, &dir, &call) {
+        if let Some(reply) = handle(&msg, &review, &dir, ask, &call) {
             let _ = writeln!(out, "{reply}");
             let _ = out.flush();
         }
@@ -217,7 +259,7 @@ mod tests {
 
     #[test]
     fn initialize_echoes_the_version() {
-        let r = handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}), "r1", Path::new("."), &ok).unwrap();
+        let r = handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}), "r1", Path::new("."), false, &ok).unwrap();
         assert_eq!(r["result"]["protocolVersion"], "2025-03-26");
         assert!(r["result"]["capabilities"]["tools"].is_object());
     }
@@ -228,6 +270,7 @@ mod tests {
             &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
             "r1",
             Path::new("."),
+            false,
             &ok
         )
         .is_none());
@@ -239,6 +282,7 @@ mod tests {
             &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
             "r1",
             Path::new("."),
+            false,
             &ok,
         )
         .unwrap();
@@ -262,6 +306,7 @@ mod tests {
             &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"guide_update_step","arguments":{"id":"s1","fields":{"lines":[9,9]}}}}),
             "r7",
             Path::new("."),
+            false,
             &call,
         )
         .unwrap();
@@ -289,6 +334,7 @@ mod tests {
             &json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"git","arguments":{"subcommand":"diff","args":["--output=x.txt","HEAD"]}}}),
             "r1",
             Path::new("."),
+            false,
             &call,
         )
         .unwrap();
@@ -299,6 +345,7 @@ mod tests {
             &json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"git","arguments":{"subcommand":"rev-parse","args":["--verify","HEAD"]}}}),
             "r1",
             Path::new(env!("CARGO_MANIFEST_DIR")),
+            false,
             &call,
         )
         .unwrap();
@@ -308,6 +355,7 @@ mod tests {
             &json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"git","arguments":{"subcommand":"push","args":"x"}}}),
             "r1",
             Path::new("."),
+            false,
             &call,
         )
         .unwrap();
@@ -317,11 +365,51 @@ mod tests {
     }
 
     #[test]
+    fn ask_mode_has_only_review_show() {
+        let sent = std::cell::RefCell::new(vec![]);
+        let call = |req: Request| {
+            sent.borrow_mut().push(req);
+            Ok(Ack::ok())
+        };
+        let msg = |id: u32, name: &str, args: Value| json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":args}});
+        let r = handle(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), "r3", Path::new("."), true, &call).unwrap();
+        let names: Vec<&str> = r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(names, vec!["review_show"]);
+        // The guide tools and git are refused by name, and nothing goes to the app.
+        for (name, args) in [
+            ("guide_set_steps", json!({"steps": []})),
+            ("guide_update_step", json!({"id": "s1", "fields": {}})),
+            ("git", json!({"subcommand": "rev-parse", "args": ["HEAD"]})),
+        ] {
+            let r = handle(&msg(2, name, args), "r3", Path::new(env!("CARGO_MANIFEST_DIR")), true, &call).unwrap();
+            assert_eq!(r["result"]["isError"], true, "{name}");
+        }
+        assert!(sent.borrow().is_empty());
+        let points = json!([{"file": "a.rs", "line": 3, "note": "here"}]);
+        let r = handle(&msg(3, "review_show", json!({ "points": points })), "r3", Path::new("."), true, &call).unwrap();
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        match &sent.borrow()[0] {
+            Request::ReviewShow { review, points: p } => assert_eq!((review.as_str(), p), ("r3", &points)),
+            other => panic!("{other:?}"),
+        }
+        // Without --ask, there is no review_show.
+        let r = handle(&msg(4, "review_show", json!({ "points": points })), "r3", Path::new("."), false, &call).unwrap();
+        assert_eq!(r["result"]["isError"], true);
+        assert_eq!(sent.borrow().len(), 1);
+        // A refusal from the app goes back as a tool error with its reason.
+        let no = |_: Request| Ok(Ack::err("point 1: ../x leaves the review"));
+        let r = handle(&msg(5, "review_show", json!({ "points": [{"file": "../x", "line": 1}] })), "r3", Path::new("."), true, &no).unwrap();
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("leaves the review"));
+    }
+
+    #[test]
     fn unknown_method_is_an_error() {
         let r = handle(
             &json!({"jsonrpc":"2.0","id":4,"method":"resources/list"}),
             "r1",
             Path::new("."),
+            false,
             &ok,
         )
         .unwrap();

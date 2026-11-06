@@ -191,7 +191,9 @@ A live pane gets every key you type. Esc in Claude Code stops the agent. So app 
 | Leader, `a` | Switch the active connection. |
 | Leader, `<` / `>` | Move the focused tile one place left or right. |
 | Review: `j` / `k` | Next or previous step. |
-| Review: `n` | Mark the step reviewed and go to the next one. |
+| Review: `n` | Mark the step reviewed and go to the next one. In a tour of Claude's places (11.15), the next place. |
+| Review: `p` | In a tour of Claude's places, the place before (11.15). |
+| Review: `'` | Back to where you were before the tour or the jump (11.15). |
 | Review: `d` | Draft from the active thread. |
 
 The review keys work only when no text field and no terminal has focus.
@@ -394,7 +396,7 @@ The question column is a real Claude Code pane, as on the board. It replaces the
 
 1. The pane starts when the guide is ready: interactive `claude` in the review worktree, with `--resume <guide> --fork-session`, so it has the context of the review. The guide session file does not change (S3).
 2. Its first message names the current step and asks Claude to wait for a question.
-3. It gets the spec clones with `--add-dir` and the pane hooks. Its settings allow `WebFetch` for the sites in `review.web_domains` with no prompt; other sites ask. It runs on the connection of the guide session, because the session file is in that connection's folder. It has no `sb` MCP tools, so it cannot change the guide. It runs with `--setting-sources user`, so the PR's own `.claude/settings.json` and `settings.local.json` do not load, even after you trust the folder. The pane hooks still load: they come from `--settings`.
+3. It gets the spec clones with `--add-dir` and the pane hooks. Its settings allow `WebFetch` for the sites in `review.web_domains` with no prompt; other sites ask. It runs on the connection of the guide session, because the session file is in that connection's folder. Its only `sb` MCP tool is `review_show` (11.15), so it cannot change the guide. It runs with `--setting-sources user`, so the PR's own `.claude/settings.json` and `settings.local.json` do not load, even after you trust the folder. The pane hooks still load: they come from `--settings`.
 4. It runs with the rust-analyzer plugin off: it answers questions, and rust-analyzer takes 1 to 4 GB for each copy.
 5. One pane for each review worktree and PR number, titled `Ask #<number>`. It shows only in its review tab: the board has no tile for it while the review is open. When it waits on you, the tally counts it, and a jump to it opens the review tab. The app finds it again by its title and worktree. After a rename, the app starts a new one. An ended pane with no session id is not used again.
 6. With `--fork-session`, the hooks report the new session id (checked on 2026-10-11). A later resume of the pane uses that id, so it never writes into the guide session. A resume does not pass `--add-dir` again.
@@ -597,6 +599,42 @@ Tests:
 - `nvim::tests::live_nvim_shows_the_old_side_in_diff_mode`: a real nvim. Two diff windows, the cursor at the line, the old side from git, no pile-up on a second call, an empty old side for a new file.
 - Window checks: New changes, the New and All switch, Mark reviewed, both waiting while the work loads, and `o`.
 
+### 11.15 Claude points to the code
+
+When you ask the Ask pane (11.5) where something is or what to fix, the review window goes to the code. Three ways, all in the PR review tab. Each only moves the view: nothing writes a file, posts, or types into a pane.
+
+**Go to a place.** All three use one rule. A place is a file, a line, an optional last line, and a side (`new`, or `old` for a removed line).
+- The step whose ranges hold the line opens, in Guide.
+- Else, a changed file opens in Files. When the line sits in a gap of the diff, the window gets the whole file and shows the line with 3 lines around it.
+- Else, the lines of a file the PR does not change: 15 above and below, at the reviewed head (`review_context`, read through the read-only git of 11.4), marked "Not changed in this PR".
+- The diff scrolls to the line and flashes it. The keyboard focus stays where it was, so the Claude column keeps the keys.
+- Each jump from a link or a chip keeps where you were. `'` goes back (the last 10 places).
+
+**1. Citations and links.** The Ask pane starts with `--append-system-prompt` (`hub_show::ASK_SYSTEM`, one line: it goes through tmux): cite code as `path:line` or `path:start-end` from the repo root, put names in backticks, and call `review_show` when asked where something is or what to fix. In the Claude column, an xterm.js link provider makes `path:line`, `path:from-to` and a file name links, when the name is a changed file of the review: the full path, an absolute path that ends with it, or a short name that only one changed file ends with. Other text is no link. A click goes to the place.
+
+**2. Mentioned.** The Stop hook (`sb state turn`) sends the text of the answer (13.3). For a PR Ask pane (title `Ask #<n>` in the review worktree), the hub reads it (`mentions::extract`):
+- `path:line`, `path:from-to` and file names, found among the changed files as above. A path with `..`, a `~` path, or an absolute path outside the review worktree, gives nothing. So does a line past the end of the file.
+- Names in single backticks (`put_bid`, `Store::put_bid()`, `self.put_bid`: the last part), at least 3 chars and not a keyword. Each is found as a whole word in the changed files at the reviewed head, from the diff model in memory: a changed line first, else the first line that has it, else a removed line on the old side.
+- At most 12 places, in the order of the text, with no place twice.
+- The list is on the review (`mentions`, in memory only), and a new answer replaces it. Under the Claude column, a row of chips: the number of a `review_show` place on the same line, or `·`; `file:line`, or `name :line`; a dashed chip for a line the PR does not change. A click goes to the place; on a numbered chip it joins the tour there.
+
+**3. `review_show`.** The Ask pane gets `sb mcp --ask` with `--mcp-config` and `--strict-mcp-config`. That server has one tool, `review_show`, and refuses the guide tools and `git` by name too. `mcp__sb__review_show` is in the pane's allow rules, so it runs with no prompt. The pane keeps `--setting-sources user` (11.5). A resume of the Ask pane gets the server, the rules and the allow rules again.
+- Input: `points: [{file, line, end?, side?, kind?, note}]`, 1 to 20 places. `kind` is `must`, `should`, `nit` or `question`.
+- The hub checks each place (`hub_show::check_points`): a plain relative path (no `..`, no empty part, no control char; an absolute path inside the worktree loses the worktree, any other is refused); a changed file on its side, or for `new` a file at the head; the lines inside the file; at most 400 lines in a range; the note at most 2000 chars, with no control chars but newlines. A bad place refuses the call with the reason, and the places of the last good call stay.
+- The hub keeps the places on the review (`show`, with a new `at` for each call, in memory only) and sends them in the review view. It never touches a file.
+- The window starts a tour once for each `at`, when the tab shows: it goes to place 1. The tour bar above the diff: "Claude pointed to N places · i of N", Previous `p`, Next `n`, Back `'`. Back goes to where you were before the tour and ends it.
+- In the diff each place has a dotted note box under its last line: its number, its kind, Claude's note (Markdown, with the rules of 23), "Not changed in this PR" when no line of it changed, and Add as comment. The current place has a solid box and a light blue bar on its lines. Add as comment opens the comment form on its lines with the note, and it saves as an agent draft (11.6). A file the PR does not change has no Add as comment: the core takes comments only on lines of the diff model.
+- The step list shows the numbers of the places in each step.
+- `n`, `p` and `'` work only when no text field and no terminal has the keys, like `j` and `k`. With no tour, `n` is the next step, as before.
+
+Tests:
+- `mentions::tests`: full paths, short names, ranges, absolute paths in and out of the worktree, `..` and `~`, a line past the end, two files of one name, names in backticks (a changed line first, the old side, whole words, keywords), the cap, no doubles, a long text cut on a char boundary.
+- `hub_show::tests`: good places and their marks, every refusal with its point number, a long note cut.
+- `hooks::tests`: the turn text in `detail`, cut at 64 KB, and the last assistant text of a session file.
+- `mcp` tests: `sb mcp --ask` lists only `review_show`, refuses the guide tools and `git` and sends nothing, sends a good call with the review id, and gives a refusal back as a tool error.
+- `crates/sb/tests/review_show.rs`: a real hub, tmux and git, and a stand-in `claude` that writes its args. The Ask pane's flags and allow rule; Mentioned from `sb state turn`, from the answer and from the session file, and replaced by a new answer; `review_show` through `sb mcp --ask`, with bad paths and lines refused and the last places kept; the rows of a file the PR does not change; and the flags again after a resume.
+- Window checks: a link in the Claude column goes to the step and the line and keeps the keys there; Back; Mentioned chips, dashed and escaped, go to a step or to Files with a hidden line shown; the tour (bar, numbers in the diff and in the step list, `n` and `p`, a file outside the diff, Add as comment as an agent draft, Back); escaping of the notes.
+
 ## 12. Agents
 
 | Where | How |
@@ -667,7 +705,7 @@ Every hook gets its JSON input on stdin. `sb state` reads it for `session_id`, `
 ```
 
 - `event` is one of `session`, `working`, `needs`, `turn`, `failure`, `edited`.
-- `detail` holds the event fields: the tool and its input for `needs`, the error for `failure`, the file for `edited`.
+- `detail` holds the event fields: the tool and its input for `needs`, the error for `failure`, the file for `edited`, and for `turn` the text of the last answer (`text`, at most 64 KB), for Mentioned (11.15). When the Stop input has no `last_assistant_message`, `sb state` reads the last assistant text from the end of `transcript_path`.
 - `sb state` also writes the same line to `~/.switchboard/state/<pane>.json` with an atomic rename.
 - `sb state` never blocks Claude. If the socket is gone, it writes the file and exits 0.
 - `sb state` exits in under 50 ms. It does no network calls.
@@ -975,6 +1013,10 @@ Where the build differs from the text above:
 - Sandbox (31): not checked with a real `claude` yet. The keys follow the Claude Code docs (code.claude.com/docs/en/sandboxing, read on 2026-11-03). Not verified: that a blocked site in an interactive pane comes to the `PermissionRequest` hook, so the tile shows Allow and Deny; that `git commit` in a worktree works with the git folder in `allowWrite`; that the `Read(~/.ssh/**)` rules stop the Read tool; and that `failIfUnavailable` stops a pane on Linux with no `bwrap`.
 - Sandbox (31): a pane that starts again (resume, restart, a new connection) keeps the sandbox of its settings file, whatever the mode is now. A resumed Ask pane has no Ask mark in its start, so the mode alone would drop it.
 - Sandbox (31): the `credentials` key of the sandbox is not used. `denyRead` and the permission deny rules cover the same folders, and an older Claude Code may not know the key.
+- Claude points to the code (11.15): not checked with a real `claude` yet. Not verified: that Claude calls `review_show` when asked where something is or what to fix, that it cites `path:line` as the system prompt asks, that an interactive pane runs a `--mcp-config` server with no "new MCP server" dialog, that the allow rule runs the tool with no prompt, and that the Stop input of the Claude Code in use has `last_assistant_message` (else the session file is read).
+- Claude points to the code (11.15): names in backticks are found in the diff model in memory, not with `git grep -w` in the worktree. The model holds every changed file at the reviewed head, and it never sees an edit in the worktree. A name only in a file the PR does not change is not found.
+- Claude points to the code (11.15): Mentioned and the places of `review_show` live in memory, not in the store. After a restart they are gone until the next answer or call.
+- A resumed Ask pane (Resume on its title bar, or an expand of an ended pane) gets its tool, its rules, its allow rules, `--setting-sources user` and the rust-analyzer plugin off again (11.15). Before, a resume started it with none of them: the PR's `.claude/settings.json` could load in it, and its `WebFetch` allow rules were gone.
 - A diff header `@@ old N · new M @@` gives the number of the next old line and of the next new line, also on a side where the next row has no line. The "No newline at end of file" note follows its line and does not count for the context cut.
 
 Tests:

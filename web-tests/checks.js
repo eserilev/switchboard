@@ -703,6 +703,100 @@
     await wait(1200);
   }
 
+  // Claude points to the code (SPEC 11.15): links in the Claude column, Mentioned,
+  // and the tour of review_show. None of them takes the keys from the terminal.
+  {
+    const till = async (ok) => { for (let i = 0; i < 30 && !ok(); i++) await wait(40); return ok(); };
+    const cur = () => $('#rsteps [aria-current="step"]')?.dataset.i;
+    const term = window.SB.term;
+    const keys = () => document.activeElement === term.textarea;
+    $('#rsteps [data-i="0"]').click();
+    await till(() => cur() === "0");
+    await till(() => window.SB.S.live === "p8" && window.SB.S.termHost === "r1");
+    window.__emit("pane_output", { pane: "p8", data: btoa("\x1b[2J\x1b[HFix gloas.rs:12 now. Not nothing.rs:3, hello.\r\n") });
+    await till(() => screen().includes("Fix gloas.rs:12"));
+    const b = term.buffer.active;
+    let y = 0;
+    for (let i = 0; i < b.length; i++) if (b.getLine(i).translateToString(true).includes("Fix gloas.rs:12")) y = i + 1;
+    const links = async () => { let got; window.SBReview._test.provideLinks(y, (x) => (got = x)); if (!got) { await wait(80); window.SBReview._test.provideLinks(y, (x) => (got = x)); } return got || []; };
+    const got = await links();
+    const x0 = b.getLine(y - 1).translateToString(true).indexOf("gloas.rs:12") + 1;
+    check("a file:line of a changed file in the Claude column is a link, other text is not", got.length === 1 && got[0].text === "gloas.rs:12" && got[0].range.start.x === x0 && got[0].range.end.x === x0 + 10, JSON.stringify(got.map((l) => [l.text, l.range])));
+    term.focus();
+    got[0]?.activate(new MouseEvent("click"), got[0].text);
+    await till(() => cur() === "1" && $('#rdiff tr.flash td.ln[data-side="new"][data-ln="12"]'));
+    check("the link goes to the step and the line, and flashes it", cur() === "1" && !!$('#rdiff tr.flash td.ln[data-side="new"][data-ln="12"]'), cur());
+    check("the keys stay in the Claude column", keys(), document.activeElement?.className);
+    docKey("'");
+    await till(() => cur() === "0");
+    check("' goes back to where you were", cur() === "0");
+
+    // Mentioned: the places of the last answer, under the Claude column.
+    const ment = [
+      { file: "beacon_node/gloas.rs", line: 11, end: null, side: "new", name: null, changed: true },
+      { file: "beacon_node/gloas.rs", line: 40, end: null, side: "new", name: "far_fn", changed: false },
+      { file: "a/<img src=x onerror=\"window.__xss=8\">.rs", line: 1, end: null, side: "new", name: null, changed: false },
+    ];
+    window.__emit("review", Object.assign({}, window.__data.reviews[0], { mentions: ment }));
+    await till(() => $$("#rment .mchip").length === 3);
+    const chips = $$("#rment .mchip");
+    check("Mentioned shows a chip for each place, dashed for a line the PR did not change", !$("#rment").hidden && chips.length === 3 && chips[0].textContent.endsWith("gloas.rs:11") && chips[1].textContent.endsWith("far_fn :40") && chips[1].classList.contains("unchanged") && !chips[0].classList.contains("unchanged"), $("#rment").innerHTML);
+    check("Mentioned escapes what the agent wrote", !$("#rment img") && chips[2].textContent.includes("<img") && window.__xss === undefined);
+    term.focus();
+    chips[0].dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    chips[0].click();
+    await till(() => cur() === "1" && $('#rdiff tr.flash td.ln[data-ln="11"]'));
+    check("a chip goes to its step and line, and the keys stay in the terminal", cur() === "1" && !!$('#rdiff tr.flash td.ln[data-side="new"][data-ln="11"]') && keys(), `${cur()} ${document.activeElement?.className}`);
+    $$("#rment .mchip")[1].click();
+    await till(() => $('#rdiff tr.flash td.ln[data-side="new"][data-ln="40"]'));
+    check("a chip on a line outside the steps opens the file in Files, with the line shown", local_mode() === "files" && !!$('#rdiff tr.flash td.ln[data-side="new"][data-ln="40"]'), local_mode());
+    docKey("'");
+    await till(() => local_mode() === "guide");
+    check("' goes back to the guide", local_mode() === "guide" && cur() === "1");
+
+    // review_show: a tour of Claude's places.
+    const marks0 = called("review_mark").length;
+    const pts = [
+      { file: "beacon_node/gloas.rs", line: 11, end: null, side: "new", kind: "must", note: "Use `safe_sub`. <img src=x onerror=\"window.__xss=9\">", changed: true },
+      { file: "beacon_node/gloas.rs", line: 11, end: null, side: "old", kind: "nit", note: "The old line.", changed: true },
+      { file: "README.md", line: 30, end: null, side: "new", kind: "question", note: "Why here?", changed: false },
+    ];
+    $('#rsteps [data-i="0"]').click();
+    await till(() => cur() === "0");
+    window.__emit("review", Object.assign({}, window.__data.reviews[0], { mentions: ment, show: { at: Date.now(), points: pts } }));
+    await till(() => !$("#rtour").hidden && cur() === "1" && $("#rdiff .pbox"));
+    check("review_show jumps to place 1 and shows the tour bar", cur() === "1" && $("#rtour").textContent.includes("Claude pointed to 3 places") && $("#rtour .tpos").textContent === "1 of 3", $("#rtour").textContent);
+    check("each place in the diff has its number and note, the current one marked", $$("#rdiff .pbox").length === 2 && $('#rdiff .pbox.cur[data-pt="0"]')?.textContent.includes("MUST FIX") && !!$('#rdiff tr.ptcur td.ln[data-side="new"][data-ln="11"]') && !!$('#rdiff .pbox[data-pt="1"]'), $$("#rdiff .pbox").map((x) => x.outerHTML).join(" | "));
+    check("a note renders Markdown and escapes HTML", !!$('#rdiff .pbox[data-pt="0"] code') && !$("#rdiff .pbox img") && $('#rdiff .pbox[data-pt="0"]').textContent.includes("<img") && window.__xss === undefined);
+    check("the step list shows the numbers of its places", $$('#rsteps [data-i="1"] .pmarks .mk').map((x) => x.textContent).join() === "1,2" && !!$('#rsteps [data-i="1"] .pmarks .mk.on'), $('#rsteps [data-i="1"]')?.innerHTML);
+    check("a Mentioned chip of a place shows its number", $$("#rment .mchip")[0].querySelector(".mk").textContent === "1" && $$("#rment .mchip")[0].classList.contains("on"));
+    docKey("n");
+    await till(() => $("#rtour .tpos")?.textContent === "2 of 3");
+    check("n goes to the next place, not the next step", $("#rtour .tpos").textContent === "2 of 3" && !!$('#rdiff .pbox.cur[data-pt="1"]') && !!$('#rdiff tr.ptcur td.ln[data-side="old"][data-ln="11"]') && called("review_mark").length === marks0);
+    docKey("n");
+    await till(() => $("#rtour .tpos")?.textContent === "3 of 3" && $('#rdiff tr.flash td.ln[data-ln="30"]'));
+    check("a place in a file the PR does not change shows its lines, marked Not changed", $("#rguide").textContent.includes("Not changed in this PR") && $("#rtour").textContent.includes("Not changed in this PR") && !!$('#rdiff tr.flash td.ln[data-ln="30"]') && !!$('#rdiff .pbox.cur[data-pt="2"]') && !$("#rdiff [data-padd]") && called("review_context").some((c) => c[1].path === "README.md" && c[1].line === 30), $("#rguide").textContent);
+    docKey("p");
+    await till(() => $("#rtour .tpos")?.textContent === "2 of 3");
+    check("p goes to the place before", $("#rtour .tpos").textContent === "2 of 3" && cur() === "1");
+    window.__calls.length = 0;
+    $('#rdiff [data-padd="0"]').click();
+    await till(() => $("#rctext"));
+    check("Add as comment opens the form on the place's line with the note", $("#rcform .cat")?.textContent.includes("gloas.rs:11") && $("#rctext").value.includes("safe_sub"));
+    $("#rcform").requestSubmit();
+    await till(() => called("review_comment").length);
+    const pc = called("review_comment")[0]?.[1].comment;
+    check("the comment from a place saves as an agent draft at that line", pc && pc.agent === true && pc.line === 11 && pc.side === "new" && pc.text.includes("safe_sub"), JSON.stringify(pc));
+    term.focus();
+    $('#rtour [data-tour="back"]').dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    $('#rtour [data-tour="back"]').click();
+    await till(() => $("#rtour").hidden);
+    check("Back ends the tour and goes back to where you were", $("#rtour").hidden && !$("#rdiff .pbox") && cur() === "0" && keys(), cur());
+    window.__emit("review", window.__data.reviews[0]);
+    await till(() => $("#rment").hidden);
+    check("an answer with no places hides Mentioned, and no tour starts again", $("#rment").hidden && $("#rtour").hidden);
+  }
+
   // Close: a worktree with changes asks first, and nothing closes before the choice.
   $('#rhead [data-act="close"]').click();
   await wait(150);
