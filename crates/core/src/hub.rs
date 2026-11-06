@@ -186,6 +186,8 @@ pub struct Hub {
     /// The size of each window on screen, by tmux id. The redraw after a show
     /// reads it again, so a resize in the meantime stays (SPEC 28).
     sizes: Arc<Mutex<HashMap<String, (u16, u16)>>>,
+    /// The panes an expand resumes now, so a second click does not start a second process.
+    resuming: Mutex<Vec<String>>,
     /// The task PR links that GitHub reports as merged (SPEC 27.6). Merged is final,
     /// so a link in it is not read again.
     pub(crate) merged: Mutex<Vec<String>>,
@@ -294,6 +296,7 @@ impl Hub {
             reviews: Mutex::default(),
             size: Mutex::new((200, 50)),
             sizes: Arc::default(),
+            resuming: Mutex::default(),
             trees: Mutex::new(()),
             merged: Mutex::default(),
             polling: std::sync::atomic::AtomicBool::new(false),
@@ -815,6 +818,7 @@ impl Hub {
     /// The parts of the old live pane leave the screen too.
     pub fn expand(&self, id: &str) -> Res<Vec<u8>> {
         tracing::info!(target: "sb::hub", pane = id, "expand");
+        self.resume_if_ended(id)?;
         let tid = self.tmux_id(id)?;
         let old = std::mem::replace(&mut *self.live.lock().unwrap(), vec![(id.to_owned(), tid.clone())]);
         for (_, t) in old.iter().filter(|(_, t)| *t != tid) {
@@ -822,6 +826,32 @@ impl Hub {
         }
         let (cols, rows) = *self.size.lock().unwrap();
         self.show(id, &tid, cols, rows)
+    }
+
+    /// An ended Claude pane with a session starts again before it shows, so a click
+    /// on its tile opens the agent and not an error. Its process is gone, for example
+    /// after a restart of the Mac. A pane with a process is left alone.
+    fn resume_if_ended(&self, id: &str) -> Res<()> {
+        let ended = self
+            .panes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p.row.id == id && p.tmux.is_none() && p.row.kind == "claude" && p.row.session.is_some());
+        if !ended {
+            return Ok(());
+        }
+        {
+            let mut r = self.resuming.lock().unwrap();
+            if r.iter().any(|x| x == id) {
+                return Err("the agent is starting again".into());
+            }
+            r.push(id.to_owned());
+        }
+        tracing::info!(target: "sb::hub", pane = id, "expand resumes an ended pane");
+        let res = self.resume(id);
+        self.resuming.lock().unwrap().retain(|x| x != id);
+        res
     }
 
     /// Adds a part (nvim or the shell) to the screen, at its own size, and returns

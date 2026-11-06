@@ -183,6 +183,18 @@ fn start_an_agent_from_a_task() {
     wait_for("the resumed agent", || std::fs::read_to_string(root.join("args.txt")).unwrap_or_default().lines().any(|l| l.starts_with(&again) && l.contains("--resume sess-1")));
     let v = hub.tasks().unwrap();
     assert_eq!((v.links.len(), v.links[0].pane.as_str(), v.links[0].closed), (1, again.as_str(), false));
+
+    // Its tmux pane goes away, as after a restart of the Mac: the tile shows ended.
+    // A click on the tile resumes the agent and shows it, with no "has no process".
+    let sock = std::env::var("SB_TMUX_SOCKET").unwrap();
+    let list = std::process::Command::new("tmux").args(["-L", &sock, "list-panes", "-a", "-F", "#{pane_id} #{@sb_pane}"]).output().unwrap();
+    let tid = String::from_utf8_lossy(&list.stdout).lines().find(|l| l.ends_with(&format!(" {again}"))).unwrap().split(' ').next().unwrap().to_owned();
+    std::process::Command::new("tmux").args(["-L", &sock, "kill-pane", "-t", &tid]).status().unwrap();
+    let lamp = |id: &str| hub.views().into_iter().find(|p| p.id == id).map(|p| p.lamp.as_str().to_owned());
+    wait_for("the ended tile", || lamp(&again).as_deref() == Some("ended"));
+    hub.expand(&again).unwrap();
+    assert_ne!(lamp(&again).as_deref(), Some("ended"));
+    wait_for("the agent after the click", || std::fs::read_to_string(root.join("args.txt")).unwrap_or_default().lines().filter(|l| l.starts_with(&again) && l.contains("--resume sess-1")).count() == 2);
 }
 
 fn repos_tree(l: &switchboard_core::tasks::TaskLink) -> PathBuf {

@@ -820,7 +820,7 @@ At start:
 1. Read the store.
 2. If the `switchboard` tmux server runs, attach. Match each window to a pane by `SB_PANE`.
 3. Read `~/.switchboard/state/*.json`. A state file newer than the stored lamp wins.
-4. A stored pane with no window is closed. Its tile shows "ended" with a resume action when it has a session id.
+4. A stored pane with no window is closed. Its tile shows "ended" with a resume action when it has a session id. A click that opens the tile resumes it too, so it never shows "has no process".
 
 ## 17. Failure cases
 
