@@ -160,7 +160,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let live = std::os::unix::net::UnixListener::bind(dir.join("a.sock")).unwrap();
-        drop(std::os::unix::net::UnixListener::bind(dir.join("b.sock")).unwrap());
+        // A socket that nobody listens on. On macOS a process that another test
+        // starts at the same moment can take a copy of the new socket before it is
+        // marked close-on-exec, and keep it open: then make it again.
+        let b = dir.join("b.sock");
+        for _ in 0..50 {
+            let _ = std::fs::remove_file(&b);
+            drop(std::os::unix::net::UnixListener::bind(&b).unwrap());
+            if std::os::unix::net::UnixStream::connect(&b).is_err() {
+                break;
+            }
+        }
         std::fs::write(dir.join("notes.txt"), "x").unwrap();
         assert_eq!(sweep(&dir), 1);
         assert!(dir.join("a.sock").exists());
