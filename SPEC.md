@@ -223,7 +223,7 @@ The token comes from the system keyring through `secret-tool`. It is never in th
 - Each folder has symlinks to `~/.claude` for `settings.json`, `CLAUDE.md`, `projects/`, `skills/` and `plugins/`.
 - All connections share your memory, settings and session history.
 
-`sb connect add <name>` makes the folder and the symlinks. For a Claude account, it then starts `claude` in a pane for `/login`.
+`sb connect add <name>` makes the folder and the symlinks, and writes the `[connections.<name>]` table with `toml_edit`, so a quote in a URL or model stays in its string. For a Claude account, it then starts `claude` in a pane for `/login`.
 
 ### 8.3 Active connection
 
@@ -763,7 +763,7 @@ The gear at the top right opens Settings. It changes these keys, so nobody has t
 - Let the review agent search the web: `review.web_search`.
 - Sandbox (31): the mode (`sandbox.mode`: Off, Review panes, All agents), and with a mode that is not Off, three lists: the sites that commands can reach (`sandbox.domains`, a host name or `*.` and a host name), more folders that commands can write (`sandbox.write`, a full path that starts with `/` or `~/`), and the commands that run outside the sandbox (`sandbox.unsandboxed`). On Linux, a warning names `bwrap` or `socat` when one is not on `PATH`. A new agent gets the change; an agent that runs keeps the sandbox it started with.
 
-Save writes the config file with `toml_edit`: every other key and every comment stays. Items are trimmed, and empty items and repeats go. The new text must parse with the same rules as at start, else nothing is written. The write is a new file and a rename, so a crash never leaves half a config. A file that does not parse is not changed: the error says to fix it first.
+Save writes the config file with `toml_edit`: every other key and every comment stays. Items are trimmed, and empty items and repeats go. The new text must parse with the same rules as at start, else nothing is written. The write is a new file and a rename, so a crash never leaves half a config. The new file goes next to the real file, so a config that is a symlink (dotfiles) stays a symlink, and the file keeps its mode. An inline table (`review = { ... }`) turns into a normal `[review]` table. A file that does not parse is not changed: the error says to fix it first. At start, a file that does not parse gives the defaults; the error goes to the log and shows in the window.
 
 A change works at once, with no restart: the hub keeps the new config, the repo list loads again, and the next review run and Ask pane use the new keys. In remote mode (29) Settings changes the server's config, because the repos and the reviews are there. The leader key stays the one of your own computer.
 

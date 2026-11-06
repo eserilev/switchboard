@@ -266,6 +266,9 @@ fn log(level: &str, message: &str) {
     }
 }
 
+/// The parse error of this computer's config, when it has one.
+static CONFIG_ERROR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// The commands that run in the app, in remote mode too. Every other command goes
 /// to the backend. A test keeps this list short (SPEC 29).
 const LOCAL: &[&str] = &["log", "open_url", "link_state", "link_reconnect"];
@@ -303,7 +306,13 @@ fn handle(invoke: tauri::ipc::Invoke) -> bool {
             invoke.resolver.resolve(Value::Null);
         }
         "open_url" => invoke.resolver.respond(open_url(&text("url")).map(|_| Value::Null).map_err(Into::into)),
-        "link_state" => invoke.resolver.resolve(backend.link_state()),
+        "link_state" => {
+            let mut v = backend.link_state();
+            if let Some(err) = CONFIG_ERROR.get() {
+                v["config_error"] = json!(format!("The config does not parse, so the defaults are in use: {err}"));
+            }
+            invoke.resolver.resolve(v)
+        }
         "link_reconnect" => invoke.resolver.respond_async(async move {
             let b = Arc::clone(&backend);
             let r = tauri::async_runtime::spawn_blocking(move || match &*b {
@@ -371,7 +380,14 @@ fn main() {
                 handle: app.handle().clone(),
             });
             let paths = Paths::from_env();
-            let config = Config::load(&paths.config).unwrap_or_default();
+            // A config that does not parse: the defaults, with the error in the log
+            // and on the screen. `link_state` carries it, so the window shows it
+            // even when it loads after an event would have gone.
+            let config = Config::load(&paths.config).unwrap_or_else(|err| {
+                tracing::error!(target: "sb::app", %err, "the config does not parse; the defaults are used");
+                let _ = CONFIG_ERROR.set(err);
+                Config::default()
+            });
             let backend = match config.remote_argv() {
                 Some((host, argv)) => {
                     tracing::info!(target: "sb::app", %host, ?argv, "remote mode");

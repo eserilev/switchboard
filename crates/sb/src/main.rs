@@ -519,31 +519,20 @@ fn connect_add(args: &[String]) -> i32 {
         eprintln!("sb connect add: {}: {e}", dir.display());
         return 1;
     }
-    let mut section = format!(
-        "\n[connections.{name}]\nkind = \"{}\"\ndir = \"~/.claude-{name}\"\n",
-        if url.is_some() { "endpoint" } else { "claude" }
-    );
-    if let Some(u) = &url {
-        section += &format!("url = \"{u}\"\n");
-    }
-    if let Some(m) = &model {
-        section += &format!("model = \"{m}\"\n");
-    }
-    if let Some(t) = &token {
-        section += &format!("token = \"{t}\"\n");
-    }
-    let config = std::fs::read_to_string(&paths.config).unwrap_or_default();
-    if config.contains(&format!("[connections.{name}]")) {
-        println!("{name} is already in {}", paths.config.display());
-    } else {
-        if let Some(p) = paths.config.parent() {
-            let _ = std::fs::create_dir_all(p);
-        }
-        if let Err(e) = append(&paths.config, &section) {
-            eprintln!("sb connect add: {}: {e}", paths.config.display());
+    let conn = switchboard_core::config::ConnectionCfg {
+        kind: if url.is_some() { "endpoint" } else { "claude" }.into(),
+        dir: Some(format!("~/.claude-{name}")),
+        url: url.clone(),
+        model,
+        token,
+    };
+    match switchboard_core::config::Config::add_connection(&paths.config, name, &conn) {
+        Ok(true) => println!("Added {name} to {}", paths.config.display()),
+        Ok(false) => println!("{name} is already in {}", paths.config.display()),
+        Err(e) => {
+            eprintln!("sb connect add: {e}");
             return 1;
         }
-        println!("Added {name} to {}", paths.config.display());
     }
     if url.is_none() {
         println!(
@@ -554,10 +543,3 @@ fn connect_add(args: &[String]) -> i32 {
     0
 }
 
-fn append(path: &Path, text: &str) -> std::io::Result<()> {
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-    f.write_all(text.as_bytes())
-}

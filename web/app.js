@@ -1191,6 +1191,7 @@ window.SB = { S, LINK, invoke, call, listen, esc, setHTML, toast, setTab, WORK_T
 (async function start() {
   try {
     Object.assign(LINK, await invoke("link_state"));
+    if (LINK.config_error) toast(LINK.config_error);
     // A remote hub that is not linked yet: the `link` event loads everything.
     LINK.synced = !LINK.remote || LINK.up;
     drawLink();
