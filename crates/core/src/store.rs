@@ -88,6 +88,8 @@ const SCHEMA: &[&str] = &[
      CREATE TABLE task_event (id INTEGER PRIMARY KEY, task TEXT NOT NULL, at INTEGER NOT NULL,
        who TEXT NOT NULL, kind TEXT NOT NULL, value TEXT);
      CREATE INDEX task_event_task ON task_event (task, id);",
+    // Version 11: a local review keeps New or All over a restart (SPEC 11.14).
+    "ALTER TABLE review ADD COLUMN local_range TEXT;",
 ];
 
 pub struct Store {
@@ -665,6 +667,23 @@ impl Store {
         Ok(())
     }
 
+    /// A local review's `new` or `all`, or None when it was never set.
+    pub fn review_range(&self, review: &str) -> R<Option<String>> {
+        let s: Option<Option<String>> = self
+            .db
+            .query_row("SELECT local_range FROM review WHERE id = ?1", [review], |r| r.get(0))
+            .optional()?;
+        Ok(s.flatten())
+    }
+
+    pub fn set_review_range(&self, review: &str, range: &str) -> R<()> {
+        self.db.execute(
+            "UPDATE review SET local_range = ?2 WHERE id = ?1",
+            params![review, range],
+        )?;
+        Ok(())
+    }
+
     /// Records a review that GitHub accepted, and removes the drafts that it sent.
     /// One transaction, so a draft is never both sent and still pending.
     pub fn record_posted(&self, review: &str, p: &PostedRow, drafts: &[i64]) -> R<()> {
@@ -942,6 +961,11 @@ mod tests {
             pane: None,
         };
         s.save_review(&r, 1).unwrap();
+        // The range of a local review is its own column: a save of the row keeps it.
+        assert_eq!(s.review_range("r1").unwrap(), None);
+        s.set_review_range("r1", "all").unwrap();
+        s.save_review(&r, 1).unwrap();
+        assert_eq!(s.review_range("r1").unwrap().as_deref(), Some("all"));
         let t = ThreadRow {
             id: "t1".into(),
             review: "r1".into(),

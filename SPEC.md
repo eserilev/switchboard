@@ -272,7 +272,7 @@ Paste a GitHub PR URL into the launcher, and it opens a review (11).
 
 1. `gh pr view <url> --json number,headRefOid,headRefName,headRepository,baseRefName,title`.
 2. The app finds the local clone of the base repo from the repo list.
-3. The PR head is fetched into a private ref (`refs/switchboard/fetch/...`), read, and the ref is deleted. Then the branch `sb-pr-<n>` points at the head, for you. Nothing in the app reads that branch: a close of another review of the PR can delete it. The base is fetched the same way, so two fetches at the same time do not share `FETCH_HEAD`.
+3. The PR head is fetched into a private ref (`refs/switchboard/fetch/...`), read, and the ref is deleted. Then the branch `sb-pr-<n>` points at the head, for you. Nothing in the app reads that branch: a close of another review of the PR can delete it. The fetch never moves work of yours there: a missing branch is made, and a branch moves only when no worktree has it checked out (`git worktree list --porcelain`) and its tip is a head that a review pinned (`refs/switchboard/*`). The move is `update-ref` with the old tip, so a commit that lands in between stops it. Else the branch stays, with a line in the log. The base is fetched the same way, so two fetches at the same time do not share `FETCH_HEAD`.
 4. Under the tree lock, and only while the review is open: `git worktree add --detach <repo>-pr<n> <head>`, or `<repo>-pr<n>-r<k>` for round k (11.9). An existing folder gets `git checkout --detach <head>` only when it is a detached worktree of this clone with no work in it (11.10). Else the review shows an error: a folder of yours with that name, or a kept folder with your changes, stays as it is. The review's own folder is the exception: an Update moves its HEAD as before, git carries your edits along, and a conflict stops it with git's error.
 6. Before an Update fetches, the review's current head is pinned, so a force-push never makes it look like a local commit.
 5. The review's head and base get refs of their own: `refs/switchboard/<review>/head` and `.../base` (11.10).
@@ -324,6 +324,8 @@ The review header shows the state of the guide session: fetching, writing, updat
 
 - The app runs `claude -p` in the review worktree with the review prompt (11.3).
 - Flags: `--output-format stream-json --verbose --include-partial-messages --setting-sources user --mcp-config <sb mcp> --strict-mcp-config --allowedTools <list>`.
+- `--permission-mode manual`: Claude Code 2.1 lists `manual`; `default` is an old name it hides.
+- A Retry, an Update and a Restart check that no run is going and set the new status in one lock, before the thread starts. So a double click starts one run, and `run_pid` names the one run a close stops.
 - `--setting-sources user`: the review worktree holds the PR's own files, and `-p` skips the trust dialog. Without it, the PR's `.claude/settings.json` and `.claude/settings.local.json` would load: their hooks would run and their allow rules would count. `--strict-mcp-config` is always on, so the PR's `.mcp.json` starts no server.
 - stdin is `/dev/null`. With any other stdin, `claude -p` waits 3 s for input (S3).
 - `--allowedTools`: `Read,Grep,Glob,mcp__sb__git,mcp__sb__guide_set_steps,mcp__sb__guide_update_step`, plus `WebFetch(domain:<d>)` for each site in `review.web_domains`, plus `WebSearch` when `review.web_search` is on.
@@ -339,7 +341,7 @@ The review header shows the state of the guide session: fetching, writing, updat
 
 The prompt has these parts:
 
-1. The PR: repo, number, title, head commit, base branch, the file list with line counts.
+1. The PR: repo, number, title, head commit, base branch, the base commit (`{{base}}`), the file list with line counts. The base commit is the one the checker uses: the merge base with GitHub's base commit, as fetched. The agent diffs against it and never computes a merge base itself: the fetch deletes its temp ref, and a local branch with the base's name can be old.
 2. The rules: read only, never post, file:line at the head commit for every claim.
 3. The order: simple files first, so the reader has the context for the hard part.
 4. The output: call `guide_set_steps` once with every step. Do not write the guide as text.
@@ -432,7 +434,7 @@ Cost: each fork sends the guide context again. The prompt cache lasts a few minu
 
 ### 11.7 New commits
 
-- The app polls `headRefOid` every 2 minutes while the review tab is open.
+- The app polls `headRefOid` every 2 minutes while the review tab is open. It compares GitHub's head with the review's head as it is when `gh` returns, so an Update that ran meanwhile is no false alarm.
 - When the head changes, the top bar shows the old and the new head.
 - Steps whose files changed get a stale mark.
 - "Diff since last review" shows `git diff <old>..<new>` for each stale step.
@@ -586,11 +588,11 @@ A local review (11.11) shows the agent's uncommitted work too, not only its comm
 
 - **Snapshots.** The head of the view is the work tree as a commit nobody sees (`review::snapshot`): a copy of the worktree's own index (`git rev-parse --git-path index`, so a linked worktree uses its own), `git add -A` on the copy with `GIT_INDEX_FILE`, `write-tree`, and `commit-tree -p HEAD`, never signed. The files, the real index and HEAD never change, and git never takes the real `index.lock`, so the agent's git commands run as usual. The copy keeps the stat cache (only changed files are read) and the sparse checkout bits (a file outside the cone is not "deleted"). A clean tree gives HEAD itself.
 - **Left out.** Ignored files, and new files over 5 MB (`SNAP_MAX`): a snapshot writes into the repo's object store. The header names what it left out.
-- **Refs.** `refs/sb/review/<id>/head` keeps the view's snapshot from `git gc`, and `refs/sb/review/<id>/reviewed` keeps the point of Mark reviewed. Not under `refs/switchboard`: `local_changes` leaves out commits that refs there reach, and a snapshot's parent is the agent's HEAD. Close of the review deletes both. No store change: the refs hold the state.
-- **New and All.** New (the default) shows `reviewed..snapshot`. With nothing marked yet, it shows the same as All. All shows the range of 11.11 to the snapshot: the commits and the uncommitted work. With nothing unpushed and work in the tree, All shows only the work. **Mark reviewed** sets `reviewed` to the view's head; New is then empty until the agent changes more. After a reset, a rebase or a branch switch, New shows the whole difference, and the header says HEAD moved off the reviewed commit.
-- **When it reads again.** After each turn of an agent (the Stop hook), when a local review is open on its folder, a thread makes a snapshot. A new tree shows **New changes** with Refresh. Other panes cost nothing. The 30 s poll compares HEAD with the HEAD the view was made on (in memory, or after a restart the snapshot's parent), so a snapshot never looks like a new commit.
+- **Refs.** `refs/sb/review/<id>/head` keeps the view's snapshot from `git gc`, and `refs/sb/review/<id>/reviewed` keeps the point of Mark reviewed. Not under `refs/switchboard`: `local_changes` leaves out commits that refs there reach, and a snapshot's parent is the agent's HEAD. Close of the review deletes both. A load and Mark reviewed write their ref first and then check that the review is still open; when it is not, they delete the refs again, so a close during them leaks none. When the folder is gone, the refs cannot be deleted; the log says so. The refs hold the marked point; the store keeps New or All (store version 11), so a restart shows the same range.
+- **New and All.** New (the default) shows `reviewed..snapshot`. With nothing marked yet, it shows the same as All. All shows the range of 11.11 to the snapshot: the commits and the uncommitted work. With nothing unpushed and work in the tree, All shows only the work. **Mark reviewed** sets `reviewed` to the view's head; New is then empty until the agent changes more. After a reset, a rebase or a branch switch, New shows the whole difference, and the header says HEAD moved off the reviewed commit. During a load, New, All and Mark reviewed change nothing and say the commits are still loading: the check and the change are one lock.
+- **When it reads again.** After each turn of an agent (the Stop hook), when a local review is open on its folder, a thread makes a snapshot. A new tree shows **New changes** with Refresh. A turn that ends while the view loads is kept, and one more snapshot runs when the load ends. Other panes cost nothing. The 30 s poll compares HEAD with the HEAD the view was made on (in memory, or after a restart the snapshot's parent), so a snapshot never looks like a new commit.
 - **Comments.** A comment anchors at the view's head and keeps its text, so a Refresh moves it to the same code, or makes it stale (11.7). Send to agent is as in 11.11.
-- **nvim.** `o`, Leader `e` and the nvim buttons of a review open nvim at your line next to the old side: a read-only scratch buffer of `git show <base>:<path>`, in diff mode. The other side is the file itself, so you can edit it; your edits show in the next snapshot. nvim is the worktree's own and stays open, so each call first closes the old side of the call before and runs `diffoff!`. The Lua is `crates/core/src/lua/sb_diff.lua`; the hub writes it to its nvim folder and runs it with `luaeval`, so no Lua is quoted in a Vim string. This works for PR reviews too. `]c` and `[c` are nvim's own jumps between changes.
+- **nvim.** `o`, Leader `e` and the nvim buttons of a review open nvim at your line next to the old side: a read-only scratch buffer of `git show <base>:<path>`, in diff mode. The other side is the file itself, so you can edit it; your edits show in the next snapshot. nvim is the worktree's own and stays open, so each call first closes the old side of the call before and runs `diffoff!`. The Lua is `crates/core/src/lua/sb_diff.lua`; the hub writes it to its nvim folder and runs it with `luaeval`, so no Lua is quoted in a Vim string. This works for PR reviews too. The path from the window must stay in the folder (`rel_ok`): an empty path, an absolute one, one from `~`, one with a `..` piece or a NUL is refused. `]c` and `[c` are nvim's own jumps between changes.
 - **Not yet.** Comments from nvim (`sb note`), a Last turn view, and a guide for local work.
 
 Tests:
@@ -971,6 +973,8 @@ Where the build differs from the text above:
 - `time` in a state message is seconds since the Unix epoch.
 - `idle_end_minutes` is 0 (off) by default. Ending a session is safe, because the tile resumes it, but it is a surprise the first time.
 - The guide session has no board tile. Its state shows in the review header.
+- `review_nvim` checks its path with a small local `rel_ok` in `hub_review.rs`. A proved `rel_ok` with the same meaning is to replace it.
+- The guide prompt (11.3) names the base commit, not a `git merge-base` call: the first round diffs against `{{base}}`. A custom prompt from the config with no `{{base}}` still works, with the old risk.
 - A connection with no `dir` uses your own `~/.claude` and its login.
 - A thread fork and the pin and draft summaries use the active connection.
 - A review run stops at once when Claude reports that the `sb` MCP server failed, and before the start when the `sb` binary is missing. A missing `sb` once made the agent run on without its guide tools.
@@ -1161,7 +1165,7 @@ P2 and P6 hold because each request has its own socket and channel, so a reply c
 
 ## 26. Model check of review close
 
-`models/review_close.qnt` models the review map, the folders on disk, the background jobs (fetch, then checkout), close with its three choices, the cleanup threads, the sweep at start, and your panes, locks and numbered changes. It also has a review of local commits (11.11), "l1", whose folder "a1" is the agent's: it exists from the start, has the agent's pane, and holds unpushed commits. The agent commits and pushes at any time. A pin hides those commits from the work check, as `local_changes` does with `refs/switchboard/*`. The snapshot refs of 11.14 are under `refs/sb` and hide nothing, so the model has no action for them. Two round-1 reviews of one PR share a folder; a round 2 has its own. Each action is one critical section of the code under the tree lock.
+`models/review_close.qnt` models the review map, the folders on disk, the background jobs (fetch, then checkout), close with its three choices, the cleanup threads, the sweep at start, and your panes, locks and numbered changes. It also has a review of local commits (11.11), "l1", whose folder "a1" is the agent's: it exists from the start, has the agent's pane, and holds unpushed commits. The agent commits and pushes at any time. A pin hides those commits from the work check, as `local_changes` does with `refs/switchboard/*`. The snapshot refs of 11.14 are under `refs/sb` and hide nothing, so the model has no action for them; that they never leak after a close is a test (`crates/sb/tests/local_review.rs`). The `sb-pr-<n>` branch is not in the model either: the fetch never moves it over your commits (9.2), and no folder depends on it. Two round-1 reviews of one PR share a folder; a round 2 has its own. Each action is one critical section of the code under the tree lock.
 
 The invariant `Always`:
 - `OpenKeepsFolder`: an open review that has its folder keeps it.

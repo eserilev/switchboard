@@ -40,6 +40,9 @@ pub(crate) struct ReviewState {
     pub mentions: Vec<crate::mentions::Mention>,
     /// The places of the last `review_show` call. In memory only.
     pub show: Option<crate::hub_show::Show>,
+    /// A local review: an agent's turn ended while the commits loaded, so one more
+    /// snapshot runs when the load ends (`turn_snapshot`).
+    pub pending_turn: bool,
 }
 
 impl ReviewState {
@@ -61,6 +64,7 @@ impl ReviewState {
             reviewed: false,
             mentions: vec![],
             show: None,
+            pending_turn: false,
         }
     }
 }
@@ -326,14 +330,18 @@ fn e(x: impl std::fmt::Display) -> String {
 
 impl Hub {
     pub(crate) fn load_reviews(&self) {
-        let rows = self
-            .store
-            .lock()
-            .unwrap()
-            .open_reviews()
-            .unwrap_or_default();
+        let rows: Vec<(ReviewRow, Option<String>)> = {
+            let store = self.store.lock().unwrap();
+            let rows = store.open_reviews().unwrap_or_default();
+            rows.into_iter()
+                .map(|r| {
+                    let range = store.review_range(&r.id).ok().flatten();
+                    (r, range)
+                })
+                .collect()
+        };
         let mut reviews = self.reviews.lock().unwrap();
-        for row in rows {
+        for (row, range) in rows {
             // A local review has no guide: it is ready once it has its commits.
             let done = if row.is_local() { !row.head.is_empty() } else { row.guide.is_some() };
             let status = if done { "ready" } else { "error" };
@@ -342,6 +350,10 @@ impl Hub {
             });
             let mut st = ReviewState::new(row, status, error);
             st.last_poll = 0;
+            // The New or All choice of a local review (SPEC 11.14) survives a restart.
+            if let Some(range) = range.filter(|r| r == "new" || r == "all") {
+                st.range = range;
+            }
             reviews.insert(st.row.id.clone(), st);
         }
     }
@@ -447,6 +459,22 @@ impl Hub {
         self.emit_review(id);
     }
 
+    /// The check that no run is going and the switch to `status` in one lock: a
+    /// double click starts one run, so `run_pid` always names the run a close stops.
+    fn claim_run(&self, id: &str, status: &str) -> Res<()> {
+        {
+            let mut reviews = self.reviews.lock().unwrap();
+            let r = reviews.get_mut(id).ok_or(format!("no review {id}"))?;
+            if matches!(r.status.as_str(), "fetching" | "writing" | "updating") {
+                return Err("the review is still running".into());
+            }
+            r.status = status.into();
+            r.error = None;
+        }
+        self.emit_review(id);
+        Ok(())
+    }
+
     fn save_row(&self, id: &str) {
         let row = self.reviews.lock().unwrap().get(id).map(|r| r.row.clone());
         if let Some(row) = row {
@@ -521,24 +549,49 @@ impl Hub {
     /// Loads the commits of a local review in the background. With `fetch`, the
     /// remotes are fetched first, so the range uses their branches as they are now.
     fn local_refresh_bg(&self, id: &str, fetch: bool) -> Res<()> {
+        self.claim_local(id, |_| Ok(()))?;
+        self.spawn_local(id, fetch);
+        Ok(())
+    }
+
+    /// The check that no load runs, `change`, and the switch to "fetching", in one
+    /// lock. So a click during a load changes nothing and says so.
+    fn claim_local(&self, id: &str, change: impl FnOnce(&mut ReviewState) -> Res<()>) -> Res<()> {
         {
             let mut reviews = self.reviews.lock().unwrap();
-            let r = reviews.get_mut(id).ok_or("gone")?;
+            let r = reviews.get_mut(id).ok_or(format!("no review {id}"))?;
             if r.status == "fetching" && !r.row.head.is_empty() {
                 return Err("the commits are still loading".into());
             }
+            change(r)?;
             r.status = "fetching".into();
             r.error = None;
         }
         self.emit_review(id);
+        Ok(())
+    }
+
+    /// Runs the load that `claim_local` claimed. When a turn ended during it, one
+    /// more snapshot runs after it (`turn_snapshot`).
+    fn spawn_local(&self, id: &str, fetch: bool) {
         let hub = self.arc();
         let rid = id.to_owned();
         std::thread::spawn(move || {
             if let Err(err) = hub.local_refresh(&rid, fetch) {
                 hub.set_status(&rid, "error", Some(err));
             }
+            let pending = match hub.reviews.lock().unwrap().get_mut(&rid) {
+                // A newer load that runs now takes the pending turn itself.
+                Some(r) if r.pending_turn && r.status != "fetching" => {
+                    r.pending_turn = false;
+                    Some(r.row.tree.clone())
+                }
+                _ => None,
+            };
+            if let Some(tree) = pending {
+                hub.turn_snapshot(&tree);
+            }
         });
-        Ok(())
     }
 
     /// The commits of a local review: the range rule, then the diff model. The
@@ -592,8 +645,15 @@ impl Hub {
         if !snap.skipped.is_empty() {
             note += &format!(" Left out, bigger than {} MB: {}.", review::SNAP_MAX >> 20, snap.skipped.join(", "));
         }
-        // The ref keeps the snapshot from `git gc` while the view shows it.
+        // The ref keeps the snapshot from `git gc` while the view shows it. Written
+        // first, then the row is checked: a close that took the row before the check
+        // has maybe dropped the refs already, so this drops them again (no leak).
         repos::git(dir, &["update-ref", &review::snap_ref(id, "head"), &snap.commit])?;
+        let open = self.reviews.lock().unwrap().contains_key(id);
+        if !open {
+            review::drop_snap_refs(dir, id);
+            return Err(CLOSED.into());
+        }
         match self.reviews.lock().unwrap().get_mut(id) {
             Some(r) => {
                 r.row.head = snap.commit;
@@ -617,42 +677,71 @@ impl Hub {
         if !matches!(range, "new" | "all") {
             return Err(format!("unknown range {range}"));
         }
-        match self.reviews.lock().unwrap().get_mut(id) {
-            Some(r) if r.row.is_local() => r.range = range.to_owned(),
-            Some(_) => return Err("Only a review of local work has ranges.".into()),
-            None => return Err(format!("no review {id}")),
-        }
-        self.local_refresh_bg(id, false)
+        // The check of the status comes first: during a load nothing changes.
+        self.claim_local(id, |r| {
+            if !r.row.is_local() {
+                return Err("Only a review of local work has ranges.".into());
+            }
+            if r.status == "fetching" {
+                return Err("the commits are still loading".into());
+            }
+            r.range = range.to_owned();
+            Ok(())
+        })?;
+        let _ = self.store.lock().unwrap().set_review_range(id, range);
+        self.spawn_local(id, false);
+        Ok(())
     }
 
     /// Marks what the view shows as reviewed: the next `new` view starts here.
     pub fn review_mark_reviewed(&self, id: &str) -> Res<()> {
-        let (tree, head) = {
-            let mut reviews = self.reviews.lock().unwrap();
-            let r = reviews.get_mut(id).ok_or(format!("no review {id}"))?;
+        let mut seen = (String::new(), String::new());
+        self.claim_local(id, |r| {
             if !r.row.is_local() || r.row.head.is_empty() {
                 return Err("Only a loaded review of local work can be marked reviewed.".into());
             }
+            if r.status == "fetching" {
+                return Err("the commits are still loading".into());
+            }
             r.range = "new".into();
-            (r.row.tree.clone(), r.row.head.clone())
-        };
-        repos::git(Path::new(&tree), &["update-ref", &review::snap_ref(id, "reviewed"), &head])?;
+            seen = (r.row.tree.clone(), r.row.head.clone());
+            Ok(())
+        })?;
+        let (tree, head) = seen;
+        let _ = self.store.lock().unwrap().set_review_range(id, "new");
+        let dir = Path::new(&tree);
+        if let Err(err) = repos::git(dir, &["update-ref", &review::snap_ref(id, "reviewed"), &head]) {
+            self.set_status(id, "error", Some(err.clone()));
+            return Err(err);
+        }
+        // As in `local_refresh`: a close that took the row first maybe dropped the refs.
+        let open = self.reviews.lock().unwrap().contains_key(id);
+        if !open {
+            review::drop_snap_refs(dir, id);
+            return Err(CLOSED.into());
+        }
         tracing::info!(target: "sb::review", review = id, %head, "marked reviewed");
-        self.local_refresh_bg(id, false)
+        self.spawn_local(id, false);
+        Ok(())
     }
 
     /// After an agent's turn (the Stop hook): when a local review is open on its
     /// folder and the work changed, the review shows New changes. Only there, so
     /// other panes cost nothing. Runs in a thread: the hook waits for nothing.
+    /// A turn that ends while the commits load is kept: the load runs this again
+    /// when it ends (`spawn_local`).
     pub(crate) fn turn_snapshot(&self, tree: &str) {
-        let open: Vec<(String, String)> = self
-            .reviews
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|r| r.row.is_local() && r.status == "ready" && review::same_path(Path::new(&r.row.tree), Path::new(tree)))
-            .map(|r| (r.row.id.clone(), r.row.head.clone()))
-            .collect();
+        let mut open: Vec<(String, String)> = vec![];
+        for r in self.reviews.lock().unwrap().values_mut() {
+            if !r.row.is_local() || !review::same_path(Path::new(&r.row.tree), Path::new(tree)) {
+                continue;
+            }
+            if r.status == "ready" {
+                open.push((r.row.id.clone(), r.row.head.clone()));
+            } else if r.status == "fetching" {
+                r.pending_turn = true;
+            }
+        }
         if open.is_empty() {
             return;
         }
@@ -671,6 +760,11 @@ impl Hub {
                     Some(r) if r.status == "ready" && r.row.head == head => {
                         r.new_head = Some(snap.commit.clone());
                         true
+                    }
+                    // A load started since: it looks again when it ends.
+                    Some(r) if r.status == "fetching" => {
+                        r.pending_turn = true;
+                        false
                     }
                     _ => false,
                 };
@@ -1000,12 +1094,13 @@ impl Hub {
 
     /// Runs the guide session: a new one, or a resume with an update prompt.
     fn run_guide(&self, id: &str, pr: &PrInfo, update: Option<String>) -> Res<()> {
-        let (tree, head, session, connection) = {
+        let (tree, head, base, session, connection) = {
             let r = self.reviews.lock().unwrap();
             let r = r.get(id).ok_or("gone")?;
             (
                 PathBuf::from(&r.row.tree),
                 r.row.head.clone(),
+                r.row.base.clone(),
                 r.row.guide_session.clone(),
                 r.row
                     .connection
@@ -1031,7 +1126,7 @@ impl Hub {
         let prompt = match update.clone() {
             Some(u) => u,
             None => {
-                let mut p = review::prompt(&template, pr, &head, &specs, &config.review.web_domains);
+                let mut p = review::prompt(&template, pr, &head, &base, &specs, &config.review.web_domains);
                 p += &self.round_prompt(id)?;
                 p
             }
@@ -1273,20 +1368,10 @@ impl Hub {
     }
 
     pub fn review_retry(&self, id: &str) -> Res<()> {
-        let running = self
-            .reviews
-            .lock()
-            .unwrap()
-            .get(id)
-            .map(|r| matches!(r.status.as_str(), "fetching" | "writing" | "updating"))
-            .unwrap_or(false);
-        if running {
-            return Err("the review is still running".into());
-        }
         if self.pr_only(id).is_err() {
             return self.local_refresh_bg(id, false);
         }
-        self.set_status(id, "fetching", None);
+        self.claim_run(id, "fetching")?;
         let hub = self.arc();
         let rid = id.to_owned();
         std::thread::spawn(move || {
@@ -2331,28 +2416,35 @@ impl Hub {
                 }
             }
         }
-        let due: Vec<(String, String, String)> = self
+        let due: Vec<(String, String)> = self
             .reviews
             .lock()
             .unwrap()
             .values()
             .filter(|r| !r.row.is_local() && r.status == "ready" && now().saturating_sub(r.last_poll) >= every)
-            .map(|r| (r.row.id.clone(), r.row.url.clone(), r.row.head.clone()))
+            .map(|r| (r.row.id.clone(), r.row.url.clone()))
             .collect();
-        for (id, url, head) in due {
+        for (id, url) in due {
             if let Some(r) = self.reviews.lock().unwrap().get_mut(&id) {
                 r.last_poll = now();
             }
             let hub = self.arc();
             std::thread::spawn(move || {
                 if let Ok(pr) = review::gh_view(&url) {
-                    if let Some(r) = hub.reviews.lock().unwrap().get_mut(&id) {
-                        r.base_ref = Some(pr.base_ref_name.clone());
-                    }
-                    if pr.head_ref_oid != head && !head.is_empty() {
-                        if let Some(r) = hub.reviews.lock().unwrap().get_mut(&id) {
-                            r.new_head = Some(pr.head_ref_oid.clone());
+                    // Compare with the head as it is now: an Update can have moved it
+                    // while `gh` ran.
+                    let changed = match hub.reviews.lock().unwrap().get_mut(&id) {
+                        Some(r) => {
+                            r.base_ref = Some(pr.base_ref_name.clone());
+                            let moved = !r.row.head.is_empty() && pr.head_ref_oid != r.row.head;
+                            if moved {
+                                r.new_head = Some(pr.head_ref_oid.clone());
+                            }
+                            moved
                         }
+                        None => false,
+                    };
+                    if changed {
                         hub.emit_review(&id);
                     }
                 }
@@ -2362,19 +2454,10 @@ impl Hub {
 
     /// Moves the review to the new head: stale steps, re-anchored threads, a guide update.
     pub fn review_update(&self, id: &str) -> Res<()> {
-        let running = self
-            .reviews
-            .lock()
-            .unwrap()
-            .get(id)
-            .map(|r| matches!(r.status.as_str(), "fetching" | "writing" | "updating"))
-            .unwrap_or(false);
-        if running {
-            return Err("the review is still running".into());
-        }
         if self.pr_only(id).is_err() {
             return self.local_refresh_bg(id, false);
         }
+        self.claim_run(id, "updating")?;
         let hub = self.arc();
         let rid = id.to_owned();
         std::thread::spawn(move || {
@@ -2537,6 +2620,9 @@ impl Hub {
             .get(id)
             .map(|r| (PathBuf::from(&r.row.tree), r.row.base.clone()))
             .ok_or("gone")?;
+        if !rel_ok(path) {
+            return Err(format!("not a path in the review: {path:?}"));
+        }
         let file = tree.join(path);
         let pane = self.nvim_open(&tree, Some((&file.to_string_lossy(), line.max(1))))?;
         if base.is_empty() {
@@ -2775,6 +2861,13 @@ impl Hub {
         self.review_tick(n)
     }
 
+    /// Tests only: the reviews as a restart reads them from the store.
+    #[doc(hidden)]
+    pub fn debug_reload_reviews(&self) {
+        self.reviews.lock().unwrap().clear();
+        self.load_reviews();
+    }
+
     /// Tests only: the cleanup that runs at start.
     #[doc(hidden)]
     pub fn debug_sweep(&self) {
@@ -2790,6 +2883,13 @@ impl Hub {
             .map(|r| r.row.tree.clone())?;
         repos::main_checkout(Path::new(&tree))
     }
+}
+
+/// True for a path that stays inside the folder it joins: not empty, not absolute,
+/// not from `~`, no `..` piece and no NUL. A proved `rel_ok` replaces this later,
+/// with the same meaning.
+pub(crate) fn rel_ok(path: &str) -> bool {
+    !path.is_empty() && !path.starts_with('/') && !path.starts_with('~') && !path.contains('\0') && !path.split('/').any(|p| p == "..")
 }
 
 /// Checks the shape of a guide, and gives every step a `ranges` list.
@@ -2986,6 +3086,16 @@ fn spec_dirs(config: &crate::config::Config) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rel_ok_keeps_a_path_inside_its_folder() {
+        for p in ["a.rs", "src/lib.rs", ".github/x.yml", "a..b/c", "./a"] {
+            assert!(rel_ok(p), "{p}");
+        }
+        for p in ["", "/etc/passwd", "~/x", "~", "..", "../a", "a/../../b", "a/..", "a\0b"] {
+            assert!(!rel_ok(p), "{p:?}");
+        }
+    }
 
     #[test]
     fn the_header_names_only_refused_pages() {
