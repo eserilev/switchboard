@@ -1450,7 +1450,7 @@ One JSON object per line, on the window socket. `sb attach` copies its stdin and
 ### 29.3 One window at a time
 
 - Each attach gets a new epoch. The new window takes over: under the owner lock, it becomes the owner and the current window, and the screen collapses.
-- The old window gets the `taken_over` event, then its socket closes. Its banner says that another window took over, with Take it back.
+- The old window gets the `taken_over` event, then its socket closes. Only the writer shuts the socket, after its last line, so `taken_over` always goes first. Its banner says that another window took over, with Take it back.
 - After the takeover, the hub reads no more lines of the old window, so late keys never reach a pane. A writer that blocks on a dead link gets its socket shut after 5 s.
 - The screen commands (`pane_expand`, `pane_attach`, `pane_detach`, `pane_collapse`, `pane_resize`, `part_resize`) run under the owner lock, and only for the owner. A command of a window that lost a takeover gets an error and changes nothing.
 - A command of the old window that runs at the takeover still runs, if it is not a screen command. A permit click carries its permit id, so it answers only the request that its tile showed (25, P2).
@@ -1523,6 +1523,8 @@ A review by a second agent found these. All are fixed:
 | V4 | The screen thread had no owner lock. A collapse between its check and its stream on left a pane off screen streaming, and an old window could pause a pane of the new one. | The owner lock and the epoch check (29.5). |
 | V5 | A panic in a command of the read loop left the window with no answers. | A guard ends the window, also on a panic. |
 | V6 | A command sent while the link went down could wait for ever. | `send` looks at the link again after it adds its waiter. |
+| V7 | The end of the read loop shut the socket itself, so the close could beat the writer's `taken_over` line. | The read loop only asks the writer to end: the writer shuts the socket after its last line, or after 5 s. |
+| V8 | Two connects at once (the start and Reconnect) could leave the window with the client that the other one took over. | One lock holds for the whole connect. |
 
 ### 29.9 Not yet
 

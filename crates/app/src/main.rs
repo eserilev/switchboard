@@ -116,12 +116,19 @@ struct Remote {
     /// The number of the newest link. News of an older link is dropped: its
     /// reader can end after the next link is up.
     gen: Arc<AtomicU64>,
+    /// Held for the whole of a connect, so two connects (the start and a click
+    /// on Reconnect) never run at once: the second could take over the first,
+    /// and the window would keep the client that was taken over.
+    connecting: Mutex<()>,
 }
 
 impl Remote {
     /// Connects, and tells the window. On an error the link stays down with the reason.
     fn connect(&self) -> Res<()> {
-        if let Some(old) = self.client.lock().unwrap().take() {
+        // Lock order: `connecting`, then `client`, then `down`.
+        let _one = self.connecting.lock().unwrap();
+        let old = self.client.lock().unwrap().take();
+        if let Some(old) = old {
             old.close();
         }
         let g = self.gen.fetch_add(1, Ordering::SeqCst) + 1;
@@ -427,6 +434,7 @@ fn main() {
                         sink,
                         leader: config.leader.clone(),
                         gen: Arc::default(),
+                        connecting: Mutex::default(),
                     };
                     Arc::new(Backend::Remote(remote))
                 }

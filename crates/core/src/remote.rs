@@ -295,13 +295,22 @@ fn window(hub: Arc<Hub>, sink: Arc<RemoteSink>, stream: UnixStream) {
 struct Leave<'a> {
     hub: &'a Hub,
     sink: &'a RemoteSink,
-    conn: &'a Conn,
+    conn: &'a Arc<Conn>,
 }
 
 impl Drop for Leave<'_> {
     fn drop(&mut self) {
         tracing::info!(target: "sb::remote", epoch = self.conn.epoch, "a window left");
-        self.conn.close();
+        // The writer shuts the socket after its last line (`taken_over` after a
+        // takeover): a close here could beat that line. A writer that blocks on a
+        // dead link never does: shut it after a while anyway.
+        self.conn.ending.store(true, Ordering::SeqCst);
+        self.conn.ring();
+        let conn = Arc::clone(self.conn);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(5));
+            conn.close();
+        });
         // A panic under the owner lock poisons it: the value is still good.
         let owner = self.sink.owner.lock().unwrap_or_else(|e| e.into_inner());
         if *owner == self.conn.epoch {
