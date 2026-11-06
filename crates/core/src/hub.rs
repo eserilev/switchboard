@@ -108,6 +108,9 @@ pub(crate) struct Pane {
     pub started: u64,
     /// The tick saw this process exit. It stops a second alert for the same exit.
     pub dead: bool,
+    /// The value of `Hub.spawns` when this process started. A tick whose tmux list
+    /// is older than the start leaves the pane alone: the list does not show it yet.
+    pub spawn: u64,
     pub busy: bool,
     pub modified: bool,
     pub sandboxed: bool,
@@ -174,6 +177,9 @@ pub struct Hub {
     /// The number part of the next permit id. A counter, not the clock: the
     /// clock can repeat a value (SPEC 25, F5).
     next_permit: AtomicU64,
+    /// Counts process starts in panes (new panes and resumes). The tick reads it
+    /// before it lists tmux, so it knows which panes its list is too old for.
+    spawns: AtomicU64,
     pub(crate) sink: Arc<dyn Sink>,
     pub(crate) sb: PathBuf,
     pub(crate) reviews: Mutex<HashMap<String, crate::hub_review::ReviewState>>,
@@ -188,6 +194,8 @@ pub struct Hub {
     sizes: Arc<Mutex<HashMap<String, (u16, u16)>>>,
     /// The panes an expand resumes now, so a second click does not start a second process.
     resuming: Mutex<Vec<String>>,
+    /// The panes that an idle end stops now (SPEC 15), so a tick starts one stop.
+    stopping: Mutex<Vec<String>>,
     /// The task PR links that GitHub reports as merged (SPEC 27.6). Merged is final,
     /// so a link in it is not read again.
     pub(crate) merged: Mutex<Vec<String>>,
@@ -291,12 +299,14 @@ impl Hub {
             live,
             permits: Mutex::default(),
             next_permit: AtomicU64::new(1),
+            spawns: AtomicU64::new(0),
             sink,
             sb,
             reviews: Mutex::default(),
             size: Mutex::new((200, 50)),
             sizes: Arc::default(),
             resuming: Mutex::default(),
+            stopping: Mutex::default(),
             trees: Mutex::new(()),
             merged: Mutex::default(),
             polling: std::sync::atomic::AtomicBool::new(false),
@@ -468,6 +478,11 @@ impl Hub {
         Ok(())
     }
 
+    /// A new mark for a process start. It is above every mark a tick took before.
+    fn next_spawn(&self) -> u64 {
+        self.spawns.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+    }
+
     fn pane_from(&self, row: PaneRow, tmux: Option<String>, pid: Option<u32>) -> Pane {
         let branch =
             repos::git(Path::new(&row.tree), &["branch", "--show-current"]).unwrap_or_default();
@@ -484,6 +499,7 @@ impl Hub {
             trust: false,
             started: now(),
             dead: false,
+            spawn: self.next_spawn(),
             busy: false,
             modified: false,
         }
@@ -748,6 +764,7 @@ impl Hub {
         };
         if let Some(t) = tid {
             let _ = self.tmux.kill_pane(&t);
+            self.sizes.lock().unwrap().remove(&t);
         }
         // The live pane takes its parts with it. A part goes alone.
         let off: Vec<(String, String)> = {
@@ -769,6 +786,7 @@ impl Hub {
             .map_err(e)?;
         self.answer_permits(id, None);
         let _ = std::fs::remove_file(self.paths.settings_dir().join(format!("{id}.json")));
+        let _ = std::fs::remove_file(self.paths.state_dir().join(format!("{id}.json")));
         self.emit_panes();
         Ok(())
     }
@@ -1239,7 +1257,9 @@ impl Hub {
             }
         }
         let sandboxed = self.sandbox_file_on(id);
+        let spawn = self.next_spawn();
         self.with_pane(id, false, |p| {
+            p.spawn = spawn;
             p.tmux = Some(tid);
             p.pid = pid;
             p.sandboxed = sandboxed;
@@ -1353,6 +1373,29 @@ impl Hub {
         }
         self.respawn_claude(id, tid, Path::new(&tree), &next, &session)?;
         Ok(next)
+    }
+
+    /// `stop_claude` on a thread, once per pane at a time.
+    fn stop_in_thread(&self, id: &str, tid: &str) {
+        {
+            let mut stopping = self.stopping.lock().unwrap();
+            if stopping.iter().any(|s| s == id) {
+                return;
+            }
+            stopping.push(id.to_owned());
+        }
+        let (me, id, tid) = (self.me.clone(), id.to_owned(), tid.to_owned());
+        let spawned = std::thread::Builder::new()
+            .name("sb-idle-end".into())
+            .spawn(move || {
+                let Some(hub) = me.upgrade() else { return };
+                tracing::info!(target: "sb::hub", pane = %id, "idle end");
+                hub.stop_claude(&tid);
+                hub.stopping.lock().unwrap().retain(|s| s != &id);
+            });
+        if spawned.is_err() {
+            self.stopping.lock().unwrap().clear();
+        }
     }
 
     /// Sends Ctrl+C twice and waits up to 5 s for the pane to die.
@@ -1743,6 +1786,9 @@ impl Hub {
     }
 
     fn tick(&self, n: u64) {
+        // Before the list: a pane that starts after this mark is not in the list
+        // as it is now, so the tick leaves it alone (no "gone", no "dead").
+        let seen = self.spawns.load(std::sync::atomic::Ordering::SeqCst);
         let Ok(lines) = self
             .tmux
             .list("#{pane_id}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_pid}\t#{pane_current_command}")
@@ -1773,6 +1819,7 @@ impl Hub {
             .lock()
             .unwrap()
             .iter()
+            .filter(|p| p.spawn <= seen)
             .map(|p| (p.row.id.clone(), p.tmux.clone()))
             .collect();
         let mut gone = vec![];
@@ -1798,6 +1845,10 @@ impl Hub {
             let Some(p) = panes.iter_mut().find(|p| p.row.id == id) else {
                 continue;
             };
+            // Resumed while this tick ran: the list is older than the process.
+            if p.spawn > seen || p.tmux.as_deref() != Some(tid.as_str()) {
+                continue;
+            }
             let row_before = p.row.clone();
             let mut changed = false;
             let mut alert = false;
@@ -1814,6 +1865,10 @@ impl Hub {
             if p.busy != busy {
                 p.busy = busy;
                 changed = true;
+            }
+            if !dead && p.dead {
+                // The pane runs again (the list is newer than its start).
+                p.dead = false;
             }
             if dead && !p.dead {
                 p.dead = true;
@@ -1870,9 +1925,10 @@ impl Hub {
                 && now().saturating_sub(p.row.updated) > idle_end
                 && p.row.session.is_some()
             {
-                let t = tid.clone();
+                // The stop waits up to 5 s, so it runs on a thread of its own:
+                // the tick must not wait. `stopping` stops a second thread.
                 drop(panes);
-                self.stop_claude(&t);
+                self.stop_in_thread(&id, &tid);
                 continue;
             }
             if changed {
@@ -1890,18 +1946,21 @@ impl Hub {
             self.answer_permits(&id, None);
         }
         for id in gone {
+            // A pane resumed since the list is not gone.
             let kind = self
                 .panes
                 .lock()
                 .unwrap()
                 .iter()
-                .find(|p| p.row.id == id)
+                .find(|p| p.row.id == id && p.spawn <= seen)
                 .map(|p| p.row.kind.clone());
             match kind.as_deref() {
                 Some("claude") => {
                     let _ = self.with_pane(&id, false, |p| {
-                        p.tmux = None;
-                        p.row.lamp = Lamp::Ended.as_str().into();
+                        if p.spawn <= seen {
+                            p.tmux = None;
+                            p.row.lamp = Lamp::Ended.as_str().into();
+                        }
                     });
                     self.answer_permits(&id, None);
                 }
