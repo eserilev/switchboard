@@ -115,6 +115,7 @@ commands! {
     review_view(id: String) -> Value => |h| h.review_view(&id).map(|v| json!(v));
     review_diff(id: String, step: String) -> Value => |h| h.review_diff(&id, &step).map(|v| json!(v));
     review_file_rows(id: String, path: String) -> Value => |h| h.review_file_rows(&id, &path).map(|v| json!(v));
+    review_context(id: String, path: String, line: u32) -> Value => |h| h.review_context(&id, &path, line).map(|v| json!(v));
     review_files(id: String) -> Value => |h| h.review_files(&id).map(|v| json!(v));
     review_file_diff(id: String, path: String) -> Value => |h| h.review_file_diff(&id, &path).map(|v| json!(v));
     review_mark(id: String, step: String, checked: bool) -> () => |h| h.review_mark(&id, &step, checked);

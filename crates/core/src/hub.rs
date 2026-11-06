@@ -94,6 +94,10 @@ pub(crate) struct Start {
     pub setting_sources: Option<&'static str>,
     /// A review Ask pane: sandbox mode `review` covers it (SPEC 31).
     pub ask: bool,
+    /// `--mcp-config`, with `--strict-mcp-config`: the Ask pane's `sb mcp --ask`.
+    pub mcp: Option<String>,
+    /// `--append-system-prompt`. One line: the command goes through tmux.
+    pub system: Option<String>,
 }
 
 pub(crate) struct Pane {
@@ -730,6 +734,13 @@ impl Hub {
                 argv.push("--fork-session".into());
             }
         }
+        if let Some(p) = &start.system {
+            argv.extend(["--append-system-prompt".into(), p.clone()]);
+        }
+        // `--mcp-config` and `--add-dir` take lists: a flag ends each one.
+        if let Some(cfg) = &start.mcp {
+            argv.extend(["--mcp-config".into(), cfg.clone(), "--strict-mcp-config".into()]);
+        }
         for d in &start.dirs {
             argv.extend(["--add-dir".into(), d.clone()]);
         }
@@ -1050,6 +1061,7 @@ impl Hub {
             if let Some(tree) = tree {
                 self.turn_snapshot(&tree);
             }
+            self.turn_mentions(&m.pane, m.detail.get("text").and_then(Value::as_str).unwrap_or(""));
         }
         if let Some(c) = limit_conn {
             let c = c.unwrap_or_else(|| self.active_connection());
@@ -1204,8 +1216,18 @@ impl Hub {
     ) -> Res<()> {
         // A request of the old process is gone: its buttons go too.
         self.answer_permits(id, None);
+        // An Ask pane gets its tool, its rules and its user-only settings again
+        // (SPEC 11.15): it runs in the PR's files.
+        let (mcp, system, allow) = self.ask_extras(id);
+        let ask = mcp.is_some();
         let start = Start {
             resume: Some(session.to_owned()),
+            mcp,
+            system,
+            allow,
+            setting_sources: ask.then_some(crate::review::SETTING_SOURCES),
+            rust: ask.then_some(false),
+            ask,
             ..Start::default()
         };
         let (argv, env) = self.command("claude", id, tree, Some(connection), &start)?;
@@ -1713,6 +1735,10 @@ impl Hub {
                 Ok(()) => Ack::ok(),
                 Err(err) => Ack::err(err),
             }),
+            Request::ReviewShow { review, points } => json!(match self.review_show(&review, &points) {
+                Ok(()) => Ack::ok(),
+                Err(err) => Ack::err(err),
+            }),
             Request::Task { pane, op } => self.task_socket(pane.as_deref(), op),
         };
         let mut w = &conn;
@@ -1956,6 +1982,7 @@ fn request_kind(r: &Request) -> &'static str {
         Request::Open { .. } => "open",
         Request::GuideSet { .. } => "guide_set",
         Request::GuideUpdate { .. } => "guide_update",
+        Request::ReviewShow { .. } => "review_show",
         Request::Task { .. } => "task",
     }
 }

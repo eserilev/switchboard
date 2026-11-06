@@ -10,7 +10,7 @@
   const savePlace = (id) => {
     const l = R.get(id);
     if (!l) return;
-    try { localStorage.setItem(placeKey(id), JSON.stringify({ cur: l.cur, mode: l.mode, file: l.file, viewed: [...l.viewed], vhead: l.vhead })); } catch (_) {}
+    try { localStorage.setItem(placeKey(id), JSON.stringify({ cur: l.cur, mode: l.mode, file: l.file, viewed: [...l.viewed], vhead: l.vhead, showAt: l.showAt || 0 })); } catch (_) {}
   };
   const local = (id) => {
     if (!R.has(id)) {
@@ -18,7 +18,10 @@
       R.set(id, { cur: p.cur || 0, anchor: null, term: null, diff: new Map(), loading: new Set(),
         // Guide shows the steps; Files shows every changed file, like GitHub's "Files changed".
         full: new Map(), shown: new Map(),
-        mode: p.mode === "files" ? "files" : "guide", file: p.file || null, files: null, viewed: new Set(p.viewed || []), vhead: p.vhead || null });
+        mode: p.mode === "files" ? "files" : "guide", file: p.file || null, files: null, viewed: new Set(p.viewed || []), vhead: p.vhead || null,
+        // Claude points to the code (SPEC 11.15): the tour of its places, where you were
+        // before a jump, the place to scroll to, and a view of a file the PR does not change.
+        tour: null, hist: [], target: null, ctx: null, showAt: p.showAt || 0 });
     }
     return R.get(id);
   };
@@ -56,12 +59,13 @@
       <div class="rcols" id="rcols">
         <div class="col"><ol class="steps" id="rsteps"></ol></div>
         <div class="gutter gx" id="rgutl" title="Drag to size. Double-click to reset."></div>
-        <div class="col center" id="rcenter"><div class="guide" id="rguide"></div><div id="rdiff"></div></div>
+        <div class="col center" id="rcenter"><div class="tour" id="rtour" hidden></div><div class="guide" id="rguide"></div><div id="rdiff"></div></div>
         <div class="gutter gx" id="rgutr" title="Drag to size. Double-click to reset."></div>
         <div class="col">
           <div class="tbar"><span class="seg" role="group" aria-label="Show in this column"><button type="button" class="segb" data-rview="agent" title="Show ${r.kind === "local" ? "the agent" : "Claude"} (Leader e)">${r.kind === "local" ? "Agent" : "Claude"}</button><button type="button" class="segb" data-rview="nvim" title="Open nvim at the file you are on (Leader e)">nvim</button></span>${r.kind === "local" ? "" : `<button class="btn small" type="button" id="rstep" title="Type the current step into Claude's prompt">Send step</button>`}</div>
           <div class="chatlog" id="rchat" hidden></div>
           <div class="askhost" id="rterm"><div class="askwait" id="raskwait"></div></div>
+          <div class="mentions" id="rment" hidden></div>
           <div class="drafts" id="rdrafts"></div>
         </div>
       </div>
@@ -82,6 +86,12 @@
     if (S.tab !== r.id) return;
     if (!fresh && !$("#rsteps")) return draw(r.id);
     const l = local(r.id);
+    // A new review_show call: the window jumps to its first place, once.
+    if (r.show?.points?.length && r.show.at > (l.showAt || 0) && r.status === "ready") {
+      l.showAt = r.show.at;
+      savePlace(r.id);
+      if (startTour(r.id, 0)) return;
+    }
     // A review of local commits has no guide: only Files (SPEC 11.11).
     if (r.kind === "local") l.mode = "files";
     // A new agent pane for the folder: ask for it again.
@@ -99,6 +109,9 @@
       drawSteps(r);
       drawGuide(r);
     }
+    if (l.ctx) drawCtxHead(r);
+    drawTour(r);
+    drawMentions(r);
     if (!l.term && !l.opening && !l.noTerm && r.status === "ready") openTerm(r.id);
     drawTermWait(r);
     drawDrafts(r);
@@ -110,6 +123,7 @@
   // The key of the diff on screen: a step id, or "file:" and a path.
   function diffKey(r) {
     const l = local(r.id);
+    if (l.ctx) return `ctx:${l.ctx.line}:${l.ctx.path}`;
     if (l.mode === "files") return l.file ? `file:${l.file}` : null;
     return steps(r)[l.cur]?.id || null;
   }
@@ -134,6 +148,7 @@
 
   function setMode(id, mode) {
     const l = local(id);
+    if (l.ctx) { l.ctx = null; if (l.mode === mode) return update(S.reviews.get(id)); }
     if (l.mode === mode || S.reviews.get(id)?.kind === "local") return;
     l.mode = mode;
     l.anchor = null;
@@ -148,7 +163,9 @@
     const files = l.files || [];
     if (!files.length) return;
     const f = files[Math.max(0, Math.min(files.length - 1, i))];
-    if (f.path === l.file) return;
+    const ctx = l.ctx;
+    l.ctx = null;
+    if (f.path === l.file) { if (ctx) update(S.reviews.get(id)); return; }
     l.file = f.path;
     l.anchor = null;
     l.compose = null;
@@ -364,7 +381,7 @@
       const w = worst(live);
       const take = w ? `<span class="badge sev-${w}">${SEV[w]} · ${live.filter((x) => x.severity === w).length}</span>`
         : s.take?.verdict === "good" ? `<span class="tk-good" title="${esc(s.take.checked || "")}">● Claude: no notes</span>` : "";
-      const badges = [take, n ? `<span class="badge th">${n} thread${n > 1 ? "s" : ""}</span>` : "", st.stale ? `<span class="badge stale">stale</span>` : "", s.auto ? `<span class="badge stale">added by the app</span>` : ""].join("");
+      const badges = [take, n ? `<span class="badge th">${n} thread${n > 1 ? "s" : ""}</span>` : "", st.stale ? `<span class="badge stale">stale</span>` : "", s.auto ? `<span class="badge stale">added by the app</span>` : "", stepMarks(r, i)].join("");
       return `<li class="step${st.checked ? " checked" : ""}" tabindex="0" data-i="${i}" ${i === l.cur ? 'aria-current="step"' : ""}>
         <span class="n">${st.checked && i !== l.cur ? "✓" : i + 1}</span>
         <div><div class="st">${mdi(s.title)}</div>${loc ? `<div class="loc" title="${esc(loc)}">${esc(loc)}</div>` : ""}${badges ? `<div class="badges">${badges}</div>` : ""}</div></li>`;
@@ -497,7 +514,9 @@
     if (!key || l.diff.has(key) || l.loading.has(key)) return;
     l.loading.add(key);
     try {
-      l.diff.set(key, key.startsWith("file:")
+      const ctx = /^ctx:(\d+):(.*)$/s.exec(key);
+      l.diff.set(key, ctx ? await invoke("review_context", { id, path: ctx[2], line: +ctx[1] })
+        : key.startsWith("file:")
         ? await invoke("review_file_diff", { id, path: key.slice(5) })
         : await invoke("review_diff", { id, step: key }));
     } catch (e) {
@@ -534,6 +553,8 @@
       // Take notes on this file: the step's in Guide, every step's in Files.
       const noted = (l.mode === "files" ? steps(r) : s ? [s] : []).flatMap((x) => takeNotes(r, x.id, x.take)).filter((n) => n.line && n.file === pathOf(n.side));
       const c = l.compose && l.compose.sec === sec.path ? l.compose : null;
+      const pts = tourPts(l);
+      const curPt = l.tour ? pts[l.tour.i] : null;
       const rows = items(l, key, sec).map((it) => {
         if (it.gap) return gapRow(si, it);
         const row = it.row;
@@ -548,7 +569,12 @@
         const here = noted.filter((n) => n.side === rowSide && n.line === num);
         here.forEach((n) => placed.add(n.key));
         const dot = worst(here.filter((n) => !n.dismissed));
-        const cls = [KIND_CLASS[row.kind], focus ? "focus" : "", isAnchor ? "anchor" : "", anchored.has(`${rowSide}:${num}`) ? "anchored" : "", sel ? "sel" : "", dot ? `noted-${dot}` : ""].join(" ");
+        // Claude's places on this row: on its side, or on the old side of a context row.
+        const onRow = (p) => covers(p, pathOf(rowSide), rowSide, num) || (row.kind === " " && covers(p, pathOf("old"), "old", row.old));
+        const onPts = pts.filter(onRow);
+        const ends = pts.map((p, i) => [p, i]).filter(([p]) => onRow(p) && (p.side === "old" && row.kind === " " ? row.old : num) === (p.end || p.line));
+        const cls = [KIND_CLASS[row.kind], focus ? "focus" : "", isAnchor ? "anchor" : "", anchored.has(`${rowSide}:${num}`) ? "anchored" : "", sel ? "sel" : "", dot ? `noted-${dot}` : "", onPts.length ? "pt" : "", curPt && onPts.includes(curPt) ? "ptcur" : ""].join(" ");
+        const pboxes = ends.map(([p, i]) => `<tr class="prow"><td colspan="3">${pointBox(p, i, p === curPt, !sec.context)}</td></tr>`).join("");
         const notes = here.map((n) => `<tr class="drow"><td colspan="3">${noteCard(n, { show: l.shownNotes?.has?.(n.key), added: l.added?.has?.(n.key) })}</td></tr>`).join("");
         const sign = row.kind === " " ? " " : row.kind;
         // A stale draft has no line at this head: it shows only in the list.
@@ -561,7 +587,8 @@
           <textarea id="rctext" placeholder="Leave a comment">${esc(c.text || "")}</textarea>
           <div class="cbtns"><button type="button" class="btn small" data-ccancel>Cancel</button><button type="submit" class="btn small primary">Add to review</button></div>
         </form></td></tr>` : "";
-        return `<tr class="${cls}"><td class="cm"><button type="button" class="cmb" data-cm data-sec="${si}" data-side="${rowSide}" data-n="${num}" aria-label="Comment on line ${num}">+</button></td><td class="ln" data-sec="${si}" data-side="${rowSide}" data-ln="${num}">${num}</td><td class="src"><span class="sg">${sign}</span>${esc(row.text)}</td></tr>${notes}${cards}${form}`;
+        const oldNum = row.kind === " " && row.old != null ? ` data-o="${row.old}"` : "";
+        return `<tr class="${cls}"><td class="cm"><button type="button" class="cmb" data-cm data-sec="${si}" data-side="${rowSide}" data-n="${num}" aria-label="Comment on line ${num}">+</button></td><td class="ln" data-sec="${si}" data-side="${rowSide}" data-ln="${num}"${oldNum}>${num}</td><td class="src"><span class="sg">${sign}</span>${esc(row.text)}</td></tr>${pboxes}${notes}${cards}${form}`;
       }).join("");
       const moved = sec.old_path && sec.old_path !== sec.path ? ` <span class="ctxnote">from ${esc(sec.old_path)}</span>` : "";
       const note = sec.note ? ` <span class="ctxnote">${esc(sec.note)}</span>` : "";
@@ -570,7 +597,7 @@
       const links = o ? o.steps.map((sid) => steps(r).findIndex((x) => x.id === sid)).filter((i) => i >= 0)
         .map((i) => `<button class="chip link" data-ostep="${i}">Step ${i + 1}</button>`).join("") : "";
       const bar = o ? `<div class="other"><span>This step shows only its part of the file. ${o.lines} more changed line${o.lines === 1 ? " is" : "s are"} ${links ? "in" : "outside this step."}</span>${links}<button class="btn small" data-whole="${esc(sec.path)}">Show the whole file</button></div>` : "";
-      return `<div class="file"><span>${esc(sec.path)}${moved}${note}${sec.context ? ' <span class="ctxnote">not changed by the PR</span>' : ""}</span><button class="tool" data-nvim="${si}">nvim</button></div>
+      return `<div class="file"><span>${esc(sec.path)}${moved}${note}${sec.context ? ' <span class="ctxnote">Not changed in this PR</span>' : ""}</span><button class="tool" data-nvim="${si}">nvim</button></div>
         ${bar}<div class="codewrap"><table class="code">${rows}</table></div>`;
     }).join("");
     $("#rdiff").innerHTML = html;
@@ -578,6 +605,9 @@
     drawTake(r);
     wireComments(r, d);
     $("#rdiff").onclick = async (e) => {
+      const padd = e.target.closest("[data-padd]");
+      if (padd) { addPoint(r, d, +padd.dataset.padd); return; }
+      if (e.target.closest(".prow")) return;
       if (e.target.closest(".tnote, .tdismissed")) { noteAction(r, e); return; }
       if (e.target.closest(".drow, .crow")) return;
       const os = e.target.closest("[data-ostep]");
@@ -611,6 +641,7 @@
       // The line goes into Claude's prompt, for a question about it.
       if (l.anchor) typeInto(r.id, `${path}:${line}${td.dataset.side === "old" ? " (old side)" : ""} \`${l.anchor.text.trim()}\` `);
     };
+    if (l.target && applyTarget(r, d, key)) return;
     const first = $("#rdiff tr.focus") || $("#rdiff tr.add, #rdiff tr.del");
     if (first && !l.scrolled?.has(key)) {
       (l.scrolled ||= new Set()).add(key);
@@ -1180,6 +1211,7 @@
     const l = local(id);
     l.cur = Math.max(0, Math.min(steps(r).length - 1, i));
     l.anchor = null;
+    l.ctx = null;
     l.takeOpen = false;
     savePlace(id);
     update(r);
@@ -1195,6 +1227,280 @@
     go(id, local(id).cur + 1);
   }
 
+  // ---------- Claude points to the code (SPEC 11.15) ----------
+  // Three ways in: a file:line link in the Claude column's terminal, the "Mentioned"
+  // chips of its last answer, and the places of its review_show tool, as a tour.
+  // Each only moves the view, and none takes the keys from the terminal.
+  const KIND = { must: "must fix", should: "should fix", nit: "nit", question: "question" };
+  const covers = (p, file, side, line) => !!p && p.file === file && (p.side || "new") === side && line >= p.line && line <= (p.end || p.line);
+  const tourPts = (l) => (l.tour ? l.tour.points : []);
+
+  // The step whose ranges hold the line, or -1.
+  function stepOf(r, at) {
+    if (!at.line) return -1;
+    const side = at.side === "old" ? "old" : "new";
+    return steps(r).findIndex((s) => (s.ranges || []).some((g) => g.file === at.file && g.side === side && at.line >= g.from && at.line <= g.to));
+  }
+
+  // The changed files, for links and jumps: the Files list, or a copy of it.
+  function changedFiles(id) {
+    const l = local(id);
+    if (l.files) return Promise.resolve(l.files);
+    if (l.pathList) return Promise.resolve(l.pathList);
+    l.pathLoad ||= invoke("review_files", { id }).then((v) => (l.pathList = v || [])).catch(() => { l.pathLoad = null; return []; });
+    return l.pathLoad;
+  }
+
+  // The changed file a name means: the full path, a path that ends with it (an
+  // absolute path), or the one file whose path ends with "/name". Two: none.
+  function resolveFile(files, name) {
+    const n = name.replace(/^\.\//, "");
+    const exact = files.find((f) => f.path === n || f.old_path === n);
+    if (exact) return exact.path;
+    const hits = files.filter((f) => n.endsWith("/" + f.path) || f.path.endsWith("/" + n));
+    return hits.length === 1 ? hits[0].path : null;
+  }
+
+  // Where you were, for Back. A small list.
+  function remember(id) {
+    const l = local(id);
+    l.hist.push({ mode: l.mode, cur: l.cur, file: l.file, ctx: l.ctx, top: $("#rcenter")?.scrollTop || 0 });
+    if (l.hist.length > 10) l.hist.shift();
+  }
+
+  // Back: where you were before the tour or the jump. It ends the tour.
+  function back(id) {
+    const l = local(id);
+    const h = l.hist.pop();
+    l.tour = null;
+    l.target = null;
+    if (h) Object.assign(l, { mode: h.mode, cur: h.cur, file: h.file, ctx: h.ctx, anchor: null, compose: null });
+    savePlace(id);
+    update(S.reviews.get(id));
+    if (h) { const c = $("#rcenter"); if (c) c.scrollTop = h.top; }
+  }
+
+  // Go to a place: the step that holds it, else its file in Files, else the lines
+  // of a file the PR does not change. The diff scrolls to the line and flashes it.
+  async function goTo(id, at, push = true) {
+    const r = S.reviews.get(id);
+    if (!r || !at?.file) return;
+    const l = local(id);
+    const t = { file: at.file, line: +at.line || null, end: +at.end || null, side: at.side === "old" ? "old" : "new" };
+    const i = r.kind === "local" ? -1 : stepOf(r, t);
+    let files = null;
+    if (i < 0) files = await changedFiles(id);
+    const f = files && files.find((x) => x.path === t.file || (t.side === "old" && x.old_path === t.file));
+    if (i < 0 && !f && !t.line) { toast(`${t.file} is not changed in this PR.`); return; }
+    if (push) remember(id);
+    Object.assign(l, { anchor: null, compose: null, ctx: null, target: t });
+    if (i >= 0) { l.mode = "guide"; l.cur = i; }
+    else if (f) { l.mode = "files"; l.file = f.path; l.files ||= files; }
+    else l.ctx = { path: t.file, line: t.line };
+    savePlace(id);
+    const now = S.reviews.get(id);
+    if (now && S.tab === id) {
+      update(now);
+      $(`#rsteps [data-i="${l.cur}"]`)?.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  // Scrolls the diff to the place of `l.target` and flashes its lines. A hidden line
+  // of a changed file shows first. True when it scrolled.
+  function applyTarget(r, d, key) {
+    const l = local(r.id);
+    const t = l.target;
+    const si = d.sections.findIndex((sec) => (t.side === "old" ? sec.old_path || sec.path : sec.path) === t.file || sec.path === t.file);
+    if (si < 0) { l.target = null; return false; }
+    (l.scrolled ||= new Set()).add(key);
+    const sec = d.sections[si];
+    const cell = (n) => $(`#rdiff td.ln[data-sec="${si}"][data-side="${t.side}"][data-ln="${n}"]`) || (t.side === "old" ? $(`#rdiff td.ln[data-sec="${si}"][data-o="${n}"]`) : null);
+    if (!t.line) {
+      l.target = null;
+      ($$("#rdiff tr.focus")[0] || $$("#rdiff .file")[si])?.scrollIntoView({ block: "center" });
+      return true;
+    }
+    const td = cell(t.line);
+    if (td) {
+      l.target = null;
+      td.closest("tr").scrollIntoView({ block: "center" });
+      for (let n = t.line; n <= (t.end || t.line); n++) {
+        const row = cell(n)?.closest("tr");
+        if (!row) continue;
+        row.classList.remove("flash");
+        void row.offsetWidth;
+        row.classList.add("flash");
+      }
+      return true;
+    }
+    // The line is in a gap of the diff: get the whole file and show it with 3 lines around.
+    if (t.tried || sec.context) { l.target = null; toast(`Line ${t.line} of ${t.file} is not in the file.`); return false; }
+    t.tried = true;
+    (async () => {
+      if (!l.full.has(sec.path)) {
+        try { l.full.set(sec.path, (await invoke("review_file_rows", { id: r.id, path: sec.path })).rows); } catch (e) { l.target = null; toast(e); return; }
+      }
+      const lines = fileLines(l.full.get(sec.path));
+      const k = lines.findIndex((x) => x.row.kind !== "@" && (t.side === "old" ? x.row.kind !== "+" && x.row.old === t.line : x.row.kind !== "-" && x.row.new === t.line));
+      if (k >= 0) {
+        const set = new Set(l.shown.get(`${key}|${sec.path}`) || []);
+        const z = Math.min(lines.length - 1, k + 3 + ((t.end || t.line) - t.line));
+        for (let j = Math.max(0, k - 3); j <= z; j++) set.add(j);
+        l.shown.set(`${key}|${sec.path}`, set);
+      }
+      const now = S.reviews.get(r.id);
+      if (now && S.tab === r.id && diffKey(now) === key) drawDiff(now);
+    })();
+    return true;
+  }
+
+  // The tour: the places of the last review_show call, from place i.
+  function startTour(id, i) {
+    const r = S.reviews.get(id);
+    const l = local(id);
+    const pts = r?.show?.points || [];
+    if (!pts.length) return false;
+    if (!l.tour) remember(id);
+    if (!l.tour || l.tour.at !== r.show.at) l.tour = { at: r.show.at, points: pts, i: 0 };
+    l.tour.i = Math.max(0, Math.min(pts.length - 1, i));
+    goTo(id, pts[l.tour.i], false);
+    return true;
+  }
+
+  function tourStep(id, dir) {
+    const l = local(id);
+    if (!l.tour) return;
+    const n = l.tour.points.length;
+    l.tour.i = (l.tour.i + dir + n) % n;
+    goTo(id, l.tour.points[l.tour.i], false);
+  }
+
+  function drawTour(r) {
+    const el = $("#rtour");
+    if (!el) return;
+    const t = local(r.id).tour;
+    el.hidden = !t;
+    if (!t) { el.innerHTML = ""; return; }
+    const n = t.points.length;
+    const p = t.points[t.i];
+    el.innerHTML = `<span class="tt">Claude pointed to ${n} place${n === 1 ? "" : "s"}</span><span class="tpos">${t.i + 1} of ${n}</span>${p && !p.changed ? `<span class="pnot">Not changed in this PR</span>` : ""}
+      <span class="tacts"><button type="button" class="btn small" data-tour="prev">Previous <kbd>p</kbd></button><button type="button" class="btn small" data-tour="next">Next <kbd>n</kbd></button><button type="button" class="btn small" data-tour="back">Back <kbd>'</kbd></button></span>`;
+    // A click here leaves the keys where they are, in the terminal too.
+    el.onmousedown = (e) => e.preventDefault();
+    el.onclick = (e) => {
+      const b = e.target.closest("[data-tour]")?.dataset.tour;
+      if (b === "prev") tourStep(r.id, -1);
+      if (b === "next") tourStep(r.id, 1);
+      if (b === "back") back(r.id);
+    };
+  }
+
+  // The numbers of Claude's places on a step of the list.
+  function stepMarks(r, i) {
+    const l = local(r.id);
+    const cur = l.tour?.points[l.tour.i];
+    const marks = tourPts(l).map((p, k) => [p, k]).filter(([p]) => stepOf(r, p) === i);
+    return marks.length ? `<span class="pmarks">${marks.map(([p, k]) => `<span class="mk${p === cur ? " on" : ""}">${k + 1}</span>`).join("")}</span>` : "";
+  }
+
+  // A place in the diff: its number, its kind, Claude's note, and Add as comment.
+  function pointBox(p, i, cur, canAdd) {
+    const kind = p.kind ? `<span class="pkind k-${esc(p.kind)}">${esc((KIND[p.kind] || p.kind).toUpperCase())}</span>` : "";
+    const not = p.changed ? "" : `<span class="pnot">Not changed in this PR</span>`;
+    return `<div class="pbox${cur ? " cur" : ""}" data-pt="${i}"><span class="mk${cur ? " on" : ""}">${i + 1}</span><div class="ptext">${kind}${not}<span class="md">${mdi(p.note)}</span></div>${canAdd ? `<button type="button" class="btn small" data-padd="${i}">Add as comment</button>` : ""}</div>`;
+  }
+
+  // Add as comment on a place: the comment form on its lines, with Claude's note.
+  // It saves as an agent draft, as a take note does.
+  function addPoint(r, d, i) {
+    const l = local(r.id);
+    const p = tourPts(l)[i];
+    if (!p) return;
+    const sec = d.sections.find((x) => (p.side === "old" ? x.old_path || x.path : x.path) === p.file);
+    if (!sec) return;
+    l.compose = { sec: sec.path, path: p.file, side: p.side || "new", start: p.line, line: p.end || p.line, text: p.note, fromTake: `pt|${p.file}|${p.line}|${p.note}` };
+    drawDiff(r);
+    $("#rctext")?.focus();
+  }
+
+  // The head of a file the PR does not change.
+  function drawCtxHead(r) {
+    const c = local(r.id).ctx;
+    $("#rguide").innerHTML = `<div class="eyebrow">Outside the diff</div><h4 class="fpath">${esc(c.path)}</h4>
+      <div class="ctxlead"><span class="pnot">Not changed in this PR</span> The lines around ${esc(c.line)}, at ${esc(short(r.head))}. Back <kbd>'</kbd> goes to where you were.</div>`;
+    $("#rguide").onclick = null;
+  }
+
+  // "Mentioned": the places of Claude's last answer, under its column. A chip with a
+  // number is a place of review_show; a dashed chip is a line the PR does not change.
+  function drawMentions(r) {
+    const el = $("#rment");
+    if (!el) return;
+    const ms = r.mentions || [];
+    el.hidden = !ms.length;
+    if (!ms.length) { el.innerHTML = ""; return; }
+    const pts = r.show?.points || [];
+    const l = local(r.id);
+    const cur = l.tour?.points[l.tour.i];
+    const ptOf = (m) => (m.line ? pts.findIndex((p) => covers(p, m.file, m.side || "new", m.line)) : -1);
+    el.innerHTML = `<div class="mhead">Mentioned</div><div class="mchips">${ms.map((m, k) => {
+      const pi = ptOf(m);
+      const at = m.line ? `:${m.line}${m.end ? `-${m.end}` : ""}` : "";
+      const label = m.name ? `${m.name} ${at}` : `${m.file.split("/").pop()}${at}`;
+      const on = cur && pi >= 0 && covers(cur, m.file, m.side || "new", m.line);
+      const tip = `${m.file}${at}${m.side === "old" ? " (old)" : ""}${m.changed ? "" : " · not changed in this PR"}`;
+      return `<button type="button" class="mchip${m.changed ? "" : " unchanged"}${on ? " on" : ""}" data-m="${k}" title="${esc(tip)}"><span class="mk${on ? " on" : ""}">${pi >= 0 ? pi + 1 : "·"}</span>${esc(label)}</button>`;
+    }).join("")}</div>`;
+    el.onmousedown = (e) => e.preventDefault();
+    el.onclick = (e) => {
+      const b = e.target.closest("[data-m]");
+      if (!b) return;
+      const m = ms[+b.dataset.m];
+      const pi = ptOf(m);
+      if (pi >= 0) startTour(r.id, pi);
+      else goTo(r.id, m);
+    };
+  }
+
+  // Links in the Claude column's terminal: path:line, path:from-to and the name of a
+  // changed file. Other text is no link. A click goes to the place.
+  const LINK_RE = /(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*\.[A-Za-z0-9]+(?::\d+(?:-\d+)?)?/g;
+  function provideLinks(y, cb) {
+    const id = S.termHost;
+    const r = id && S.reviews.get(id);
+    const l = r && local(id);
+    if (!l || !l.term || S.live !== l.term) return cb(undefined);
+    const files = l.files || l.pathList;
+    if (!files) { changedFiles(id); return cb(undefined); }
+    const line = window.SB.term.buffer.active.getLine(y - 1);
+    if (!line) return cb(undefined);
+    // The text of the row, and the column of each of its chars.
+    let text = "";
+    const cols = [];
+    for (let x = 0; x < line.length; x++) {
+      const c = line.getCell(x);
+      if (!c || c.getWidth() === 0) continue;
+      const ch = c.getChars() || " ";
+      for (let k = 0; k < ch.length; k++) cols.push(x + 1);
+      text += ch;
+    }
+    const links = [];
+    for (const m of text.matchAll(LINK_RE)) {
+      const [, name, from, to] = /^(.*?)(?::(\d+)(?:-(\d+))?)?$/.exec(m[0]);
+      const file = resolveFile(files, name);
+      if (!file) continue;
+      const at = { file, line: from ? +from : null, end: to ? +to : null, side: "new" };
+      links.push({
+        range: { start: { x: cols[m.index], y }, end: { x: cols[m.index + m[0].length - 1], y } },
+        text: m[0],
+        decorations: { underline: true, pointerCursor: true },
+        activate: () => goTo(id, at),
+      });
+    }
+    cb(links.length ? links : undefined);
+  }
+  window.SB.term.registerLinkProvider({ provideLinks });
+
   // Review keys work only on a review tab, when no text field has focus (SPEC 7).
   document.addEventListener("keydown", (e) => {
     if (!S.reviews.has(S.tab) || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -1205,6 +1511,10 @@
     if (e.key === "f" && S.reviews.get(id)?.kind !== "local") setMode(id, files ? "guide" : "files");
     else if (e.key === "j") files ? goFile(id, fileIndex(l) + 1) : go(id, l.cur + 1);
     else if (e.key === "k") files ? goFile(id, fileIndex(l) - 1) : go(id, l.cur - 1);
+    // In a tour of Claude's places, n and p go through them and ' goes back (SPEC 11.15).
+    else if (e.key === "n" && l.tour) tourStep(id, 1);
+    else if (e.key === "p" && l.tour) tourStep(id, -1);
+    else if (e.key === "'" && (l.tour || l.hist.length)) back(id);
     else if (e.key === "n") files ? nextFile(id) : next(id);
     // nvim at the line you are on, next to the old side (SPEC 11.14).
     else if (e.key === "o") showNvim(id);
@@ -1220,6 +1530,8 @@
       if (l.head !== r.head || l.base !== r.base || l.guideLen !== JSON.stringify(r.guide || "").length) {
         l.diff.clear();
         l.files = null;
+        l.pathList = null;
+        l.pathLoad = null;
         l.full.clear();
         l.shown.clear();
         l.head = r.head;
@@ -1244,6 +1556,6 @@
       l.chatTimer = setTimeout(() => loadChat(id), 600);
     },
     // For the window checks only.
-    _test: { items, reveal, STEP },
+    _test: { items, reveal, STEP, provideLinks },
   };
 })();

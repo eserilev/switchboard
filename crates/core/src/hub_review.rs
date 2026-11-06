@@ -36,6 +36,10 @@ pub(crate) struct ReviewState {
     pub head_commit: Option<String>,
     /// A local review: Mark reviewed was pressed, so `new` has a start.
     pub reviewed: bool,
+    /// What the last answer of the Ask pane refers to (SPEC 11.15). In memory only.
+    pub mentions: Vec<crate::mentions::Mention>,
+    /// The places of the last `review_show` call. In memory only.
+    pub show: Option<crate::hub_show::Show>,
 }
 
 impl ReviewState {
@@ -55,6 +59,8 @@ impl ReviewState {
             range: "new".into(),
             head_commit: None,
             reviewed: false,
+            mentions: vec![],
+            show: None,
         }
     }
 }
@@ -137,6 +143,10 @@ pub struct ReviewView {
     pub range: String,
     /// A local review: Mark reviewed was pressed, so `new` has a start.
     pub reviewed: bool,
+    /// What the last answer of the Ask pane refers to (SPEC 11.15).
+    pub mentions: Vec<crate::mentions::Mention>,
+    /// The places of the last `review_show` call.
+    pub show: Option<crate::hub_show::Show>,
 }
 
 /// What the window shows before a send: the GitHub account, the head, and where
@@ -414,6 +424,8 @@ impl Hub {
             dismissed: store.dismissed(id).map_err(e)?,
             range: r.range.clone(),
             reviewed: r.reviewed,
+            mentions: r.mentions.clone(),
+            show: r.show.clone(),
         })
     }
 
@@ -421,7 +433,7 @@ impl Hub {
         BUSY.lock().unwrap().clone()
     }
 
-    fn emit_review(&self, id: &str) {
+    pub(crate) fn emit_review(&self, id: &str) {
         if let Ok(v) = self.review_view(id) {
             self.sink.emit("review", json!(v));
         }
@@ -444,7 +456,7 @@ impl Hub {
 
     /// Opens a review from a PR URL. The work runs in the background; `review` events report it.
     /// An error for a local review: the command needs a PR, a guide or GitHub.
-    fn pr_only(&self, id: &str) -> Res<()> {
+    pub(crate) fn pr_only(&self, id: &str) -> Res<()> {
         let local = self.reviews.lock().unwrap().get(id).map(|r| r.row.is_local()).unwrap_or(false);
         if local {
             return Err("This is a review of local commits: it has no PR and no guide.".into());
@@ -923,7 +935,7 @@ impl Hub {
     }
 
     /// The diff model, built when a review loads from the store.
-    fn model(&self, id: &str) -> Res<std::sync::Arc<coverage::DiffModel>> {
+    pub(crate) fn model(&self, id: &str) -> Res<std::sync::Arc<coverage::DiffModel>> {
         let have = self
             .reviews
             .lock()
@@ -2587,6 +2599,8 @@ impl Hub {
             None => "I have questions about this review. Wait for my question. Reply only: Ready.".into(),
         };
         let name = repo.rsplit('/').next().unwrap_or(&repo).to_owned();
+        // `sb mcp --ask` with only `review_show`, and the rules to cite code (SPEC 11.15).
+        let (mcp, system, allow) = self.ask_start(id, &tree);
         let view = self.spawn(
             "claude",
             &name,
@@ -2597,7 +2611,10 @@ impl Hub {
                 fork: true,
                 dirs: spec_dirs(&self.config()),
                 // The pane asks before other sites; these it fetches with no prompt.
-                allow: review::web_rules(&self.config().review.web_domains),
+                // `review_show` runs with no prompt: it only moves the view.
+                allow,
+                mcp,
+                system,
                 first: Some(first),
                 // The guide session file is in the config dir of its connection.
                 connection,

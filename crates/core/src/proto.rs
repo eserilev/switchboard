@@ -31,6 +31,12 @@ pub enum Request {
         step: String,
         fields: Value,
     },
+    /// `review_show` of the Ask pane (SPEC 11.15): places for the review window.
+    /// It only moves the view.
+    ReviewShow {
+        review: String,
+        points: Value,
+    },
     /// `sb task` (SPEC 27.7). `pane` is the caller's `SB_PANE`: a label, not proof.
     Task {
         #[serde(default)]

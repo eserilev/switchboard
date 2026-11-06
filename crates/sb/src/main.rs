@@ -45,7 +45,7 @@ fn main() {
         Some("permit") => permit(),
         Some("open") => open(&args[1..]),
         Some("task") => task(&args[1..]),
-        Some("mcp") => mcp::serve(),
+        Some("mcp") => mcp::serve(args.get(1).map(String::as_str) == Some("--ask")),
         Some("serve") => serve(),
         Some("attach") => attach(),
         Some("connect") if args.get(1).map(String::as_str) == Some("add") => {
@@ -242,7 +242,10 @@ fn state(arg: &str) -> i32 {
     let Ok(pane) = std::env::var("SB_PANE") else {
         return 0;
     };
-    let input = stdin_json();
+    let mut input = stdin_json();
+    if arg == "turn" {
+        with_transcript_text(&mut input);
+    }
     let Some(msg) = hooks::state_msg(&pane, arg, &input, now()) else {
         return 0;
     };
@@ -256,6 +259,26 @@ fn state(arg: &str) -> i32 {
     }
     let _ = send(&Request::State(msg), false);
     0
+}
+
+/// A Stop hook input with no `last_assistant_message` gets it from the session file
+/// (`transcript_path`): the last 2 MB of it.
+fn with_transcript_text(input: &mut Value) {
+    if input.get("last_assistant_message").and_then(Value::as_str).is_some() {
+        return;
+    }
+    let Some(path) = input.get("transcript_path").and_then(Value::as_str) else { return };
+    let Ok(mut f) = std::fs::File::open(path) else { return };
+    use std::io::{Seek, SeekFrom};
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let _ = f.seek(SeekFrom::Start(len.saturating_sub(2 << 20)));
+    let mut buf = vec![];
+    if f.read_to_end(&mut buf).is_err() {
+        return;
+    }
+    if let Some(text) = hooks::last_assistant_text(&String::from_utf8_lossy(&buf)) {
+        input["last_assistant_message"] = json!(text);
+    }
 }
 
 fn permit() -> i32 {

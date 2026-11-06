@@ -239,6 +239,9 @@ window.__TAURI__ = {
         case "review_file_rows": return { head: d.diff.head, rows: Array.from({ length: 60 }, (_, i) => i + 1).flatMap((n) =>
           n === 11 ? [{ kind: "-", old: 11, new: null, text: "let il = vec![];" }, { kind: "+", old: null, new: 11, text: "let il = self.get(slot - 1)?;" }, { kind: "+", old: null, new: 12, text: "let b = 2;" }]
           : [{ kind: " ", old: n, new: n < 11 ? n : n + 1, text: n === 10 ? "let a = 1;" : `line ${n}` }]) };
+        // A file the PR does not change: its lines 15 to 45.
+        case "review_context": return { head: d.diff.head, sections: [{ path: args.path, old_path: null, context: true, ranges: [], note: null, other: null,
+          rows: Array.from({ length: 31 }, (_, i) => ({ kind: " ", old: i + 15, new: i + 15, text: `readme ${i + 15}` })) }] };
         case "review_files": return [
           { path: "beacon_node/gloas.rs", old_path: "beacon_node/gloas.rs", added: 2, removed: 1, note: null, steps: ["s2"] },
           { path: "docs/img.png", old_path: null, added: 0, removed: 0, note: "binary file", steps: [] },
