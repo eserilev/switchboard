@@ -293,7 +293,7 @@ Opening a layout starts all its panes. Panes that already run are not started ag
 
 ## 10. nvim
 
-- With `nvim` on PATH, every agent tile has an nvim chip. Leader, `e` does the same. nvim opens as a part of the live pane, next to the agent (28).
+- With `nvim` on PATH, every agent tile has an nvim chip. Leader, `e` does the same. nvim opens as a part of the live pane, next to the agent (28). From a pane that is not an agent, nvim goes next to a board agent of that worktree that runs: never the Work environment agent (30), a review Ask pane, or an agent that ended. With none, nvim gets its own tile.
 - There is one nvim for each worktree. It runs in its own tmux pane. While an agent runs in the worktree, nvim has no tile.
 - The first open runs `nvim --listen <runtime>/nvim/<tree-hash>.sock`, in the socket folder (`$XDG_RUNTIME_DIR/switchboard`, or `/tmp/sb-<uid>`, 23).
 - Later opens run `nvim --server <sock> --remote-expr` with `execute('edit +<line> ' .. fnameescape(<file>))`. An expression works in every mode.
@@ -1478,7 +1478,7 @@ One JSON object per line, on the window socket. `sb attach` copies its stdin and
 - A connect waits 20 s at most for the hello. It skips up to 100 lines that are not a hello, for example a banner of the login shell. On any failure it kills the ssh process.
 - Each link has a number. News of an older link is dropped, and the link shows as up only while its client is up.
 - While the link is down, a failed command makes no toast.
-- After Reconnect, the window reads everything again: settings, connections, panes, reviews and tasks. Then it opens its live pane again.
+- After Reconnect, the window reads everything again: settings, connections, panes, reviews and tasks. Then it opens its live pane again, where it was: on the board, in the Work environment tab, or in a review's column. The tab stays.
 
 ### 29.7 Checks
 
@@ -1545,7 +1545,7 @@ A tab for working in one repo yourself: nvim takes the left half, Claude Code th
 - **The tab.** Work environment, between Tasks and Code reviews. Leader, `w` opens it.
 - **The repo.** A picker lists the repo list (9.1). The choice stays for the next start (browser storage of the window; a convenience only). A repo where the tab's own agent runs opens that agent at once. A repo with none shows **Start Claude**, which opens Claude in the main checkout with the title `Work environment`. An agent of the board in the same checkout is never taken. Another repo in the picker takes the live pane off the one before.
 - **The layout.** The tab hosts the live pane, as a review tab does (11.5), but with its parts (28): nvim and the shell of the worktree. A `work` class turns the parts around: nvim on the left at half the width, Claude on top of the right half, and the terminal under it at half the height. The dividers, zoom, stop, ×, and Leader `e`, `s`, `o`, `z` work as on the board. Leader `h` and `l` turn around with the layout. A narrow window shows one part at a time, as on the board. Without nvim on PATH, Claude and the terminal share the tab.
-- **Apart from the board.** The tab's agent (a Claude pane with the title `Work environment`) has no tile on the board. An expand of it from elsewhere (a notice, the next pane that waits) opens this tab on its repo. The tab keeps its own layout for each worktree (`sb.parts.work.<tree>`), so it never changes the board's. The board's live pane comes back when you return. nvim and the shell are still one of each for a worktree (28): the tab and a board agent in the same checkout share them, so two editors never fight over the files.
+- **Apart from the board.** The tab's agent (a Claude pane with the title `Work environment`) has no tile on the board. The window finds the agent by that title, so a rename never moves it: the agent keeps its title (a double-click on it says so), and a rename of another pane to `Work environment` is refused, in the window and in the hub. An expand of it from elsewhere (a notice, the next pane that waits) opens this tab on its repo. The tab keeps its own layout for each worktree (`sb.parts.work.<tree>`), so it never changes the board's. The board's live pane comes back when you return. nvim and the shell are still one of each for a worktree (28): the tab and a board agent in the same checkout share them, so two editors never fight over the files.
 - **Other tabs.** Another tab takes the live pane back to the board, the right way round. Back in this tab, the repo's agent opens again with its parts.
 - **An open that you leave.** An open waits for the agent, nvim and the shell in turn. When you leave the tab or pick another repo in that time, it stops: it never pulls you back to the tab, and a repo you picked meanwhile opens after it.
 - **An ended agent.** The tab's agent has no tile, so when it ends, the tab shows it for its repo with **Resume** (with a session) and **Close**, as a tile does. The tab marks it seen, so Leader `j` goes there once and not again.

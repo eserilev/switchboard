@@ -81,8 +81,11 @@ async function reconnect() {
 }
 // Everything again from the hub. The hub dropped the screen of the old link, so
 // the live pane and its parts open again.
+// A pane that a tab hosts (the work agent, a review's Ask pane or nvim) opens in
+// that tab again, never on the board, and the tab stays.
 async function resync() {
   const live = S.live;
+  const host = S.termHost;
   if (live) collapse();
   try {
     S.settings = await invoke("settings");
@@ -91,7 +94,14 @@ async function resync() {
     await refreshPanes();
     await refreshReviews();
     window.SBTasks?.refresh();
-    if (live && paneById(live)) expand(live);
+    if (!live || !paneById(live)) return;
+    if (!host) return expand(live);
+    if (S.tab !== host) return;
+    // The work tab opens its agent again with its parts.
+    if (host === "work" && workOf(paneById(live))) return window.SBWork?.go(paneById(live));
+    // The tab can be redrawn meanwhile: take its host element only now.
+    const el = host === "work" ? $("#whost") : $("#rterm");
+    if (el) expand(live, el);
   } catch (e) {
     log("warn", "resync failed:", e);
   }
@@ -421,6 +431,8 @@ document.addEventListener("dblclick", (e) => {
   const name = e.target.closest("#livetitle .name");
   if (!name || !S.live) return;
   const id = S.live;
+  // The Work environment tab finds its agent by its title (SPEC 30): it keeps it.
+  if (workOf(paneById(id))) return toast(`The ${WORK_TITLE} agent keeps its name.`);
   renaming = true;
   e.preventDefault();
   name.contentEditable = "true";
@@ -432,7 +444,11 @@ document.addEventListener("dblclick", (e) => {
     name.contentEditable = "false";
     // The name was edited by hand: the next draw writes the title again.
     $("#livetitle")._html = null;
-    if (save) call("pane_rename", { id, title: name.textContent.trim() || null });
+    const title = name.textContent.trim();
+    if (save && title === WORK_TITLE) {
+      toast(`"${WORK_TITLE}" is the name of the agent of the ${WORK_TITLE} tab. Pick another name.`);
+      drawBoard();
+    } else if (save) call("pane_rename", { id, title: title || null });
     else drawBoard();
   };
   name.onkeydown = (k) => {
@@ -672,7 +688,8 @@ async function openLocalReview(pane) {
 async function openNvim(tree, file, line) {
   const id = await call("nvim_open", { tree, file: file ?? null, line: line ?? null });
   await refreshPanes();
-  const agent = S.panes.find((p) => p.kind === "claude" && p.tree === tree);
+  // A board agent that runs: not the work agent, a review's Ask pane or an ended one.
+  const agent = S.panes.find((p) => p.kind === "claude" && p.tree === tree && p.lamp !== "ended" && !workOf(p) && !askOf(p));
   if (agent && window.SBParts) return SBParts.show("nvim", agent.id);
   expand(id);
 }

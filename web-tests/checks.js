@@ -141,6 +141,15 @@
   $("#livetitle .name").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   await wait(50);
   check("rename saves", called("pane_rename").some((c) => c[1].id === "p1" && c[1].title === "my title"));
+  {
+    // The Work environment tab finds its agent by its title (SPEC 30): no other pane gets it.
+    $("#livetitle .name").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    $("#livetitle .name").textContent = window.SB.WORK_TITLE;
+    $("#livetitle .name").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await wait(20);
+    check("a rename to the work agent's title is refused", !called("pane_rename").some((c) => c[1].title === window.SB.WORK_TITLE) && !$("#toast").hidden && $("#toast").textContent.includes("Pick another name"), $("#toast").textContent);
+    $("#toast").hidden = true;
+  }
 
   // Leader keys: Ctrl+Space, then x collapses.
   key(" ", { ctrl: true, code: "Space" });
@@ -1811,6 +1820,38 @@
     window.SB.expand("p9");
     for (let i = 0; i < 30 && !(S.live === "p9" && S.termHost === "work"); i++) await wait(50);
     check("a work agent opened from elsewhere shows in its tab, not on the board", S.tab === "work" && S.live === "p9" && $("#live").parentElement === $("#whost"));
+    {
+      const renames = called("pane_rename").length;
+      $("#livetitle .name").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      check("the work agent can not be renamed", $("#livetitle .name")?.contentEditable !== "true" && called("pane_rename").length === renames);
+    }
+    {
+      // A link resync opens the work agent again in its tab: the tab stays.
+      window.__emit("link", { up: false, host: "box", why: "x", taken: false });
+      window.__emit("link", { up: true, host: "box" });
+      await wait(30);
+      for (let i = 0; i < 30 && !(S.live === "p9" && S.termHost === "work" && !$("#live").hidden); i++) await wait(50);
+      check("after a resync the work agent is back in its tab, not on the board", S.tab === "work" && S.live === "p9" && S.termHost === "work" && $("#live").parentElement === $("#whost") && !$("#board .pane[data-id=\"p9\"]"),
+        JSON.stringify({ tab: S.tab, live: S.live, host: S.termHost, parent: $("#live").parentElement?.id }));
+      Object.assign(window.SB.LINK, { remote: false, up: true });
+      $("#host").hidden = true;
+    }
+    {
+      // nvim from a tile goes next to a board agent that runs: never the work agent or an ended one.
+      const shown = [];
+      const show = window.SBParts.show;
+      window.SBParts.show = (kind, id) => { shown.push(id); return Promise.resolve(); };
+      const keep = window.__data.panes;
+      const work = keep.find((p) => p.id === "p9");
+      const ended = { ...keep.find((p) => p.id === "pb1"), lamp: "ended" };
+      window.__data.panes = [work, ended, ...keep.filter((p) => p.id !== "p9" && p.id !== "pb1")];
+      await window.SB.refreshPanes();
+      await window.SB.openNvim(repo);
+      check("nvim never goes next to the work agent or an ended agent", !shown.includes("p9") && !shown.includes("pb1"), JSON.stringify(shown));
+      window.SBParts.show = show;
+      window.__data.panes = keep;
+      await window.SB.refreshPanes();
+    }
     window.SB.setTab("board");
     await wait(100);
     window.SB.collapse();

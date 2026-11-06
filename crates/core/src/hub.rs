@@ -37,6 +37,9 @@ pub trait Sink: Send + Sync + 'static {
 
 /// The text of Claude's folder trust dialog. A test pins it (SPEC 6.6).
 pub const TRUST_TEXT: &str = "trust this folder";
+/// The title of the agent of the Work environment tab (SPEC 30). The window finds
+/// that agent by it, so a rename never gives it to another pane or takes it away.
+pub const WORK_TITLE: &str = "Work environment";
 
 const TAIL_LINES: usize = 6;
 
@@ -831,9 +834,25 @@ impl Hub {
 
     pub fn rename(&self, id: &str, title: Option<String>) -> Res<()> {
         tracing::info!(target: "sb::hub", pane = id, ?title, "rename");
-        self.with_pane(id, false, |p| {
-            p.row.title = title.filter(|t| !t.trim().is_empty())
-        })
+        let title = title.filter(|t| !t.trim().is_empty());
+        // The Work environment tab finds its agent by this title (SPEC 30): no
+        // other pane gets it, and that agent keeps it.
+        let (kind, old) = self
+            .panes
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|p| p.row.id == id)
+            .map(|p| (p.row.kind.clone(), p.row.title.clone()))
+            .ok_or(format!("no pane {id}"))?;
+        let work = |t: &Option<String>| t.as_deref().map(str::trim) == Some(WORK_TITLE);
+        if kind == "claude" && work(&old) && !work(&title) {
+            return Err(format!("The {WORK_TITLE} agent keeps its name."));
+        }
+        if work(&title) && !work(&old) {
+            return Err(format!("\"{WORK_TITLE}\" is the name of the agent of the {WORK_TITLE} tab. Pick another name."));
+        }
+        self.with_pane(id, false, |p| p.row.title = title)
     }
 
     // ---------- the live pane ----------
