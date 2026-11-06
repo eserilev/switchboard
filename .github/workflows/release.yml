@@ -7,7 +7,29 @@ on:
 permissions:
   contents: write
 jobs:
+  # The tag must name the version in every file that has one, so a release never
+  # ships with an old version inside.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag matches the versions
+        run: |
+          tag=${GITHUB_REF_NAME#v}
+          cargo=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          tauri=$(jq -r .version crates/app/tauri.conf.json)
+          arch=$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)
+          echo "tag $tag, Cargo.toml $cargo, tauri.conf.json $tauri, PKGBUILD $arch"
+          ok=1
+          for v in "$cargo" "$tauri" "$arch"; do
+            [ "$v" = "$tag" ] || ok=0
+          done
+          if [ "$ok" != 1 ]; then
+            echo "::error::The tag $GITHUB_REF_NAME does not match the versions in the files."
+            exit 1
+          fi
   linux:
+    needs: version
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +50,7 @@ jobs:
           name: linux
           path: switchboard-linux-x86_64.tar.gz
   macos:
+    needs: version
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4

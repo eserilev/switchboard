@@ -10,7 +10,7 @@ target=${CARGO_TARGET_DIR:-$root/target}
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)
 version=${version:-0.1.0}
 
-cargo build --release -p switchboard -p sb --manifest-path "$root/Cargo.toml"
+cargo build --release --locked -p switchboard -p sb --manifest-path "$root/Cargo.toml"
 
 app="$out/Switchboard.app"
 rm -rf "$app"
