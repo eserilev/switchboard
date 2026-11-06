@@ -263,6 +263,12 @@ impl Hub {
         // One hub for each home, before any change to tmux, the store or the socket.
         let lock = take_lock(&paths.home.join("hub.lock"))?;
         std::fs::write(paths.tmux_conf(), tmux::CONF).map_err(e)?;
+        // Sockets of nvims that are gone (SPEC 10). The hub lock is ours, so no
+        // other hub makes one meanwhile.
+        let swept = nvim::sweep(&paths.nvim_dir());
+        if swept > 0 {
+            tracing::info!(target: "sb::hub", swept, "removed old nvim sockets");
+        }
         let (config, config_error) = match Config::load(&paths.config) {
             Ok(c) => (c, None),
             Err(err) => (Config::default(), Some(err)),

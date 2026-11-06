@@ -295,10 +295,10 @@ Opening a layout starts all its panes. Panes that already run are not started ag
 
 - With `nvim` on PATH, every agent tile has an nvim chip. Leader, `e` does the same. nvim opens as a part of the live pane, next to the agent (28).
 - There is one nvim for each worktree. It runs in its own tmux pane. While an agent runs in the worktree, nvim has no tile.
-- The first open runs `nvim --listen $XDG_RUNTIME_DIR/switchboard/nvim/<tree-hash>.sock`.
-- Later opens use msgpack-RPC `nvim_cmd` with `edit +<line> <file>`. RPC works in every mode.
+- The first open runs `nvim --listen <runtime>/nvim/<tree-hash>.sock`, in the socket folder (`$XDG_RUNTIME_DIR/switchboard`, or `/tmp/sb-<uid>`, 23).
+- Later opens run `nvim --server <sock> --remote-expr` with `execute('edit +<line> ' .. fnameescape(<file>))`. An expression works in every mode.
 - The app never closes an nvim whose process still runs. When its pane runs but it does not answer (it is busy, or waits at "Press ENTER"), an open shows that pane, so you see the prompt, and opens the file once nvim answers again. Only an nvim whose process ended is replaced by a new one.
-- At start, the app removes sockets with no live nvim.
+- At start, the app removes each socket in the nvim folder that refuses a connect: its nvim is gone. It only connects, so a busy nvim, or one at a prompt, keeps its socket.
 - From a review, every file:line opens nvim at that line in the review worktree.
 - In a review tab, the right column has a switch: Claude (or Agent) and nvim. nvim takes the column in place of the agent, in the review worktree. It opens at the file and the line you are on: the line you clicked, else the first new line in view of the diff, else the first file of the step. It shows the file next to its old side, in diff mode (11.14). `o` opens it too. The nvim button of a file opens that file in the column too. Leader, `e` switches back and forth. A click on a line or Send step types into the agent, so the agent shows again.
 - After a `PostToolUse` hook for Edit or Write in a worktree, the app runs `checktime` in that nvim.
@@ -619,7 +619,7 @@ There is no separate local LLM setting. A local model is one more connection (8.
 │ state    socket + ~/.switchboard/state/<pane>  ← sb state           │
 │ mcp      sb mcp: guide_set_steps, guide_update_step, git            │
 │ review   PR fetch + worktree, head polling, claude -p runner        │
-│ nvim     msgpack-RPC to one nvim for each worktree                  │
+│ nvim     nvim --server to one nvim for each worktree                │
 │ store    SQLite: panes, connections, reviews, threads, pins, drafts │
 └────────────────────────────────────────────────────────────────────┘
 ```
@@ -951,6 +951,7 @@ Where the build differs from the text above:
 - Tasks (27): a task edit adds a `points` row, a `link` or `link_removed` row for each link, and one `edited` row for the other fields. Delete and Restore add `deleted` and `restored`.
 - Tasks (27): Copy as Markdown lists Done, In review, In progress, Blocked and To do, in that order. When the copy fails, a dialog shows the text.
 - `--allowedTools`, `--disallowedTools` and `--mcp-config` take lists. The prompt of a `claude -p` run goes first, or one of them takes it.
+- nvim (10): the app drives nvim with `nvim --server <sock> --remote-expr`, not with its own msgpack-RPC client. The start cleanup of sockets is a connect: a refused one goes.
 - Every `nvim --server` call times out after 3 s. An nvim that waits at "Press ENTER" never answers. So no answer never closes an nvim: `nvim_open` returns its running pane, and the file open (and a review's diff) waits in a thread for up to 60 s for nvim to answer, then gives up with a log line. A new nvim gets its file as `+<line> -- <file>`, so a file name that starts with `-` is not an option.
 - The 3 s calls that time out may still reach nvim and run after Enter, so the call can run twice. `edit` and the review diff are safe to run twice.
 - Parts (28): each part has its own tmux window size, from `refresh-client -C @window:WxH`. tmux 3.2 or newer has it. The live pane also gets its window size, so an old part size never stays on it.
