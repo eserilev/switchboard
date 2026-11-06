@@ -35,12 +35,17 @@ pub struct Sandbox<'a> {
     pub deny_write: Vec<String>,
 }
 
+/// One word for `sh`: in single quotes, with each `'` as `'\''`.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 /// The settings file for one pane, passed with `claude --settings`.
 pub fn settings(p: &PaneSettings) -> Value {
-    let sb = p.sb.to_string_lossy();
-    let cmd = |arg: &str| json!([{ "hooks": [{ "type": "command", "command": format!("'{sb}' {arg}") }] }]);
+    let sb = sh_quote(&p.sb.to_string_lossy());
+    let cmd = |arg: &str| json!([{ "hooks": [{ "type": "command", "command": format!("{sb} {arg}") }] }]);
     let with = |matcher: &str, arg: &str, timeout: Option<u64>| {
-        let mut h = json!({ "type": "command", "command": format!("'{sb}' {arg}") });
+        let mut h = json!({ "type": "command", "command": format!("{sb} {arg}") });
         if let Some(t) = timeout {
             h["timeout"] = json!(t);
         }
@@ -238,6 +243,21 @@ mod tests {
             settings(Path::new("/sb"), false, &[])["enabledPlugins"][RUST_PLUGIN],
             false
         );
+    }
+
+    #[test]
+    fn a_quote_in_the_sb_path_stays_in_the_word() {
+        let path = "/Users/o'neil/My Apps/sb";
+        let s = settings(Path::new(path), true, &[]);
+        let cmd = s["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap();
+        assert_eq!(cmd, r"'/Users/o'\''neil/My Apps/sb' state turn");
+        // The shell splits it into the path and the two arguments.
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("printf '%s|' {}", cmd))
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{path}|state|turn|"));
     }
 
     #[test]
