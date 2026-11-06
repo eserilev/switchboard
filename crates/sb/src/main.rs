@@ -130,6 +130,13 @@ fn serve() -> i32 {
 /// `sb serve`, it starts one that keeps running after the link ends.
 fn attach() -> i32 {
     let wsock = Paths::from_env().window_sock();
+    if let Err(e) = safe_sock_dir(&wsock) {
+        // A missing folder is fine: `sb serve` makes it below.
+        if wsock.parent().is_some_and(|d| std::fs::symlink_metadata(d).is_ok()) {
+            eprintln!("sb attach: {e}");
+            return 1;
+        }
+    }
     let stream = match UnixStream::connect(&wsock) {
         Ok(s) => s,
         Err(_) => {
@@ -215,9 +222,21 @@ fn stdin_json() -> Value {
     serde_json::from_str(&s).unwrap_or(Value::Null)
 }
 
+/// An error when the folder of a socket is a symlink or belongs to another user:
+/// then the socket may not be Switchboard's, and `sb` does not talk to it.
+fn safe_sock_dir(sock: &Path) -> Result<(), String> {
+    let Some(dir) = sock.parent() else { return Ok(()) };
+    let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
+    switchboard_core::paths::check_own_dir(dir).map_err(|e| {
+        tracing::warn!(target: "sb::cli", sock = %sock.display(), %e, "unsafe socket folder");
+        format!("{}: {e}", sock.display())
+    })
+}
+
 /// Sends one request. With `reply`, waits for one line back.
 pub fn send(req: &Request, reply: bool) -> Result<Option<String>, String> {
     let sock = Paths::from_env().sock();
+    safe_sock_dir(&sock)?;
     let mut s = UnixStream::connect(&sock).map_err(|e| {
         tracing::warn!(target: "sb::cli", sock = %sock.display(), %e, "no Switchboard socket");
         format!("{}: {e}", sock.display())

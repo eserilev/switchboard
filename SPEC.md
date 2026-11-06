@@ -919,7 +919,7 @@ switchboard/
 Where the build differs from the text above:
 
 - macOS runs Switchboard too:
-  - With no `XDG_RUNTIME_DIR` (macOS), the socket folder is `/tmp/sb-<uid>`. The macOS temp folder is too long: a socket path has at most 104 bytes there. The app makes the socket folder private (mode 700), and stops when the folder belongs to another user.
+  - With no `XDG_RUNTIME_DIR` (macOS), the socket folder is `/tmp/sb-<uid>`. The macOS temp folder is too long: a socket path has at most 104 bytes there. The app makes the socket folder with mode 700 (and sets 700 on an old one), and stops when the folder is a symlink or belongs to another user. `sb` checks the same before it connects to a socket.
   - An app that starts from Finder or the Dock has a short `PATH`. At start, the macOS app takes the `PATH` of your login shell (`$SHELL -l`, at most 5 seconds) and adds `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` and `~/.cargo/bin` when they are missing.
   - Links open with `open`, not `xdg-open`.
   - The rust-analyzer memory on a tile comes from one `ps` table, because macOS has no `/proc`.
