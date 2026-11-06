@@ -59,11 +59,39 @@ impl AppSink {
                 format!("{} · {branch}", pane["repo"].as_str().unwrap_or(""))
             });
         let body = pane["summary"].as_str().unwrap_or("");
-        let _ = std::process::Command::new("notify-send")
-            // `--`: a title from a pane that starts with `-` is not a flag.
-            .args(["--app-name=Switchboard", "--", &format!("{title}: {label}"), body])
+        let _ = notify_command(&format!("{title}: {label}"), body)
             .stdin(std::process::Stdio::null())
             .spawn();
+    }
+}
+
+/// The command that shows a desktop notification: `osascript` on macOS, which
+/// has no `notify-send`. The text goes in as arguments of `on run argv`, never
+/// into the script text, so a quote in a title can not change the script.
+fn notify_command(title: &str, body: &str) -> std::process::Command {
+    #[cfg(target_os = "macos")]
+    {
+        let mut c = std::process::Command::new("osascript");
+        c.args([
+            "-e",
+            "on run argv",
+            "-e",
+            "display notification (item 2 of argv) with title (item 1 of argv)",
+            "-e",
+            "end run",
+            // `--`: a title that starts with `-` is not a flag.
+            "--",
+            title,
+            body,
+        ]);
+        c
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut c = std::process::Command::new("notify-send");
+        // `--`: a title from a pane that starts with `-` is not a flag.
+        c.args(["--app-name=Switchboard", "--", title, body]);
+        c
     }
 }
 
@@ -459,6 +487,16 @@ mod tests {
         for c in LOCAL {
             assert!(!dispatch::COMMANDS.contains(c), "{c} is a hub command too");
         }
+    }
+
+    /// The text of a notification is an argument, never part of the script.
+    #[test]
+    fn a_notification_keeps_its_text_out_of_the_command() {
+        let c = notify_command("-it's \"x\"", "b");
+        let args: Vec<String> = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let n = args.len();
+        assert_eq!(&args[n - 3..], &["--", "-it's \"x\"", "b"]);
+        assert!(args[..n - 3].iter().all(|a| !a.contains("it's")));
     }
 
     #[test]

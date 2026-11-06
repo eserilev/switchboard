@@ -120,7 +120,7 @@ Rules:
 
 - A lamp that turns on sets the tile to unseen.
 - Expand the tile, or type into the pane, to clear it. Focus alone does not clear it.
-- If the window is not focused when a lamp turns on, the app sends a desktop notification and sets the window urgency hint.
+- If the window is not focused when a lamp turns on, the app sends a desktop notification (`osascript` on macOS, `notify-send` on Linux) and sets the window urgency hint.
 - The tally in the top bar counts unseen tiles for each state: Needs you, Limit, Error, Your turn.
 - Leader, `j` opens the next unseen tile. The order is Needs you, Limit, Error, Your turn.
 
