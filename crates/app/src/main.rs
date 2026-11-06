@@ -59,11 +59,39 @@ impl AppSink {
                 format!("{} · {branch}", pane["repo"].as_str().unwrap_or(""))
             });
         let body = pane["summary"].as_str().unwrap_or("");
-        let _ = std::process::Command::new("notify-send")
-            // `--`: a title from a pane that starts with `-` is not a flag.
-            .args(["--app-name=Switchboard", "--", &format!("{title}: {label}"), body])
+        let _ = notify_command(&format!("{title}: {label}"), body)
             .stdin(std::process::Stdio::null())
             .spawn();
+    }
+}
+
+/// The command that shows a desktop notification: `osascript` on macOS, which
+/// has no `notify-send`. The text goes in as arguments of `on run argv`, never
+/// into the script text, so a quote in a title can not change the script.
+fn notify_command(title: &str, body: &str) -> std::process::Command {
+    #[cfg(target_os = "macos")]
+    {
+        let mut c = std::process::Command::new("osascript");
+        c.args([
+            "-e",
+            "on run argv",
+            "-e",
+            "display notification (item 2 of argv) with title (item 1 of argv)",
+            "-e",
+            "end run",
+            // `--`: a title that starts with `-` is not a flag.
+            "--",
+            title,
+            body,
+        ]);
+        c
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut c = std::process::Command::new("notify-send");
+        // `--`: a title from a pane that starts with `-` is not a flag.
+        c.args(["--app-name=Switchboard", "--", title, body]);
+        c
     }
 }
 
@@ -88,12 +116,19 @@ struct Remote {
     /// The number of the newest link. News of an older link is dropped: its
     /// reader can end after the next link is up.
     gen: Arc<AtomicU64>,
+    /// Held for the whole of a connect, so two connects (the start and a click
+    /// on Reconnect) never run at once: the second could take over the first,
+    /// and the window would keep the client that was taken over.
+    connecting: Mutex<()>,
 }
 
 impl Remote {
     /// Connects, and tells the window. On an error the link stays down with the reason.
     fn connect(&self) -> Res<()> {
-        if let Some(old) = self.client.lock().unwrap().take() {
+        // Lock order: `connecting`, then `client`, then `down`.
+        let _one = self.connecting.lock().unwrap();
+        let old = self.client.lock().unwrap().take();
+        if let Some(old) = old {
             old.close();
         }
         let g = self.gen.fetch_add(1, Ordering::SeqCst) + 1;
@@ -266,6 +301,9 @@ fn log(level: &str, message: &str) {
     }
 }
 
+/// The parse error of this computer's config, when it has one.
+static CONFIG_ERROR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// The commands that run in the app, in remote mode too. Every other command goes
 /// to the backend. A test keeps this list short (SPEC 29).
 const LOCAL: &[&str] = &["log", "open_url", "link_state", "link_reconnect"];
@@ -303,7 +341,13 @@ fn handle(invoke: tauri::ipc::Invoke) -> bool {
             invoke.resolver.resolve(Value::Null);
         }
         "open_url" => invoke.resolver.respond(open_url(&text("url")).map(|_| Value::Null).map_err(Into::into)),
-        "link_state" => invoke.resolver.resolve(backend.link_state()),
+        "link_state" => {
+            let mut v = backend.link_state();
+            if let Some(err) = CONFIG_ERROR.get() {
+                v["config_error"] = json!(format!("The config does not parse, so the defaults are in use: {err}"));
+            }
+            invoke.resolver.resolve(v)
+        }
         "link_reconnect" => invoke.resolver.respond_async(async move {
             let b = Arc::clone(&backend);
             let r = tauri::async_runtime::spawn_blocking(move || match &*b {
@@ -371,7 +415,14 @@ fn main() {
                 handle: app.handle().clone(),
             });
             let paths = Paths::from_env();
-            let config = Config::load(&paths.config).unwrap_or_default();
+            // A config that does not parse: the defaults, with the error in the log
+            // and on the screen. `link_state` carries it, so the window shows it
+            // even when it loads after an event would have gone.
+            let config = Config::load(&paths.config).unwrap_or_else(|err| {
+                tracing::error!(target: "sb::app", %err, "the config does not parse; the defaults are used");
+                let _ = CONFIG_ERROR.set(err);
+                Config::default()
+            });
             let backend = match config.remote_argv() {
                 Some((host, argv)) => {
                     tracing::info!(target: "sb::app", %host, ?argv, "remote mode");
@@ -383,6 +434,7 @@ fn main() {
                         sink,
                         leader: config.leader.clone(),
                         gen: Arc::default(),
+                        connecting: Mutex::default(),
                     };
                     Arc::new(Backend::Remote(remote))
                 }
@@ -443,6 +495,16 @@ mod tests {
         for c in LOCAL {
             assert!(!dispatch::COMMANDS.contains(c), "{c} is a hub command too");
         }
+    }
+
+    /// The text of a notification is an argument, never part of the script.
+    #[test]
+    fn a_notification_keeps_its_text_out_of_the_command() {
+        let c = notify_command("-it's \"x\"", "b");
+        let args: Vec<String> = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let n = args.len();
+        assert_eq!(&args[n - 3..], &["--", "-it's \"x\"", "b"]);
+        assert!(args[..n - 3].iter().all(|a| !a.contains("it's")));
     }
 
     #[test]

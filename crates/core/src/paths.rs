@@ -25,24 +25,47 @@ fn short_runtime() -> PathBuf {
     PathBuf::from(format!("/tmp/sb-{}", uid()))
 }
 
-/// The user id, from the owner of the home folder.
+/// The user id of this process.
 fn uid() -> u32 {
-    use std::os::unix::fs::MetadataExt;
-    std::fs::metadata(home_dir()).map(|m| m.uid()).unwrap_or(0)
+    // SAFETY: getuid has no failure and touches no memory.
+    unsafe { libc::getuid() }
 }
 
-/// Makes the socket folder private (mode 700). The socket controls the agents, so
-/// the folder must belong to this user: a folder of another user in `/tmp` is an error.
+/// Makes the socket folder private (mode 700), and makes it with mode 700 when it
+/// is missing. The socket controls the agents, so the folder must be a real folder
+/// of this user: a symlink, or a folder of another user in `/tmp`, is an error.
 fn private_dir(dir: &std::path::Path) -> std::io::Result<()> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    let meta = std::fs::metadata(dir)?;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    if let Some(p) = dir.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    check_own_dir(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+}
+
+/// An error unless `dir` is a real folder (not a symlink) that belongs to this
+/// user. `sb` checks the socket folder with it before it connects.
+pub fn check_own_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(dir)?;
+    if meta.file_type().is_symlink() {
+        return Err(std::io::Error::other(format!("{} is a symlink", dir.display())));
+    }
+    if !meta.is_dir() {
+        return Err(std::io::Error::other(format!("{} is not a folder", dir.display())));
+    }
     if meta.uid() != uid() {
         return Err(std::io::Error::other(format!(
             "{} belongs to another user",
             dir.display()
         )));
     }
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+    Ok(())
 }
 
 pub fn home_dir() -> PathBuf {
@@ -111,9 +134,9 @@ impl Paths {
     }
 
     pub fn create_all(&self) -> std::io::Result<()> {
+        private_dir(&self.runtime)?;
         for d in [
             &self.home,
-            &self.runtime,
             &self.data,
             &self.state_dir(),
             &self.settings_dir(),
@@ -121,7 +144,6 @@ impl Paths {
         ] {
             std::fs::create_dir_all(d)?;
         }
-        private_dir(&self.runtime)?;
         if let Some(p) = self.config.parent() {
             std::fs::create_dir_all(p)?;
         }
@@ -214,6 +236,28 @@ mod tests {
         p.create_all().unwrap();
         let mode = std::fs::metadata(&p.runtime).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_symlinked_runtime_folder_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("sb-paths-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("elsewhere")).unwrap();
+        std::fs::set_permissions(root.join("elsewhere"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::os::unix::fs::symlink(root.join("elsewhere"), root.join("run")).unwrap();
+        let p = Paths::under(root.clone());
+        let err = p.create_all().unwrap_err();
+        assert!(err.to_string().contains("symlink"), "{err}");
+        assert!(check_own_dir(&root.join("run")).is_err());
+        // The target keeps its mode: nothing was done through the link.
+        let mode = std::fs::metadata(root.join("elsewhere")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
+        assert!(check_own_dir(&root.join("elsewhere")).is_ok());
+        // A folder of another user: root's own folder.
+        assert!(uid() == 0 || check_own_dir(std::path::Path::new("/")).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

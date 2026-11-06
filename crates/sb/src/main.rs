@@ -130,6 +130,13 @@ fn serve() -> i32 {
 /// `sb serve`, it starts one that keeps running after the link ends.
 fn attach() -> i32 {
     let wsock = Paths::from_env().window_sock();
+    if let Err(e) = safe_sock_dir(&wsock) {
+        // A missing folder is fine: `sb serve` makes it below.
+        if wsock.parent().is_some_and(|d| std::fs::symlink_metadata(d).is_ok()) {
+            eprintln!("sb attach: {e}");
+            return 1;
+        }
+    }
     let stream = match UnixStream::connect(&wsock) {
         Ok(s) => s,
         Err(_) => {
@@ -215,9 +222,21 @@ fn stdin_json() -> Value {
     serde_json::from_str(&s).unwrap_or(Value::Null)
 }
 
+/// An error when the folder of a socket is a symlink or belongs to another user:
+/// then the socket may not be Switchboard's, and `sb` does not talk to it.
+fn safe_sock_dir(sock: &Path) -> Result<(), String> {
+    let Some(dir) = sock.parent() else { return Ok(()) };
+    let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
+    switchboard_core::paths::check_own_dir(dir).map_err(|e| {
+        tracing::warn!(target: "sb::cli", sock = %sock.display(), %e, "unsafe socket folder");
+        format!("{}: {e}", sock.display())
+    })
+}
+
 /// Sends one request. With `reply`, waits for one line back.
 pub fn send(req: &Request, reply: bool) -> Result<Option<String>, String> {
     let sock = Paths::from_env().sock();
+    safe_sock_dir(&sock)?;
     let mut s = UnixStream::connect(&sock).map_err(|e| {
         tracing::warn!(target: "sb::cli", sock = %sock.display(), %e, "no Switchboard socket");
         format!("{}: {e}", sock.display())
@@ -330,7 +349,14 @@ fn open(args: &[String]) -> i32 {
             p => path = Some(p.to_owned()),
         }
     }
-    let path = std::fs::canonicalize(path.unwrap_or_else(|| ".".into())).unwrap_or_default();
+    let path = path.unwrap_or_else(|| ".".into());
+    let path = match std::fs::canonicalize(&path) {
+        Ok(p) if p.is_dir() => p,
+        _ => {
+            eprintln!("sb open: no such folder: {path}");
+            return 1;
+        }
+    };
     let req = Request::Open {
         path: path.to_string_lossy().into_owned(),
         worktree,
@@ -523,31 +549,20 @@ fn connect_add(args: &[String]) -> i32 {
         eprintln!("sb connect add: {}: {e}", dir.display());
         return 1;
     }
-    let mut section = format!(
-        "\n[connections.{name}]\nkind = \"{}\"\ndir = \"~/.claude-{name}\"\n",
-        if url.is_some() { "endpoint" } else { "claude" }
-    );
-    if let Some(u) = &url {
-        section += &format!("url = \"{u}\"\n");
-    }
-    if let Some(m) = &model {
-        section += &format!("model = \"{m}\"\n");
-    }
-    if let Some(t) = &token {
-        section += &format!("token = \"{t}\"\n");
-    }
-    let config = std::fs::read_to_string(&paths.config).unwrap_or_default();
-    if config.contains(&format!("[connections.{name}]")) {
-        println!("{name} is already in {}", paths.config.display());
-    } else {
-        if let Some(p) = paths.config.parent() {
-            let _ = std::fs::create_dir_all(p);
-        }
-        if let Err(e) = append(&paths.config, &section) {
-            eprintln!("sb connect add: {}: {e}", paths.config.display());
+    let conn = switchboard_core::config::ConnectionCfg {
+        kind: if url.is_some() { "endpoint" } else { "claude" }.into(),
+        dir: Some(format!("~/.claude-{name}")),
+        url: url.clone(),
+        model,
+        token,
+    };
+    match switchboard_core::config::Config::add_connection(&paths.config, name, &conn) {
+        Ok(true) => println!("Added {name} to {}", paths.config.display()),
+        Ok(false) => println!("{name} is already in {}", paths.config.display()),
+        Err(e) => {
+            eprintln!("sb connect add: {e}");
             return 1;
         }
-        println!("Added {name} to {}", paths.config.display());
     }
     if url.is_none() {
         println!(
@@ -558,10 +573,3 @@ fn connect_add(args: &[String]) -> i32 {
     0
 }
 
-fn append(path: &Path, text: &str) -> std::io::Result<()> {
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-    f.write_all(text.as_bytes())
-}

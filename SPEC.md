@@ -120,7 +120,7 @@ Rules:
 
 - A lamp that turns on sets the tile to unseen.
 - Expand the tile, or type into the pane, to clear it. Focus alone does not clear it.
-- If the window is not focused when a lamp turns on, the app sends a desktop notification and sets the window urgency hint.
+- If the window is not focused when a lamp turns on, the app sends a desktop notification (`osascript` on macOS, `notify-send` on Linux) and sets the window urgency hint.
 - The tally in the top bar counts unseen tiles for each state: Needs you, Limit, Error, Your turn.
 - Leader, `j` opens the next unseen tile. The order is Needs you, Limit, Error, Your turn.
 
@@ -225,7 +225,7 @@ The token comes from the system keyring through `secret-tool`. It is never in th
 - Each folder has symlinks to `~/.claude` for `settings.json`, `CLAUDE.md`, `projects/`, `skills/` and `plugins/`.
 - All connections share your memory, settings and session history.
 
-`sb connect add <name>` makes the folder and the symlinks. For a Claude account, it then starts `claude` in a pane for `/login`.
+`sb connect add <name>` makes the folder and the symlinks, and writes the `[connections.<name>]` table with `toml_edit`, so a quote in a URL or model stays in its string. For a Claude account, it then starts `claude` in a pane for `/login`.
 
 ### 8.3 Active connection
 
@@ -283,7 +283,7 @@ If a closed round of the PR exists and no review of it is open, the launcher off
 
 ### 9.3 `sb open`
 
-- `sb open .` opens the current folder as a Claude pane.
+- `sb open .` opens the current folder as a Claude pane. A path that is not a folder gives "no such folder" and exit code 1.
 - `sb open <path> -w <branch>` opens a new worktree.
 - `sb open <path> --nvim` and `--shell` open the other pane kinds.
 - If the app is not running, `sb open` starts it.
@@ -295,12 +295,12 @@ Opening a layout starts all its panes. Panes that already run are not started ag
 
 ## 10. nvim
 
-- With `nvim` on PATH, every agent tile has an nvim chip. Leader, `e` does the same. nvim opens as a part of the live pane, next to the agent (28).
+- With `nvim` on PATH, every agent tile has an nvim chip. Leader, `e` does the same. nvim opens as a part of the live pane, next to the agent (28). From a pane that is not an agent, nvim goes next to a board agent of that worktree that runs: never the Work environment agent (30), a review Ask pane, or an agent that ended. With none, nvim gets its own tile.
 - There is one nvim for each worktree. It runs in its own tmux pane. While an agent runs in the worktree, nvim has no tile.
-- The first open runs `nvim --listen $XDG_RUNTIME_DIR/switchboard/nvim/<tree-hash>.sock`.
-- Later opens use msgpack-RPC `nvim_cmd` with `edit +<line> <file>`. RPC works in every mode.
+- The first open runs `nvim --listen <runtime>/nvim/<tree-hash>.sock`, in the socket folder (`$XDG_RUNTIME_DIR/switchboard`, or `/tmp/sb-<uid>`, 23).
+- Later opens run `nvim --server <sock> --remote-expr` with `execute('edit +<line> ' .. fnameescape(<file>))`. An expression works in every mode.
 - The app never closes an nvim whose process still runs. When its pane runs but it does not answer (it is busy, or waits at "Press ENTER"), an open shows that pane, so you see the prompt, and opens the file once nvim answers again. Only an nvim whose process ended is replaced by a new one.
-- At start, the app removes sockets with no live nvim.
+- At start, the app removes each socket in the nvim folder that refuses a connect: its nvim is gone. It only connects, so a busy nvim, or one at a prompt, keeps its socket.
 - From a review, every file:line opens nvim at that line in the review worktree.
 - In a review tab, the right column has a switch: Claude (or Agent) and nvim. nvim takes the column in place of the agent, in the review worktree. It opens at the file and the line you are on: the line you clicked, else the first new line in view of the diff, else the first file of the step. It shows the file next to its old side, in diff mode (11.14). `o` opens it too. The nvim button of a file opens that file in the column too. Leader, `e` switches back and forth. A click on a line or Send step types into the agent, so the agent shows again.
 - After a `PostToolUse` hook for Edit or Write in a worktree, the app runs `checktime` in that nvim.
@@ -657,7 +657,7 @@ There is no separate local LLM setting. A local model is one more connection (8.
 │ state    socket + ~/.switchboard/state/<pane>  ← sb state           │
 │ mcp      sb mcp: guide_set_steps, guide_update_step, git            │
 │ review   PR fetch + worktree, head polling, claude -p runner        │
-│ nvim     msgpack-RPC to one nvim for each worktree                  │
+│ nvim     nvim --server to one nvim for each worktree                │
 │ store    SQLite: panes, connections, reviews, threads, pins, drafts │
 └────────────────────────────────────────────────────────────────────┘
 ```
@@ -801,7 +801,7 @@ The gear at the top right opens Settings. It changes these keys, so nobody has t
 - Let the review agent search the web: `review.web_search`.
 - Sandbox (31): the mode (`sandbox.mode`: Off, Review panes, All agents), and with a mode that is not Off, three lists: the sites that commands can reach (`sandbox.domains`, a host name or `*.` and a host name), more folders that commands can write (`sandbox.write`, a full path that starts with `/` or `~/`), and the commands that run outside the sandbox (`sandbox.unsandboxed`). On Linux, a warning names `bwrap` or `socat` when one is not on `PATH`. A new agent gets the change; an agent that runs keeps the sandbox it started with.
 
-Save writes the config file with `toml_edit`: every other key and every comment stays. Items are trimmed, and empty items and repeats go. The new text must parse with the same rules as at start, else nothing is written. The write is a new file and a rename, so a crash never leaves half a config. A file that does not parse is not changed: the error says to fix it first.
+Save writes the config file with `toml_edit`: every other key and every comment stays. Items are trimmed, and empty items and repeats go. The new text must parse with the same rules as at start, else nothing is written. The write is a new file and a rename, so a crash never leaves half a config. The new file goes next to the real file, so a config that is a symlink (dotfiles) stays a symlink, and the file keeps its mode. An inline table (`review = { ... }`) turns into a normal `[review]` table. A file that does not parse is not changed: the error says to fix it first. At start, a file that does not parse gives the defaults; the error goes to the log and shows in the window.
 
 A change works at once, with no restart: the hub keeps the new config, the repo list loads again, and the next review run and Ask pane use the new keys. In remote mode (29) Settings changes the server's config, because the repos and the reviews are there. The leader key stays the one of your own computer.
 
@@ -957,13 +957,13 @@ switchboard/
 Where the build differs from the text above:
 
 - macOS runs Switchboard too:
-  - With no `XDG_RUNTIME_DIR` (macOS), the socket folder is `/tmp/sb-<uid>`. The macOS temp folder is too long: a socket path has at most 104 bytes there. The app makes the socket folder private (mode 700), and stops when the folder belongs to another user.
+  - With no `XDG_RUNTIME_DIR` (macOS), the socket folder is `/tmp/sb-<uid>`. The macOS temp folder is too long: a socket path has at most 104 bytes there. The app makes the socket folder with mode 700 (and sets 700 on an old one), and stops when the folder is a symlink or belongs to another user. `sb` checks the same before it connects to a socket.
   - An app that starts from Finder or the Dock has a short `PATH`. At start, the macOS app takes the `PATH` of your login shell (`$SHELL -l`, at most 5 seconds) and adds `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` and `~/.cargo/bin` when they are missing.
   - Links open with `open`, not `xdg-open`.
   - The rust-analyzer memory on a tile comes from one `ps` table, because macOS has no `/proc`.
   - The leader key comes from `leader` in the config, for example `ctrl+space`, `ctrl+a` or `cmd+;`. On macOS, `ctrl+space` can switch the input language; then set another key.
   - `scripts/macos-app.sh` builds `Switchboard.app` with cargo, `sips`, `iconutil` and an ad-hoc `codesign`. No npm and no Tauri CLI. To share the app, sign it with a Developer ID and notarize it.
-  - `scripts/install.sh` installs on Linux and macOS (`INSTALL.md`). It checks the tools, installs the missing ones with `--deps`, takes the latest release when one exists for the system or else builds from source, installs the binaries (Linux) or `~/Applications/Switchboard.app` (macOS), and writes a starter config with the code folders it finds: the `--scan` folders, else the usual ones that exist, else the folders that hold git repos in the home folder, 4 levels deep. With a config already there, `--scan` adds to its `scan`. On macOS the starter config sets `leader = "ctrl+;"`.
+  - `scripts/install.sh` installs on Linux and macOS (`INSTALL.md`). It checks the tools, installs the missing ones with `--deps`, takes the latest release when one exists for the system or else builds from source, installs the binaries (Linux) or `~/Applications/Switchboard.app` (macOS), and writes a starter config with the code folders it finds: the `--scan` folders, else the usual ones that exist, else the folders that hold git repos in the home folder, 4 levels deep (never the home folder itself or a folder above it, and not a repo inside another repo). Paths go into the config as TOML strings, with `\` and `"` escaped. With a config already there, `--scan` adds to its `scan`. The script keeps a list of the files it installs and a check sum of each. Install and uninstall replace or remove only a file on the list that is still the same: a link into the app, the app with its bundle id, or a file with the same sum. A file that another tool put there since stays. On macOS the starter config sets `leader = "ctrl+;"`.
   - `.github/workflows/release.yml`: a `v*` tag builds `switchboard-linux-x86_64.tar.gz` (Ubuntu 22.04) and `Switchboard-macos-arm64.zip`, and puts them on a GitHub release.
   - `.github/workflows/macos.yml` runs clippy, the tests with tmux from Homebrew, the window checks in Chrome, and the app build on a macOS runner. It runs when the repo is on GitHub.
   - From Linux, `cargo clippy --target aarch64-apple-darwin` checks the macOS code. A C compiler that does nothing lets the SQLite build step pass, because a check does not link.
@@ -989,6 +989,7 @@ Where the build differs from the text above:
 - Tasks (27): a task edit adds a `points` row, a `link` or `link_removed` row for each link, and one `edited` row for the other fields. Delete and Restore add `deleted` and `restored`.
 - Tasks (27): Copy as Markdown lists Done, In review, In progress, Blocked and To do, in that order. When the copy fails, a dialog shows the text.
 - `--allowedTools`, `--disallowedTools` and `--mcp-config` take lists. The prompt of a `claude -p` run goes first, or one of them takes it.
+- nvim (10): the app drives nvim with `nvim --server <sock> --remote-expr`, not with its own msgpack-RPC client. The start cleanup of sockets is a connect: a refused one goes.
 - Every `nvim --server` call times out after 3 s. An nvim that waits at "Press ENTER" never answers. So no answer never closes an nvim: `nvim_open` returns its running pane, and the file open (and a review's diff) waits in a thread for up to 60 s for nvim to answer, then gives up with a log line. A new nvim gets its file as `+<line> -- <file>`, so a file name that starts with `-` is not an option.
 - The 3 s calls that time out may still reach nvim and run after Enter, so the call can run twice. `edit` and the review diff are safe to run twice.
 - Parts (28): each part has its own tmux window size, from `refresh-client -C @window:WxH`. tmux 3.2 or newer has it. The live pane also gets its window size, so an old part size never stays on it.
@@ -1003,6 +1004,7 @@ Where the build differs from the text above:
 - Remote (29): the commands in `dispatch::ORDERED` run in order in local mode too, through the same lane.
 - tmux `%pane:off` stops tmux from reading the pane. Tiles use `pause`.
 - A hidden keeper pane (`@sb_keep`) keeps the tmux session alive when every tile closes.
+- The tick lists tmux first, then reads the panes. A pane that starts or resumes after the list has a newer start mark, so the tick leaves it alone: it is not "gone", and its new process is not marked dead from the old list. A pane that the list shows running loses its dead mark. An idle end (15) stops the pane on a thread of its own, so the tick never waits the 5 s of the stop. A close removes the pane's settings file and its state file.
 - `remain-on-exit` is on for the whole server, so a pane that fails at once still shows its error.
 - After an expand, the app changes the size by one row and back. The program in the pane then draws its whole screen, and output lost in the expand gap does not matter.
 - A key typed in a pane clears the tile's permit buttons: you answered in the pane.
@@ -1492,7 +1494,7 @@ One JSON object per line, on the window socket. `sb attach` copies its stdin and
 ### 29.3 One window at a time
 
 - Each attach gets a new epoch. The new window takes over: under the owner lock, it becomes the owner and the current window, and the screen collapses.
-- The old window gets the `taken_over` event, then its socket closes. Its banner says that another window took over, with Take it back.
+- The old window gets the `taken_over` event, then its socket closes. Only the writer shuts the socket, after its last line, so `taken_over` always goes first. Its banner says that another window took over, with Take it back.
 - After the takeover, the hub reads no more lines of the old window, so late keys never reach a pane. A writer that blocks on a dead link gets its socket shut after 5 s.
 - The screen commands (`pane_expand`, `pane_attach`, `pane_detach`, `pane_collapse`, `pane_resize`, `part_resize`) run under the owner lock, and only for the owner. A command of a window that lost a takeover gets an error and changes nothing.
 - A command of the old window that runs at the takeover still runs, if it is not a screen command. A permit click carries its permit id, so it answers only the request that its tile showed (25, P2).
@@ -1519,7 +1521,7 @@ One JSON object per line, on the window socket. `sb attach` copies its stdin and
 - A connect waits 20 s at most for the hello. It skips up to 100 lines that are not a hello, for example a banner of the login shell. On any failure it kills the ssh process.
 - Each link has a number. News of an older link is dropped, and the link shows as up only while its client is up.
 - While the link is down, a failed command makes no toast.
-- After Reconnect, the window reads everything again: settings, connections, panes, reviews and tasks. Then it opens its live pane again.
+- After Reconnect, the window reads everything again: settings, connections, panes, reviews and tasks. Then it opens its live pane again, where it was: on the board, in the Work environment tab, or in a review's column. The tab stays.
 
 ### 29.7 Checks
 
@@ -1565,6 +1567,8 @@ A review by a second agent found these. All are fixed:
 | V4 | The screen thread had no owner lock. A collapse between its check and its stream on left a pane off screen streaming, and an old window could pause a pane of the new one. | The owner lock and the epoch check (29.5). |
 | V5 | A panic in a command of the read loop left the window with no answers. | A guard ends the window, also on a panic. |
 | V6 | A command sent while the link went down could wait for ever. | `send` looks at the link again after it adds its waiter. |
+| V7 | The end of the read loop shut the socket itself, so the close could beat the writer's `taken_over` line. | The read loop only asks the writer to end: the writer shuts the socket after its last line, or after 5 s. |
+| V8 | Two connects at once (the start and Reconnect) could leave the window with the client that the other one took over. | One lock holds for the whole connect. |
 
 ### 29.9 Not yet
 
@@ -1584,7 +1588,7 @@ A tab for working in one repo yourself: nvim takes the left half, Claude Code th
 - **The tab.** Work environment, between Tasks and Code reviews. Leader, `w` opens it.
 - **The repo.** A picker lists the repo list (9.1). The choice stays for the next start (browser storage of the window; a convenience only). A repo where the tab's own agent runs opens that agent at once. A repo with none shows **Start Claude**, which opens Claude in the main checkout with the title `Work environment`. An agent of the board in the same checkout is never taken. Another repo in the picker takes the live pane off the one before.
 - **The layout.** The tab hosts the live pane, as a review tab does (11.5), but with its parts (28): nvim and the shell of the worktree. A `work` class turns the parts around: nvim on the left at half the width, Claude on top of the right half, and the terminal under it at half the height. The dividers, zoom, stop, ×, and Leader `e`, `s`, `o`, `z` work as on the board. Leader `h` and `l` turn around with the layout. A narrow window shows one part at a time, as on the board. Without nvim on PATH, Claude and the terminal share the tab.
-- **Apart from the board.** The tab's agent (a Claude pane with the title `Work environment`) has no tile on the board. An expand of it from elsewhere (a notice, the next pane that waits) opens this tab on its repo. The tab keeps its own layout for each worktree (`sb.parts.work.<tree>`), so it never changes the board's. The board's live pane comes back when you return. nvim and the shell are still one of each for a worktree (28): the tab and a board agent in the same checkout share them, so two editors never fight over the files.
+- **Apart from the board.** The tab's agent (a Claude pane with the title `Work environment`) has no tile on the board. The window finds the agent by that title, so a rename never moves it: the agent keeps its title (a double-click on it says so), and a rename of another pane to `Work environment` is refused, in the window and in the hub. An expand of it from elsewhere (a notice, the next pane that waits) opens this tab on its repo. The tab keeps its own layout for each worktree (`sb.parts.work.<tree>`), so it never changes the board's. The board's live pane comes back when you return. nvim and the shell are still one of each for a worktree (28): the tab and a board agent in the same checkout share them, so two editors never fight over the files.
 - **Other tabs.** Another tab takes the live pane back to the board, the right way round. Back in this tab, the repo's agent opens again with its parts.
 - **An open that you leave.** An open waits for the agent, nvim and the shell in turn. When you leave the tab or pick another repo in that time, it stops: it never pulls you back to the tab, and a repo you picked meanwhile opens after it.
 - **An ended agent.** The tab's agent has no tile, so when it ends, the tab shows it for its repo with **Resume** (with a session) and **Close**, as a tile does. The tab marks it seen, so Leader `j` goes there once and not again.

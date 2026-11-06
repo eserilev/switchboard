@@ -129,9 +129,56 @@ pub fn installed() -> bool {
         .unwrap_or(false)
 }
 
+/// Removes the sockets in `dir` that no process listens on: the hub runs it at
+/// start. It only connects, so it is quick: a socket of an nvim that is gone
+/// refuses at once, and an nvim that is busy or at a prompt still takes the
+/// connect, so it keeps its socket. Returns how many went.
+pub fn sweep(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let mut n = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("sock") {
+            continue;
+        }
+        if let Err(e) = std::os::unix::net::UnixStream::connect(&path) {
+            if e.kind() == std::io::ErrorKind::ConnectionRefused && std::fs::remove_file(&path).is_ok() {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sweep_removes_only_sockets_with_no_listener() {
+        let dir = std::env::temp_dir().join(format!("sb-nvim-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let live = std::os::unix::net::UnixListener::bind(dir.join("a.sock")).unwrap();
+        // A socket that nobody listens on. On macOS a process that another test
+        // starts at the same moment can take a copy of the new socket before it is
+        // marked close-on-exec, and keep it open: then make it again.
+        let b = dir.join("b.sock");
+        for _ in 0..50 {
+            let _ = std::fs::remove_file(&b);
+            drop(std::os::unix::net::UnixListener::bind(&b).unwrap());
+            if std::os::unix::net::UnixStream::connect(&b).is_err() {
+                break;
+            }
+        }
+        std::fs::write(dir.join("notes.txt"), "x").unwrap();
+        assert_eq!(sweep(&dir), 1);
+        assert!(dir.join("a.sock").exists());
+        assert!(!dir.join("b.sock").exists());
+        assert!(dir.join("notes.txt").exists());
+        drop(live);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn socket_is_stable_and_differs_per_tree() {
