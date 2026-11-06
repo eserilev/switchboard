@@ -966,6 +966,7 @@ Where the build differs from the text above:
 - Remote (29): the commands in `dispatch::ORDERED` run in order in local mode too, through the same lane.
 - tmux `%pane:off` stops tmux from reading the pane. Tiles use `pause`.
 - A hidden keeper pane (`@sb_keep`) keeps the tmux session alive when every tile closes.
+- The tick lists tmux first, then reads the panes. A pane that starts or resumes after the list has a newer start mark, so the tick leaves it alone: it is not "gone", and its new process is not marked dead from the old list. A pane that the list shows running loses its dead mark. An idle end (15) stops the pane on a thread of its own, so the tick never waits the 5 s of the stop. A close removes the pane's settings file and its state file.
 - `remain-on-exit` is on for the whole server, so a pane that fails at once still shows its error.
 - After an expand, the app changes the size by one row and back. The program in the pane then draws its whole screen, and output lost in the expand gap does not matter.
 - A key typed in a pane clears the tile's permit buttons: you answered in the pane.
