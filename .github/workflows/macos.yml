@@ -1,4 +1,5 @@
-# Builds and tests Switchboard on macOS. The core tests start real tmux servers.
+# Builds and tests Switchboard. The Rust job runs on macOS (the core tests start real
+# tmux servers); the window checks run beside it on Ubuntu, in headless Chrome.
 name: macos
 on:
   push:
@@ -15,15 +16,27 @@ jobs:
         run: brew install tmux
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal --component clippy && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
+      # Test binaries run at the same time; each test has its own tmux socket. The
+      # window checks run in the job below.
       - name: Tests
-        run: cargo test --workspace
-      - name: Window checks
-        run: web-tests/run.sh
+        run: cargo nextest run --workspace --no-fail-fast -E 'not test(window_checks_pass)'
       - name: Build Switchboard.app
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         run: scripts/macos-app.sh "$RUNNER_TEMP/out"
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         with:
           name: Switchboard-macos-arm64
           path: ${{ runner.temp }}/out/Switchboard.app
+  window:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Window checks
+        run: |
+          command -v google-chrome || command -v chromium
+          web-tests/run.sh

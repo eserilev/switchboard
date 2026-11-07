@@ -30,7 +30,8 @@ After a change to review close or worktree cleanup (`review_close`, `clean_after
 
 ```sh
 export CARGO_TARGET_DIR=~/.cache/switchboard-target
-cargo test --workspace
+cargo nextest run --workspace   # all test binaries at once: about 20 s (brew install cargo-nextest)
+cargo test --workspace          # the same, one binary at a time: about 2 minutes
 cargo clippy --all-targets -- -D warnings
 cargo run -p switchboard
 web-tests/run.sh          # the window checks alone
