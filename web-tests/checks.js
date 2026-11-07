@@ -439,7 +439,7 @@
     $('[data-rview="nvim"]').click();
     await wait(200);
     const first = called("review_nvim").at(-1)?.[1];
-    const shownPaths = $$("#rdiff .file > span").map((x) => x.firstChild.textContent);
+    const shownPaths = $$("#rdiff .file > span").map((x) => x.firstChild.textContent.trim());
     check("nvim takes the column, at a file of the step", inCol("p3") && pressed() === "nvim" && first?.id === "r1" && shownPaths.includes(first.path) && first.line > 0, JSON.stringify({ first, shownPaths, live: window.SB.S.live }));
     check("the review stays open", window.SB.S.tab === "r1" && !$("#view-review").hidden);
     leader("e");
