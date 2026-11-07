@@ -228,8 +228,9 @@ const WORK_TITLE = "Work environment";
 const workOf = (p) => p.kind === "claude" && p.title === WORK_TITLE;
 
 // The tiles on the board. The nvim and shell of an agent are its parts (SPEC 28).
-// A part that is the live pane itself keeps its tile, as every live pane does.
-const tiles = () => S.panes.filter((p) => p.id === S.live || (!window.SBParts?.isPart(p) && !askOf(p) && !workOf(p)));
+// A part that is the live pane itself keeps its tile, as every live pane on the
+// board does. A pane that shows in another tab (a review, the work tab) has none.
+const tiles = () => S.panes.filter((p) => (p.id === S.live && !S.termHost) || (!window.SBParts?.isPart(p) && !askOf(p) && !workOf(p)));
 
 function meta(p) {
   const parts = [p.repo];
