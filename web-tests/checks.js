@@ -829,7 +829,7 @@
   check("review opens a local review of that pane", called("review_open_local")[0]?.[1].pane === "p1" && window.SB.S.tab === "rL", JSON.stringify(called("review_open_local")));
   check("the tab says it is local commits", $('#tabs [data-tab="rL"]')?.textContent.includes("lighthouse commits"));
   check("a local review shows Files only, with no Guide switch and no Send step", !$("#rmode") && !$("#rstep") && local_mode() === "files");
-  check("the header shows the range and what it compares with", $("#rhead").textContent.includes("2 commits on feat") && $("#rhead").textContent.includes("b0b0b0b0b..ac92ae9aa") && $("#rhead").textContent.includes("not on origin/unstable"), $("#rhead").textContent);
+  check("the header shows the range and what it compares with", $("#rhead").textContent.includes("2 commits on feat") && $("#rhead").textContent.includes("b0b0b0b0b..ac92ae9aa") && $("#rhead").textContent.includes("not on upstream/unstable"), $("#rhead").textContent);
   check("the agent pane is in the right column", window.SB.S.live === "p1" && !!$("#rterm #live"));
   docKey("f");
   await wait(50);
@@ -875,6 +875,58 @@
     btn?.click();
     await wait(50);
     check("Restart of a local review runs at once", called("review_restart").some((c) => c[1].id === "rL") && $("#rfinish").hidden);
+  }
+  // The base of a local review (SPEC 11.11): the menu, a ref you type, a refusal,
+  // Automatic, Update base, and escaping.
+  {
+    const rL = window.__data.reviews.find((x) => x.id === "rL");
+    const show = async (o) => { window.__emit("review", Object.assign({}, rL, { new_head: null, status: "ready" }, o)); await wait(20); };
+    const change = (v) => { const s = $("#rhead [data-base]"); s.value = v; s.dispatchEvent(new Event("change", { bubbles: true })); };
+    const last = () => called("review_base").at(-1)?.[1];
+    await show({});
+    const sel = $("#rhead [data-base]");
+    const vals = [...(sel?.options || [])].map((o) => o.value);
+    check("the Base menu comes before New and All: Automatic with the rule's ref, the other refs, Pick a ref…",
+      !!sel && !!(sel.compareDocumentPosition($('#rhead [data-range="new"]')) & Node.DOCUMENT_POSITION_FOLLOWING) && sel.options[0].textContent === "Automatic: upstream/unstable" && sel.value === ""
+      && vals.includes("origin/unstable") && vals.includes("upstream/main") && !vals.includes("upstream/unstable") && sel.options[sel.options.length - 1].textContent === "Pick a ref…", JSON.stringify(vals));
+    check("the note names the parent and the age of the base", $("#rhead .scopenote")?.textContent === "Commits not on upstream/unstable (sigp/lighthouse, the parent of this fork). Fetched 2 h ago.", $("#rhead .scopenote")?.textContent);
+    change("origin/unstable");
+    await wait(20);
+    check("a ref from the menu asks for it", last()?.id === "rL" && last()?.pick === "origin/unstable", JSON.stringify(last()));
+    change(sel.options[sel.options.length - 1].value);
+    await wait(20);
+    let input = $("#rhead [data-baseref]");
+    check("Pick a ref… opens a text field that has the keys", !!input && document.activeElement === input);
+    input.value = "upstream/v8";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const before = called("review_nvim").length;
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "o", bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await wait(20);
+    check("Enter uses the typed ref, and a key typed there is no shortcut", last()?.pick === "upstream/v8" && !$("#rhead [data-baseref]") && called("review_nvim").length === before, JSON.stringify(last()));
+    change(sel.options[sel.options.length - 1].value);
+    await wait(20);
+    input = $("#rhead [data-baseref]");
+    input.value = "-x";
+    $('#rhead [data-act="baseuse"]').click();
+    await wait(30);
+    check("a ref the hub refuses says why", last()?.pick === "-x" && $("#toast")?.textContent.includes("never starts with -"), $("#toast")?.textContent);
+    $("#toast").hidden = true;
+    await show({ base_pick: "origin/unstable", base_ref: "origin/unstable", scope_note: "Commits not on origin/unstable (your choice)." });
+    check("a chosen base shows as chosen, and Automatic goes back", $("#rhead [data-base]").value === "origin/unstable" && $("#rhead [data-base]").options[0].textContent === "Automatic");
+    change("");
+    await wait(20);
+    check("Automatic asks for the usual rule", last()?.pick === "", JSON.stringify(last()));
+    await show({});
+    const upd = $('#rhead [data-act="basefetch"]');
+    check("Update base names the ref and its age", !!upd && upd.title.includes("upstream/unstable") && upd.title.includes("2 h ago"), upd?.title);
+    upd?.click();
+    await wait(20);
+    check("Update base fetches the base of this review", called("review_base_update").at(-1)?.[1].id === "rL");
+    const bad = "x\"><img src=x onerror=\"window.__xss=11\">";
+    await show({ base_ref: bad, base_pick: bad, base_label: bad, bases: [{ ref: bad, why: "<b>why</b>" }], scope_note: `Commits not on ${bad} (your choice).` });
+    check("refs in the header are escaped", !$("#rhead img") && !$("#rhead b") && $("#rhead [data-base]").value === bad && $("#rhead [data-base]").textContent.includes("<b>why</b>") && window.__xss === undefined, $("#rhead").innerHTML.slice(0, 400));
+    await show({});
   }
   {
     const rL = window.__data.reviews.find((x) => x.id === "rL");

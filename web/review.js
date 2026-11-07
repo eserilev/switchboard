@@ -328,9 +328,36 @@
   // A smaller window shrinks the saved sizes so the middle keeps its room.
   window.addEventListener("resize", () => { if ($("#rcols")) setCols(colSizes()); });
 
+  // How long ago a time in seconds since the epoch was: "just now", "5 min ago", "2 h ago".
+  function ago(t) {
+    const s = Math.max(0, Date.now() / 1000 - t);
+    if (s < 90) return "just now";
+    if (s < 90 * 60) return `${Math.round(s / 60)} min ago`;
+    if (s < 36 * 3600) return `${Math.round(s / 3600)} h ago`;
+    const d = Math.round(s / 86400);
+    return `${d} day${d > 1 ? "s" : ""} ago`;
+  }
+
+  // The Base menu of a local review (SPEC 11.11): Automatic (the usual rule), the
+  // refs the hub found, and Pick a ref… for a ref you type. Update base fetches only
+  // the base branch.
+  // No ref and no commit has a `*` in its name.
+  const PICK = "*pick";
+  function baseControl(r, busy) {
+    const l = local(r.id);
+    const auto = `<option value=""${r.base_pick ? "" : " selected"}>${r.base_pick ? "Automatic" : `Automatic: ${esc(r.base_ref || "no branch")}`}</option>`;
+    const list = (r.bases || []).filter((b) => b.ref && (r.base_pick || b.ref !== r.base_ref));
+    if (r.base_pick && !list.some((b) => b.ref === r.base_pick)) list.unshift({ ref: r.base_pick, why: "your choice" });
+    const opts = list.map((b) => `<option value="${esc(b.ref)}"${r.base_pick === b.ref ? " selected" : ""}>${esc(b.ref)}${b.why ? ` · ${esc(b.why)}` : ""}</option>`).join("");
+    const tip = r.base_label ? `Compare with ${r.base_label}` : "What the commits are compared with";
+    const typed = l.basePicking ? `<span class="basetype"><input type="text" data-baseref value="${esc(l.baseText || "")}" placeholder="upstream/unstable" spellcheck="false" autocomplete="off" aria-label="A branch or a commit"><button type="button" class="btn small" data-act="baseuse">Use</button></span>` : "";
+    const update = r.base_ref && !busy ? `<button class="btn small" data-act="basefetch" title="Fetch only ${esc(r.base_ref)} from its remote, then compare again${r.base_fetched ? `. Fetched ${esc(ago(r.base_fetched))}.` : ""}">Update base</button>` : "";
+    return `<label class="basesel" title="${esc(tip)}">Base <select data-base${busy ? " disabled" : ""}>${auto}${opts}<option value="${PICK}">Pick a ref…</option></select></label>${typed}${update}`;
+  }
+
   // The header of a review of an agent's work: the commits and the uncommitted work
-  // (SPEC 11.11, 11.14). New or All, Mark reviewed, and a Refresh when the agent
-  // changed more.
+  // (SPEC 11.11, 11.14). The base, New or All, Mark reviewed, and a Refresh when the
+  // agent changed more.
   function drawLocalHead(r) {
     const status = { fetching: "Reading the work", error: "Error", ready: "" }[r.status] ?? r.status;
     const range = r.head ? `${esc(short(r.base))}..${esc(short(r.head))}` : "";
@@ -340,14 +367,46 @@
       .map(([v, label, tip]) => `<button type="button" class="segb" data-range="${v}" aria-pressed="${r.range === v}" title="${esc(tip)}"${busy ? " disabled" : ""}>${label}</button>`).join("")}</span>`;
     const mark = `<button class="btn small" data-act="mark" title="What shows now is reviewed: New shows only later changes. Press o for nvim next to the old side."${busy || !r.head ? " disabled" : ""}>Mark reviewed</button>`;
     const retry = r.status === "error" ? `<button class="btn small" data-act="retry">Retry</button>` : "";
+    // The age of the base shows with the note that names it, not with "since you marked reviewed".
+    const fetched = r.base_fetched && (r.range === "all" || !r.reviewed) ? ` Fetched ${ago(r.base_fetched)}.` : "";
+    const note = r.scope_note ? r.scope_note + fetched : "";
+    // A redraw while you type a ref keeps the field and its keys.
+    const typing = document.activeElement?.matches?.("#rhead [data-baseref]");
     $("#rhead").innerHTML = `<div><div class="t">${esc(r.title || "Local commits")}</div><div class="m">${esc(r.repo)} · ${range}${r.tree ? " · " + esc(r.tree) : ""}</div></div>
       ${status ? `<span class="status${r.status === "error" ? " error" : ""}">${esc(status)}</span>` : ""}${newHead}
-      <div class="right">${seg}${mark}${r.new_head ? "" : `<button class="btn small" data-act="update" title="Read the work again">Refresh</button>`}${r.status === "fetching" ? "" : `<button class="btn small" data-act="restart" title="Fetch the remotes, then compare the commits with the remote branch as it is now">Restart</button>`}${retry}<button class="btn small" data-act="close">Close review</button></div>
+      <div class="right">${baseControl(r, busy)}${seg}${mark}${r.new_head ? "" : `<button class="btn small" data-act="update" title="Read the work again">Refresh</button>`}${r.status === "fetching" ? "" : `<button class="btn small" data-act="restart" title="Fetch the remotes, then compare the commits with the remote branch as it is now">Restart</button>`}${retry}<button class="btn small" data-act="close">Close review</button></div>
       ${r.error ? `<div class="rerror" style="flex-basis:100%;padding:0">${esc(r.error)}</div>` : ""}
-      ${r.scope_note ? `<div class="scopenote">${esc(r.scope_note)}</div>` : ""}`;
+      ${note ? `<div class="scopenote">${esc(note)}</div>` : ""}`;
+    if (typing) $("#rhead [data-baseref]")?.focus();
+    const l = local(r.id);
+    const setBase = (pick) => {
+      const typed = l.basePicking;
+      l.basePicking = false; l.baseText = "";
+      const same = pick === (r.base_pick || "");
+      if (!same) {
+        l.diff.clear(); l.files = null;
+        call("review_base", { id: r.id, pick }).catch(() => drawLocalHead(S.reviews.get(r.id) || r));
+      }
+      if (typed || same) drawLocalHead(r);
+    };
+    $("#rhead").onchange = (e) => {
+      const sel = e.target.closest("[data-base]");
+      if (!sel) return;
+      if (sel.value === PICK) { l.basePicking = true; drawLocalHead(r); $("#rhead [data-baseref]")?.focus(); return; }
+      setBase(sel.value);
+    };
+    $("#rhead").oninput = (e) => { if (e.target.matches("[data-baseref]")) l.baseText = e.target.value; };
+    $("#rhead").onkeydown = (e) => {
+      if (!e.target.matches("[data-baseref]")) return;
+      if (e.key === "Enter") { e.preventDefault(); if (e.target.value.trim()) setBase(e.target.value.trim()); }
+      if (e.key === "Escape") { e.preventDefault(); l.basePicking = false; drawLocalHead(r); }
+      e.stopPropagation();
+    };
     $("#rhead").onclick = (e) => {
       const act = e.target.closest("[data-act]")?.dataset.act;
       const to = e.target.closest("[data-range]")?.dataset.range;
+      if (act === "baseuse") { const v = $("#rhead [data-baseref]")?.value.trim(); if (v) setBase(v); }
+      if (act === "basefetch") { l.diff.clear(); l.files = null; call("review_base_update", { id: r.id }).catch(() => {}); }
       if (to && to !== r.range) { local(r.id).diff.clear(); local(r.id).files = null; call("review_range", { id: r.id, range: to }); }
       if (act === "mark") { local(r.id).diff.clear(); local(r.id).files = null; call("review_mark_reviewed", { id: r.id }); }
       if (act === "update" || act === "retry") { local(r.id).diff.clear(); local(r.id).files = null; call(act === "update" ? "review_update" : "review_retry", { id: r.id }); }

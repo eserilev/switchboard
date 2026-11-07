@@ -216,13 +216,7 @@ pub fn remote_for(remote_v: &str, repo: &str) -> Option<String> {
     remote_v.lines().find_map(|l| {
         let mut it = l.split_whitespace();
         let (name, url) = (it.next()?, it.next()?);
-        let path = url.to_lowercase();
-        let path = path.trim_end_matches(".git").trim_end_matches('/');
-        let tail = path.rsplit(['/', ':']).take(2).collect::<Vec<_>>();
-        (tail.len() == 2
-            && format!("{}/{}", tail[1], tail[0]) == want
-            && path.contains("github.com"))
-        .then(|| name.to_owned())
+        (crate::base::github_repo(url)?.to_lowercase() == want).then(|| name.to_owned())
     })
 }
 
@@ -664,32 +658,51 @@ pub struct LocalRange {
     pub base: String,
     /// The commits in the range.
     pub count: u32,
-    /// What the base is, for the header: "unpushed to origin/x", or why it is not.
+    /// What the base is, for the header: "Commits not on origin/x (...).", or why it is not.
     pub note: String,
     /// False when nothing is unpushed and the range is the last commit.
     pub unpushed: bool,
+    /// The ref the base came from, for example `upstream/unstable`. None when the base
+    /// is where the history leaves the remotes.
+    pub base_ref: Option<String>,
+    /// The ref and why it is the base: "upstream/unstable (sigp/lighthouse, the parent of this fork)".
+    pub label: Option<String>,
 }
 
+/// More commits than this between the base and HEAD, and the header says the base
+/// may be wrong.
+pub const FAR_BASE: u32 = 500;
+
+type Found = (String, String, Option<(String, String)>);
+
 /// The unpushed commits of the checkout at `tree`. The base is, in order:
-/// 1. the merge base with the push or upstream branch, when HEAD has one;
+/// 0. the merge base with the ref you chose (`rule.pick`), while it exists;
+/// 1. the merge base with the parent of a fork, then with the push or upstream
+///    branch, when HEAD has one (`base::auto_candidates`);
 /// 2. else, with a remote, the one commit where the history leaves every remote
 ///    (a detached agent worktree), or the merge base with the remote's default
 ///    branch when there are more;
 /// 3. else the merge base with a local `main` or `master` that HEAD is not on.
 ///
 /// With no unpushed commit, the range is the last commit, and the note says so.
-pub fn local_range(tree: &Path) -> Result<LocalRange, String> {
+pub fn local_range(tree: &Path, rule: &crate::base::BaseRule) -> Result<LocalRange, String> {
     let head = git(tree, &["rev-parse", "--verify", "HEAD^{commit}"]).map_err(|_| "this checkout has no commit yet".to_owned())?;
     let ok = |args: &[&str]| git(tree, args).ok().filter(|s| !s.is_empty());
-    let merge_base = |other: &str| ok(&["merge-base", &head, other]);
-    let mut found: Option<(String, String)> = None;
-    for up in ["@{push}", "@{upstream}"] {
-        if let Some(name) = ok(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", up]) {
-            if let Some(b) = merge_base(&name) {
-                found = Some((b, format!("Commits not on {name}.")));
-                break;
-            }
+    // The base commit, the note, and the ref with why.
+    let from_ref = |name: &str, why: &str| -> Option<Found> {
+        let b = ok(&["merge-base", &head, name])?;
+        Some((b, format!("Commits not on {name} ({why})."), Some((name.to_owned(), why.to_owned()))))
+    };
+    let mut found: Option<Found> = None;
+    let mut lost = String::new();
+    if let Some(p) = rule.pick.as_deref() {
+        found = crate::base::exists(tree, p).then(|| from_ref(p, "your choice")).flatten();
+        if found.is_none() {
+            lost = format!("The base you chose, {p}, is not in this repo any more, so this uses the usual rule. ");
         }
+    }
+    if found.is_none() {
+        found = crate::base::auto_candidates(tree, &rule.fork).iter().find_map(|c| from_ref(&c.name, &c.why));
     }
     let has_remote = ok(&["remote"]).is_some();
     if found.is_none() && has_remote {
@@ -697,9 +710,9 @@ pub fn local_range(tree: &Path) -> Result<LocalRange, String> {
         let ours = walk.lines().filter(|l| !l.starts_with('-')).count();
         let edges: Vec<&str> = walk.lines().filter_map(|l| l.strip_prefix('-')).collect();
         if ours == 0 {
-            found = Some((head.clone(), "Every commit is on a remote.".into()));
+            found = Some((head.clone(), "Every commit is on a remote.".into(), None));
         } else if edges.len() == 1 {
-            found = Some((edges[0].to_owned(), "Commits that no remote has.".into()));
+            found = Some((edges[0].to_owned(), "Commits that no remote has.".into(), None));
         } else {
             // The default branch of a remote: `origin` first, then the others.
             let mut remotes: Vec<String> = ok(&["remote"]).unwrap_or_default().lines().map(str::to_owned).collect();
@@ -713,9 +726,7 @@ pub fn local_range(tree: &Path) -> Result<LocalRange, String> {
                 })
             });
             if let Some(d) = default {
-                if let Some(b) = merge_base(&d) {
-                    found = Some((b, format!("Commits not on {d}.")));
-                }
+                found = from_ref(&d, "the default branch of a remote");
             }
         }
     }
@@ -723,14 +734,15 @@ pub fn local_range(tree: &Path) -> Result<LocalRange, String> {
         let branch = ok(&["symbolic-ref", "--short", "-q", "HEAD"]);
         for main in ["main", "master"] {
             if branch.as_deref() != Some(main) && ok(&["rev-parse", "--verify", "-q", &format!("refs/heads/{main}")]).is_some() {
-                if let Some(b) = merge_base(main) {
-                    found = Some((b, format!("Commits not on {main}.")));
+                if let Some(f) = from_ref(main, "a local branch") {
+                    found = Some(f);
                     break;
                 }
             }
         }
     }
-    let (mut base, mut note) = found.unwrap_or_else(|| (head.clone(), "No branch to compare with.".into()));
+    let (mut base, mut note, named) = found.unwrap_or_else(|| (head.clone(), "No branch to compare with.".into(), None));
+    note = lost + &note;
     let unpushed = base != head;
     if !unpushed {
         // Nothing unpushed: show the last commit, so the tab is still useful. Only a
@@ -750,7 +762,14 @@ pub fn local_range(tree: &Path) -> Result<LocalRange, String> {
     } else {
         git(tree, &["rev-list", "--count", &format!("{base}..{head}")])?.parse().unwrap_or(0)
     };
-    Ok(LocalRange { head, base, count, note, unpushed })
+    if unpushed && count > FAR_BASE {
+        note += &format!(" The merge base is {count} commits back: this ref may be the wrong base.");
+    }
+    let (base_ref, label) = match named {
+        Some((name, why)) => (Some(name.clone()), Some(format!("{name} ({why})"))),
+        None => (None, None),
+    };
+    Ok(LocalRange { head, base, count, note, unpushed, base_ref, label })
 }
 
 /// The work tree of a folder as a commit nobody sees (SPEC 11.14): the agent's

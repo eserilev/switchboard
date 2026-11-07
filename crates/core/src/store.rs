@@ -90,6 +90,9 @@ const SCHEMA: &[&str] = &[
      CREATE INDEX task_event_task ON task_event (task, id);",
     // Version 11: a local review keeps New or All over a restart (SPEC 11.14).
     "ALTER TABLE review ADD COLUMN local_range TEXT;",
+    // Version 12: the base you chose for a local review (SPEC 11.11). The choice for
+    // a whole repo is a setting, `review.base:<repo root>`.
+    "ALTER TABLE review ADD COLUMN base_pick TEXT;",
 ];
 
 pub struct Store {
@@ -684,6 +687,37 @@ impl Store {
         Ok(())
     }
 
+    /// The base you chose for a local review, or None for the usual rule.
+    pub fn review_base(&self, review: &str) -> R<Option<String>> {
+        let s: Option<Option<String>> = self
+            .db
+            .query_row("SELECT base_pick FROM review WHERE id = ?1", [review], |r| r.get(0))
+            .optional()?;
+        Ok(s.flatten())
+    }
+
+    pub fn set_review_base(&self, review: &str, pick: Option<&str>) -> R<()> {
+        self.db.execute(
+            "UPDATE review SET base_pick = ?2 WHERE id = ?1",
+            params![review, pick],
+        )?;
+        Ok(())
+    }
+
+    /// The base you chose last for any local review of the repo at `root`
+    /// (`base::repo_root`), so every worktree of the repo shares it.
+    pub fn repo_base(&self, root: &str) -> R<Option<String>> {
+        self.get(&format!("review.base:{root}"))
+    }
+
+    pub fn set_repo_base(&self, root: &str, pick: Option<&str>) -> R<()> {
+        let key = format!("review.base:{root}");
+        match pick {
+            Some(p) => self.set(&key, p),
+            None => self.db.execute("DELETE FROM setting WHERE key = ?1", [key]).map(|_| ()),
+        }
+    }
+
     /// Records a review that GitHub accepted, and removes the drafts that it sent.
     /// One transaction, so a draft is never both sent and still pending.
     pub fn record_posted(&self, review: &str, p: &PostedRow, drafts: &[i64]) -> R<()> {
@@ -926,6 +960,28 @@ mod tests {
         let d = &s.drafts("r1").unwrap()[0];
         assert!(d.agent);
         assert_eq!((d.line, d.start_line), (Some(3), None));
+    }
+
+    #[test]
+    fn version_11_reviews_get_no_base_and_keep_their_range() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(&format!("{}; PRAGMA user_version = 11;", SCHEMA[..11].join(";"))).unwrap();
+        db.execute("INSERT INTO review (id, url, repo, number, title, head, base, tree, opened, kind, local_range) VALUES ('r1', '', 'lighthouse', 0, 't', 'h', 'b', '/w', 1, 'local', 'all')", []).unwrap();
+        let s = Store::init(db).unwrap();
+        assert_eq!(s.version().unwrap(), 12);
+        assert_eq!(s.review_base("r1").unwrap(), None);
+        assert_eq!(s.review_range("r1").unwrap().as_deref(), Some("all"));
+        s.set_review_base("r1", Some("upstream/unstable")).unwrap();
+        assert_eq!(s.review_base("r1").unwrap().as_deref(), Some("upstream/unstable"));
+        s.set_review_base("r1", None).unwrap();
+        assert_eq!(s.review_base("r1").unwrap(), None);
+        // The choice for a repo, and its removal.
+        assert_eq!(s.repo_base("/c/lighthouse").unwrap(), None);
+        s.set_repo_base("/c/lighthouse", Some("upstream/unstable")).unwrap();
+        assert_eq!(s.repo_base("/c/lighthouse").unwrap().as_deref(), Some("upstream/unstable"));
+        assert_eq!(s.repo_base("/c/other").unwrap(), None);
+        s.set_repo_base("/c/lighthouse", None).unwrap();
+        assert_eq!(s.repo_base("/c/lighthouse").unwrap(), None);
     }
 
     #[test]

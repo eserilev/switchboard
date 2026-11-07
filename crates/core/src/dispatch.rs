@@ -139,6 +139,8 @@ commands! {
     review_nvim(id: String, path: String, line: u32) -> String => |h| h.review_nvim(&id, &path, line);
     review_range(id: String, range: String) -> () => |h| h.review_range(&id, &range);
     review_mark_reviewed(id: String) -> () => |h| h.review_mark_reviewed(&id);
+    review_base(id: String, pick: String) -> () => |h| h.review_base(&id, &pick);
+    review_base_update(id: String) -> () => |h| h.review_base_update(&id);
     tasks() -> Value => |h| h.tasks().map(|v| json!(v));
     task_add(task: NewTask) -> Value => |h| h.task_add(task).map(|v| json!(v));
     task_edit(id: String, fields: TaskFields) -> Value => |h| h.task_edit(&id, fields).map(|v| json!(v));
