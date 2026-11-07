@@ -1,0 +1,4 @@
+# The verified crates and the Lean folder of their code.
+guide-check GuideCheck
+outq OutQ
+git-argcheck GitArgCheck

@@ -1,0 +1,69 @@
+# Regenerates the Lean of the verified crates (proofs/CRATES) with Charon and
+# Aeneas, and checks the proofs (SPEC 24). Charon and Aeneas build once for each
+# proofs/TOOLS and stay in the cache. Mathlib comes from its own cache.
+name: proofs
+on:
+  push:
+    paths:
+      - "crates/guide-check/**"
+      - "crates/outq/**"
+      - "crates/git-argcheck/**"
+      - "proofs/**"
+      - "scripts/extract.sh"
+      - "scripts/check-proofs.sh"
+      - "scripts/check-proof-source.sh"
+      - "scripts/install-proof-tools.sh"
+      - ".github/workflows/proofs.yml"
+  pull_request:
+    paths:
+      - "crates/guide-check/**"
+      - "crates/outq/**"
+      - "crates/git-argcheck/**"
+      - "proofs/**"
+      - "scripts/extract.sh"
+      - "scripts/check-proofs.sh"
+      - "scripts/check-proof-source.sh"
+      - "scripts/install-proof-tools.sh"
+      - ".github/workflows/proofs.yml"
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+jobs:
+  proofs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y opam libgmp-dev libzstd-dev pkg-config
+      - name: Cache Charon and Aeneas
+        id: verif
+        uses: actions/cache@v4
+        with:
+          path: ~/verif
+          key: verif-${{ runner.os }}-${{ hashFiles('proofs/TOOLS') }}
+      - name: Build Charon and Aeneas
+        if: steps.verif.outputs.cache-hit != 'true'
+        # The scripts use only the binaries in bin/, so the build folders stay out of the cache.
+        run: |
+          scripts/install-proof-tools.sh
+          rm -rf ~/verif/charon/charon/target ~/verif/charon/charon-ml/_build ~/verif/aeneas/src/_build ~/verif/aeneas/tests
+      - name: Charon's nightly Rust
+        # charon-driver links the rustc of its pinned nightly, so it must be there.
+        run: |
+          tc=$(sed -n 's/^channel = "\(.*\)"/\1/p' ~/verif/charon/rust-toolchain)
+          rustup toolchain install "$tc" --profile minimal --component rustc-dev,llvm-tools,rust-src,miri
+      - name: Install Lean
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Cache Lake packages
+        uses: actions/cache@v4
+        with:
+          path: proofs/.lake
+          key: lake-${{ runner.os }}-${{ hashFiles('proofs/lake-manifest.json', 'proofs/lean-toolchain') }}
+      - name: Mathlib build cache
+        working-directory: proofs
+        run: lake exe cache get
+      - name: Check the proofs
+        run: scripts/check-proofs.sh

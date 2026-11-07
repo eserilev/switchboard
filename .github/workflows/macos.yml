@@ -9,6 +9,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: The Lean of the verified crates is up to date
+        run: scripts/check-proof-source.sh
       - name: Install tmux
         run: brew install tmux
       - name: Install Rust

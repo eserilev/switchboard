@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Check that the proofs match the Rust code of crates/guide-check and crates/outq and hold.
+# Check that the proofs match the Rust code of the verified crates (proofs/CRATES) and hold.
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
 
 # The generated Lean must match the current Rust.
 "$root/scripts/extract.sh" > /dev/null
-for code in proofs/GuideCheck/Code proofs/OutQ/Code; do
+leans=$(grep -v '^#' "$root/proofs/CRATES" | awk '{print $2}')
+for lean in $leans; do
+    code=proofs/$lean/Code
     if ! git -C "$root" diff --quiet -- "$code" || [ -n "$(git -C "$root" ls-files --others --exclude-standard -- "$code")" ]; then
         echo "error: $code is out of date. Run scripts/extract.sh and commit." >&2
         exit 1
@@ -14,7 +16,10 @@ for code in proofs/GuideCheck/Code proofs/OutQ/Code; do
 done
 
 cd "$root/proofs"
-if grep -rnw 'sorry\|admit\|native_decide\|bv_decide' GuideCheck/*.lean OutQ/*.lean Statements.lean; then
+files=Statements.lean
+for lean in $leans; do files="$files $(ls "$lean"/*.lean)"; done
+# shellcheck disable=SC2086
+if grep -rnw 'sorry\|admit\|native_decide\|bv_decide' $files; then
     echo "error: a proof uses sorry, admit, or native code" >&2
     exit 1
 fi
