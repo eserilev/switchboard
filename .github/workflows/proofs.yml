@@ -52,7 +52,7 @@ jobs:
         # charon-driver links the rustc of its pinned nightly, so it must be there.
         run: |
           tc=$(sed -n 's/^channel = "\(.*\)"/\1/p' ~/verif/charon/rust-toolchain)
-          rustup toolchain install "$tc" --profile minimal --component rustc-dev,llvm-tools,rust-src,miri
+          rustup toolchain install "$tc" --profile minimal --component rustc-dev,llvm-tools,rust-src,miri,rustfmt
       - name: Install Lean
         run: |
           curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none

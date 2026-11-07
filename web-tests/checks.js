@@ -2055,7 +2055,7 @@
     await wait(100);
     leaderKey("j");
     await wait(300);
-    check("Leader j takes an urgent pane before an ended one", S.tab === "board" && called("pane_expand").at(-1)?.[1].id === "p1", JSON.stringify({ tab: S.tab, last: called("pane_expand").at(-1) }));
+    check("Leader j takes an urgent pane before an ended one", S.tab === "board" && called("pane_expand").at(-1)?.[1].id === "p1", JSON.stringify({ tab: S.tab, last: called("pane_expand").at(-1), live: S.live, host: S.termHost, unseen: S.panes.filter((p) => p.unseen).map((p) => p.id + ":" + p.lamp + ":" + (p.title || "")), focus: document.activeElement?.id || document.activeElement?.className, toast: $("#toast").hidden ? "" : $("#toast").textContent, link: $("#link").hidden, keys: called("pane_input").slice(-2) }));
     d1.unseen = false;
     window.__emit("panes", structuredClone(window.__data.panes));
     await wait(100);
