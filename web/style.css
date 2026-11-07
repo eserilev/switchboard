@@ -271,6 +271,8 @@ body.size-y, body.size-y * { cursor: row-resize !important; }
 .ctx { display: flex; flex-wrap: wrap; gap: 6px; }
 .gactions { display: flex; gap: 8px; flex-wrap: wrap; }
 .file { display: flex; justify-content: space-between; align-items: center; gap: 8px; font: 600 12px/1 var(--mono); padding: 6px 8px 6px 14px; background: var(--panel-2); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 1; }
+.file > span:first-child { flex: 1; min-width: 0; }
+.file .other { font-weight: 400; cursor: help; }
 .file .ctxnote { color: var(--muted); font-weight: 500; }
 .codewrap { overflow-x: auto; padding-bottom: 14px; }
 table.code { border-collapse: collapse; width: 100%; font: 12.5px/1.6 var(--mono); }
@@ -411,8 +413,6 @@ tr.anchored td.ln::after { content: "●"; color: var(--accent); margin-left: 4p
 .guide h4.fpath { font: 600 15px/1.35 var(--mono); overflow-wrap: anywhere; }
 .ctx .clabel { font: 600 11px/24px var(--mono); color: var(--muted); }
 .chip.link { color: var(--accent); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.other { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 7px 14px; font: 12px/1.4 var(--body); color: var(--muted); background: var(--panel); border-bottom: 1px solid var(--line); }
-.other span { margin-right: 4px; }
 .rhead .roundtag { font: 600 11px/1 var(--mono); padding: 5px 8px; border-radius: 4px; background: color-mix(in srgb, var(--limit) 22%, var(--panel-2)); color: var(--limit); }
 .rhead .scopenote { flex-basis: 100%; font: 12px/1.4 var(--body); color: var(--needs); }
 .gapbar { display: flex; align-items: center; gap: 8px; padding: 2px 0; }

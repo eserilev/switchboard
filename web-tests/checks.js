@@ -559,8 +559,8 @@
   await wait(150);
   check("show all ends the gap", !!$('#rdiff td.ln[data-side="new"][data-ln="61"]') && !$("#rdiff .gapbar"));
 
-  // A step shows only its part of a file; a bar names the other changes.
-  check("the bar names the other changes and their steps", $("#rdiff .other")?.textContent.includes("4 more changed lines are in") && !!$('#rdiff .other [data-ostep="0"]'), $("#rdiff .other")?.textContent);
+  // A step shows only its part of a file; a short note says how much is elsewhere.
+  check("a short note says how much of the file is in other steps", $("#rdiff .other")?.textContent === "+4 lines in 1 other step" && $("#rdiff .other")?.title === "Steps 1", $("#rdiff .other")?.textContent);
   $("#rdiff [data-whole]").click();
   await wait(150);
   check("Show the whole file opens it in Files", $('#rmode [data-mode="files"]').getAttribute("aria-pressed") === "true" && $('#rsteps [aria-current="step"]')?.dataset.f === "beacon_node/gloas.rs" && !$("#rdiff .other"));

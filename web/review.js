@@ -592,13 +592,14 @@
       }).join("");
       const moved = sec.old_path && sec.old_path !== sec.path ? ` <span class="ctxnote">from ${esc(sec.old_path)}</span>` : "";
       const note = sec.note ? ` <span class="ctxnote">${esc(sec.note)}</span>` : "";
-      // A step shows only its part of the file. This bar names the other changes.
+      // A step shows only its part of the file: one short note says how much is elsewhere.
       const o = sec.other;
-      const links = o ? o.steps.map((sid) => steps(r).findIndex((x) => x.id === sid)).filter((i) => i >= 0)
-        .map((i) => `<button class="chip link" data-ostep="${i}">Step ${i + 1}</button>`).join("") : "";
-      const bar = o ? `<div class="other"><span>This step shows only its part of the file. ${o.lines} more changed line${o.lines === 1 ? " is" : "s are"} ${links ? "in" : "outside this step."}</span>${links}<button class="btn small" data-whole="${esc(sec.path)}">Show the whole file</button></div>` : "";
-      return `<div class="file"><span>${esc(sec.path)}${moved}${note}${sec.context ? ' <span class="ctxnote">Not changed in this PR</span>' : ""}</span><button class="tool" data-nvim="${si}">nvim</button></div>
-        ${bar}<div class="codewrap"><table class="code">${rows}</table></div>`;
+      const nums = o ? o.steps.map((sid) => steps(r).findIndex((x) => x.id === sid)).filter((i) => i >= 0).map((i) => i + 1) : [];
+      const where = nums.length ? ` in ${nums.length} other step${nums.length === 1 ? "" : "s"}` : " outside this step";
+      const more = o ? ` <span class="ctxnote other" title="${nums.length ? `Steps ${nums.join(", ")}` : ""}">+${o.lines} line${o.lines === 1 ? "" : "s"}${where}</span>` : "";
+      const whole = o ? `<button class="tool" data-whole="${esc(sec.path)}" title="Show the whole file">whole file</button>` : "";
+      return `<div class="file"><span>${esc(sec.path)}${moved}${note}${more}${sec.context ? ' <span class="ctxnote">Not changed in this PR</span>' : ""}</span>${whole}<button class="tool" data-nvim="${si}">nvim</button></div>
+        <div class="codewrap"><table class="code">${rows}</table></div>`;
     }).join("");
     $("#rdiff").innerHTML = html;
     l.placed = placed;
