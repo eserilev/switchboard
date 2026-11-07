@@ -17,3 +17,4 @@ guide-check = { path = "../guide-check" }
 libc = "0.2"
 base64 = "0.22"
 outq = { path = "../outq" }
+git-argcheck = { path = "../git-argcheck" }

@@ -927,7 +927,10 @@ Where the build differs from the text above:
   - `scripts/macos-app.sh` builds `Switchboard.app` with cargo, `sips`, `iconutil` and an ad-hoc `codesign`. No npm and no Tauri CLI. To share the app, sign it with a Developer ID and notarize it.
   - `scripts/install.sh` installs on Linux and macOS (`INSTALL.md`). It checks the tools, installs the missing ones with `--deps`, takes the latest release when one exists for the system or else builds from source, installs the binaries (Linux) or `~/Applications/Switchboard.app` (macOS), and writes a starter config with the code folders it finds: the `--scan` folders, else the usual ones that exist, else the folders that hold git repos in the home folder, 4 levels deep. With a config already there, `--scan` adds to its `scan`. On macOS the starter config sets `leader = "ctrl+;"`.
   - `.github/workflows/release.yml`: a `v*` tag builds `switchboard-linux-x86_64.tar.gz` (Ubuntu 22.04) and `Switchboard-macos-arm64.zip`, and puts them on a GitHub release.
-  - `.github/workflows/macos.yml` runs clippy, the tests with tmux from Homebrew, the window checks in Chrome, and the app build on a macOS runner. It runs when the repo is on GitHub.
+  - `.github/workflows/macos.yml` checks that the Lean of the verified crates came from the Rust in the tree (`scripts/check-proof-source.sh`, a hash that `scripts/extract.sh` writes), runs clippy, the tests with tmux from Homebrew, the window checks in Chrome, and the app build on a macOS runner. It runs when the repo is on GitHub.
+  - `.github/workflows/proofs.yml` runs `scripts/check-proofs.sh` on Ubuntu when a verified crate, `proofs/` or the proof scripts change, and every week. Charon and Aeneas build once for each `proofs/TOOLS` (`scripts/install-proof-tools.sh`) and stay in the cache; Mathlib comes from `lake exe cache get`.
+  - `.github/workflows/models.yml` runs `scripts/check-models.sh` on Ubuntu with Quint from npm: 20,000 random runs for each profile on a push or a pull request, the full 100,000 every night. With 2,000 runs, the witness `NoResync` of the remote model did not fail, so the count must stay high enough to reach it.
+  - The verified crates are listed in `proofs/CRATES`; the proof scripts read the list.
   - From Linux, `cargo clippy --target aarch64-apple-darwin` checks the macOS code. A C compiler that does nothing lets the SQLite build step pass, because a check does not link.
 
 - `time` in a state message is seconds since the Unix epoch.
@@ -939,6 +942,7 @@ Where the build differs from the text above:
 - Review runs get each spec clone with `--add-dir`.
 - Review runs and the Ask pane use `--setting-sources user` (11.2, 11.5). Before, a PR could ship `.claude/settings.json` with hooks that ran during its review. The PR's `CLAUDE.md` still loads: it is text, like the PR body, and the rules say it never changes them.
 - The guide agent runs git through the `git` tool of `sb mcp`, not Bash (11.4). Before, `Bash(git diff:*)` let `git diff --output=<file>` write a file.
+- The arg check of the `git` tool is the verified crate `git-argcheck` (24.1). It works on bytes, and returns a reason code and the arg index; `review_git` makes the message. The messages and the answers are the same as before.
 - The Ask pane is interactive, so it asks you before each Bash command, as any pane does. It has no `git` tool.
 - Review Markdown (the guide, takes, threads) and task notes use one rule: raw HTML and images show as text, and only `http(s)` links are links. A remote image in the agent's Markdown would load at once, and its URL could carry the code out.
 - The window has a CSP (`crates/app/tauri.conf.json`): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'`. Scripts, styles and fonts all come from `web/`. Styles need `'unsafe-inline'`: the markup has `style` attributes, and xterm.js adds `<style>` elements. `ipc:` and `http://ipc.localhost` are the Tauri IPC; without them Tauri falls back to its slower postMessage path. `dangerousDisableAssetCspModification: ["style-src"]` stops Tauri from adding a nonce to `style-src`: with a nonce there, the browser drops `'unsafe-inline'`. No remote site loads in the window.
@@ -979,7 +983,7 @@ Where the build differs from the text above:
 
 Tests:
 
-- 61 core unit tests, 11 tmux tests on real servers, 6 MCP tests. `review_git::tests` checks that the `git` tool refuses the options that write or run a program, and that normal ranges and paths pass.
+- 61 core unit tests, 11 tmux tests on real servers, 6 MCP tests. `review_git::tests` checks that the `git` tool refuses the options that write or run a program, and that normal ranges and paths pass. The check itself is proved (24.1).
 - An end-to-end test: hub, tmux, the `sb` binary, hooks, permits, worktrees, nvim, layouts, a crash, and a board with every tile closed.
 - A review of the code by a second agent found 15 bugs and no deadlocks. All 15 are fixed.
 - 50 window checks in headless Chromium (`web-tests/run.sh`), with a stand-in for the Tauri API.
@@ -1055,6 +1059,36 @@ G5 to G7 and G10 need `removed + added ≤ usize::MAX` lines. G8, G9 and S1 to S
 - The last 300 Lighthouse commits (`crates/core/tests/real_diffs.rs`): 2,449 files, 119,439 changed lines, 10 renames, 2 binary files. For each commit, the file list matches the git trees, every file rebuilds, the completed guide passes the checker, the drawn rows rebuild both versions of every file, and in the cut with context 12 every line number names the line that its row shows. Next to the old row code, the kernel rows were the same in 2,257 of 2,446 files. The other 189 differed only in header numbers where a side had no line (it was 0).
 - On the same 300 commits, each range of the completed guide is drawn as its own step. Every step row is a row of the full diff, every header names the numbers of its next row, and the steps together show every changed line.
 - A live review of a real PR: the agent's guide passed the checker with no added step.
+
+### 24.1 Verified git arg check
+
+The guide agent runs git only through the `git` tool of `sb mcp` (11.4). Whether a call may run is decided by the crate `git-argcheck`, and `proofs/GitArgCheck` proves it in Lean with Aeneas. The crate works on bytes. It gets the subcommand and the args, and returns either the full argv after the subcommand, or a refusal: why (a code) and the index of the arg. `review_git` maps the code to the message and runs git as before. The crate also has `rel_ok`, the check that a path stays inside a folder.
+
+The definitions are in `proofs/GitArgCheck/Spec.lean`. They are written from the option lists, not from the Rust tables; `GitArgCheck/Tables.lean` shows that the Rust tables hold the same names. The statements, in `Statements.lean`, for any call with `args + 2 ≤ usize::MAX` (always true: an arg takes 24 bytes):
+
+- **A1.** `check` never panics, and it accepts only a subcommand from the list: `diff`, `log`, `show`, `blame`, `merge-base`, `rev-parse`.
+- **A2.** An accepted call is the prefix options, then the args, unchanged and in order. The prefix is `--no-ext-diff --no-textconv` for `diff`, `log` and `show`, `--no-textconv` for `blame`, and nothing for the others.
+- **A3.** In an accepted call, every arg is not empty, has no NUL or newline byte, and is allowed for the subcommand (`Allowed`): `--`, an option from the lists of the subcommand, `--name=value` for a name from its value lists, `-<count>` for `log`, a glued short option (`-U<digits>`, `-M<digits>` and `-C<digits>` with any `%` after, `-l<digits>`, `-S<text>`, `-G<text>`, `-L<text>`, `-n<digits>`, each for its subcommands), or an arg that does not start with `-`.
+- **A4.** In an accepted call, every arg that does not start with `-` is a path that stays in the tree: it does not start with `/` or `~`, and no piece between two `/` is `..`.
+- **A5.** In an accepted call, none of these names is a prefix of any arg: `--output`, `--ext-diff`, `--textconv`, `--no-index`, `--exec-path`, `--git-dir`, `--work-tree`, `--contents`, `--ignore-revs-file`, `--git-path`, `-o`, `-O`, `-c`. (`--text` is allowed. It is not a prefix of `--textconv`, but `--textconv` starts with it: see the trusted facts.)
+- **A6.** `check` refuses only a call that breaks a rule: a refused call has a subcommand that is not in the list, or an arg that A3 or A4 does not allow.
+- **A7.** `rel_ok` never panics, and it says yes exactly for a path that is not empty, does not start with `/` or `~`, has no `..` piece, and has no NUL byte.
+- **A8.** A path that `rel_ok` accepts, read from a folder `tree`, stays under it: the lexical normal form of `tree/p` (split at `/`, drop empty and `.` pieces, `..` drops the piece before it) starts with the normal form of `tree`.
+
+`--` does not end the checks: every arg after it is checked the same way.
+
+#### What stays trusted
+
+- git reads each arg as the spec says. An arg that starts with `-` is an option (or the value of the option before it), and any other arg is a rev, a range or a path.
+- git takes an exact option name as itself. When a name is also the start of a longer name, as `--text` is of `--textconv`, git reads the exact name, and it refuses an abbreviation that fits two names. Every name in the lists is a real option name of its subcommands, so git never reads one as an abbreviation of another option.
+- A value glued to `-S`, `-G` or `-L`, or after `=`, is only a value. `-L` names a line range of a file at a rev, read from the repo, not from the disk.
+- A path that stays under the review worktree (A4, A8) reads only files of that worktree. Symlinks in the worktree are not checked; they come from the PR, as does every file.
+- The rest of `review_git::run`: the `-c` options before the subcommand, the cleared environment, no pager, the time limit and the output cut. That is plain code, with tests.
+
+#### Tests
+
+- 200,000 random args, and every name of every list with pieces around it, give the same answer as the old check of `review_git.rs` (a plain model in `crates/git-argcheck/src/tests.rs`).
+- `review_git::tests` keeps all its cases, and checks that the messages still name the refused arg.
 
 ## 25. Model check of the permission flow
 

@@ -19,175 +19,32 @@ pub const MAX_OUTPUT: usize = 256 * 1024;
 /// The longest one git call may take.
 pub const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Diff options of `diff`, `log` and `show` with no value.
-const DIFF_FLAGS: &[&str] = &[
-    "-p", "--patch", "-s", "--no-patch", "--stat", "--numstat", "--shortstat",
-    "--name-only", "--name-status", "--summary", "--raw", "--patch-with-stat",
-    "--patch-with-raw", "--compact-summary", "--dirstat", "--cumulative", "-M",
-    "--find-renames", "-C", "--find-copies", "--find-copies-harder", "-D",
-    "--irreversible-delete", "--no-renames", "-w", "--ignore-all-space", "-b",
-    "--ignore-space-change", "--ignore-space-at-eol", "--ignore-blank-lines",
-    "--ignore-cr-at-eol", "--word-diff", "--color-words", "--no-color", "--relative",
-    "--no-relative", "-W", "--function-context", "--histogram", "--patience",
-    "--minimal", "--abbrev", "--no-abbrev", "--full-index", "-R", "--no-prefix",
-    "-a", "--text",
-];
-
-/// Diff options of `diff`, `log` and `show` in the `--name=value` form.
-const DIFF_VALUES: &[&str] = &[
-    "--unified", "--stat", "--dirstat", "--find-renames", "--find-copies",
-    "--word-diff", "--word-diff-regex", "--color-words", "--relative",
-    "--diff-algorithm", "--diff-filter", "--abbrev", "--src-prefix", "--dst-prefix",
-    "--inter-hunk-context", "--anchored",
-];
-
-/// Options of `git diff` alone.
-const DIFF_ONLY: &[&str] = &["--cached", "--staged", "--merge-base", "--exit-code", "--quiet", "--check"];
-
-/// Log options of `log` and `show` with no value.
-const LOG_FLAGS: &[&str] = &[
-    "--oneline", "--graph", "--decorate", "--no-decorate", "--first-parent",
-    "--no-merges", "--merges", "--reverse", "--follow", "--all", "--parents",
-    "--children", "--topo-order", "--date-order", "--author-date-order",
-    "--ancestry-path", "--left-right", "--cherry-pick", "--cherry-mark", "--cherry",
-    "--boundary", "--full-history", "--simplify-merges", "--simplify-by-decoration",
-    "--dense", "--sparse", "--pickaxe-all", "--pickaxe-regex", "-i",
-    "--regexp-ignore-case", "-E", "--extended-regexp", "-F", "--fixed-strings",
-    "--all-match", "--invert-grep", "-m", "--cc", "--no-walk", "--source",
-    "--abbrev-commit", "--no-abbrev-commit", "--pretty", "-L", "-n", "--quiet",
-];
-
-/// Log options of `log` and `show` in the `--name=value` form.
-const LOG_VALUES: &[&str] = &[
-    "--max-count", "--skip", "--since", "--after", "--until", "--before", "--author",
-    "--committer", "--grep", "--format", "--pretty", "--date", "--decorate",
-    "--diff-merges", "--max-parents", "--min-parents", "--no-walk",
-];
-
-const BLAME_FLAGS: &[&str] = &[
-    "-w", "-M", "-C", "-s", "-e", "--show-email", "-l", "-t", "-f", "--show-name",
-    "-n", "--show-number", "-p", "--porcelain", "--line-porcelain", "--incremental",
-    "--root", "--show-stats", "-b", "--first-parent", "--reverse", "--abbrev", "-L",
-];
-
-const BLAME_VALUES: &[&str] = &["--date", "--abbrev"];
-
-const MERGE_BASE_FLAGS: &[&str] = &["--is-ancestor", "--fork-point", "--all", "-a", "--octopus", "--independent"];
-
-const REV_PARSE_FLAGS: &[&str] = &[
-    "--verify", "--short", "-q", "--quiet", "--abbrev-ref", "--symbolic",
-    "--symbolic-full-name", "--show-toplevel", "--show-prefix", "--is-inside-work-tree",
-];
-
-const REV_PARSE_VALUES: &[&str] = &["--short", "--abbrev-ref"];
-
-/// True when every char of `s` is a digit, and `s` is not empty.
-fn digits(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
-}
-
-/// A short option with its value glued on, such as `-U0` or `-n5`.
-fn short_with_value(sub: &str, arg: &str) -> bool {
-    let rest = &arg[1..];
-    let mut chars = rest.chars();
-    let Some(flag) = chars.next() else {
-        return false;
-    };
-    let value = chars.as_str();
-    if value.is_empty() {
-        return false;
+/// Why an arg was refused, in words.
+fn why(code: u8, arg: &str) -> String {
+    match code {
+        git_argcheck::EMPTY => "an empty arg".into(),
+        git_argcheck::CONTROL => format!("{arg:?}: no control characters"),
+        git_argcheck::PATH => format!("{arg}: use a path inside the review worktree"),
+        _ => format!("{arg}: this option is not allowed"),
     }
-    let diffs = matches!(sub, "diff" | "log" | "show");
-    let logs = matches!(sub, "log" | "show");
-    let blame = sub == "blame";
-    match flag {
-        'U' => diffs && digits(value),
-        // A rename or copy score: `-M50` or `-M50%`.
-        'M' | 'C' => (diffs || blame) && digits(value.trim_end_matches('%')),
-        'l' => diffs && digits(value),
-        // The pickaxe: a string or a regex to look for. In blame, `-S` reads a file.
-        'S' | 'G' => diffs,
-        'L' => logs || blame,
-        'n' => logs && digits(value),
-        _ => false,
-    }
-}
-
-/// Why `arg` may not go to `git <sub>`, or `None` when it may.
-fn refuse(sub: &str, arg: &str) -> Option<String> {
-    if arg.is_empty() {
-        return Some("an empty arg".into());
-    }
-    if arg.contains('\0') || arg.contains('\n') {
-        return Some(format!("{arg:?}: no control characters"));
-    }
-    if arg == "--" {
-        return None;
-    }
-    if let Some(name) = arg.strip_prefix("--") {
-        let (name, value) = match name.split_once('=') {
-            Some((n, v)) => (format!("--{n}"), Some(v)),
-            None => (arg.to_owned(), None),
-        };
-        let ok = match (sub, value) {
-            ("diff", None) => DIFF_FLAGS.contains(&name.as_str()) || DIFF_ONLY.contains(&name.as_str()),
-            ("diff", Some(_)) => DIFF_VALUES.contains(&name.as_str()),
-            ("log" | "show", None) => DIFF_FLAGS.contains(&name.as_str()) || LOG_FLAGS.contains(&name.as_str()),
-            ("log" | "show", Some(_)) => DIFF_VALUES.contains(&name.as_str()) || LOG_VALUES.contains(&name.as_str()),
-            ("blame", None) => BLAME_FLAGS.contains(&name.as_str()),
-            ("blame", Some(_)) => BLAME_VALUES.contains(&name.as_str()),
-            ("merge-base", None) => MERGE_BASE_FLAGS.contains(&name.as_str()),
-            ("rev-parse", None) => REV_PARSE_FLAGS.contains(&name.as_str()),
-            ("rev-parse", Some(_)) => REV_PARSE_VALUES.contains(&name.as_str()),
-            _ => false,
-        };
-        return if ok { None } else { Some(format!("{arg}: this option is not allowed")) };
-    }
-    if let Some(short) = arg.strip_prefix('-') {
-        let ok = match sub {
-            "diff" => DIFF_FLAGS.contains(&arg),
-            "log" | "show" => {
-                DIFF_FLAGS.contains(&arg) || LOG_FLAGS.contains(&arg) || (sub == "log" && digits(short))
-            }
-            "blame" => BLAME_FLAGS.contains(&arg),
-            "merge-base" => MERGE_BASE_FLAGS.contains(&arg),
-            "rev-parse" => REV_PARSE_FLAGS.contains(&arg),
-            _ => false,
-        } || short_with_value(sub, arg);
-        return if ok { None } else { Some(format!("{arg}: this option is not allowed")) };
-    }
-    // A rev, a range or a path. It must stay in the review worktree: git diff with
-    // a path outside the tree compares files on disk, as with `--no-index`.
-    if arg.starts_with('/') || arg.starts_with('~') {
-        return Some(format!("{arg}: use a path inside the review worktree"));
-    }
-    if arg == ".." || arg.starts_with("../") || arg.contains("/../") || arg.ends_with("/..") {
-        return Some(format!("{arg}: use a path inside the review worktree"));
-    }
-    None
 }
 
 /// Checks a git call. Returns the args to pass after the subcommand, with the
-/// options that turn off external diff and textconv programs first.
+/// options that turn off external diff and textconv programs first. The check is
+/// the verified kernel `git-argcheck` (SPEC 24.1).
 pub fn check(sub: &str, args: &[String]) -> Result<Vec<String>, String> {
-    if !SUBCOMMANDS.contains(&sub) {
-        return Err(format!(
+    let bytes: Vec<Vec<u8>> = args.iter().map(|a| a.as_bytes().to_vec()).collect();
+    match git_argcheck::check(sub.as_bytes(), &bytes) {
+        Ok(out) => Ok(out.into_iter().map(|a| String::from_utf8_lossy(&a).into_owned()).collect()),
+        Err(r) if r.why == git_argcheck::BAD_SUB => Err(format!(
             "git {sub} is not allowed. Use one of: {}.",
             SUBCOMMANDS.join(", ")
-        ));
-    }
-    let mut out: Vec<String> = match sub {
-        "diff" | "log" | "show" => vec!["--no-ext-diff".into(), "--no-textconv".into()],
-        "blame" => vec!["--no-textconv".into()],
-        _ => vec![],
-    };
-    for a in args {
-        if let Some(why) = refuse(sub, a) {
-            return Err(format!("git {sub}: {why}. Use plain revs, ranges, paths and read options."));
+        )),
+        Err(r) => {
+            let arg = args.get(r.at).map(String::as_str).unwrap_or("");
+            Err(format!("git {sub}: {}. Use plain revs, ranges, paths and read options.", why(r.why, arg)))
         }
-        out.push(a.clone());
     }
-    Ok(out)
 }
 
 /// Runs a checked git call in `dir`. No shell, no pager, no system config, no
@@ -344,6 +201,25 @@ mod tests {
         ] {
             assert!(check(sub, &s(&args)).is_err(), "{sub} {args:?} passed");
         }
+    }
+
+    #[test]
+    fn messages_name_the_refused_arg() {
+        assert_eq!(
+            check("push", &[]).unwrap_err(),
+            "git push is not allowed. Use one of: diff, log, show, blame, merge-base, rev-parse."
+        );
+        let e = |sub: &str, a: &[&str]| check(sub, &s(a)).unwrap_err();
+        let tail = ". Use plain revs, ranges, paths and read options.";
+        assert_eq!(e("diff", &["HEAD", ""]), format!("git diff: an empty arg{tail}"));
+        assert_eq!(e("diff", &["a\nb"]), format!("git diff: \"a\\nb\": no control characters{tail}"));
+        assert_eq!(e("diff", &["HEAD", "--output=x"]), format!("git diff: --output=x: this option is not allowed{tail}"));
+        assert_eq!(e("log", &["../x"]), format!("git log: ../x: use a path inside the review worktree{tail}"));
+    }
+
+    #[test]
+    fn the_subcommands_match_the_kernel() {
+        assert_eq!(SUBCOMMANDS.join(" ").as_bytes(), git_argcheck::SUBS);
     }
 
     #[test]

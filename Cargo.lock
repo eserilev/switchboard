@@ -1081,6 +1081,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-argcheck"
+version = "0.6.0"
+
+[[package]]
 name = "glib"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3045,6 +3049,7 @@ name = "switchboard-core"
 version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
+ "git-argcheck",
  "guide-check",
  "libc",
  "outq",

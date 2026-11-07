@@ -1,5 +1,6 @@
 import GuideCheck
 import OutQ
+import GitArgCheck
 
 /-!
 # The theorems, stated
@@ -31,6 +32,22 @@ change rows that it does not show. They use `Shows` (a row shows a line of a ste
 and `HeadersGood` (the headers of a cut are right).
 The bound on the line counts is always true in practice: a `Vec<u8>` takes 24 bytes,
 so a line list has fewer than `Usize.max / 24` lines.
+
+A1 to A8 are about `git-argcheck`, the check of the `git` tool of the guide agent. The
+definitions are in `GitArgCheck/Spec.lean`, written from the option lists, not from the
+Rust tables:
+- `subs`, the option lists (`diffFlags`, …), `flags sub` and `values sub`.
+- `pre sub`: `--no-ext-diff --no-textconv` for `diff`, `log` and `show`, `--no-textconv`
+  for `blame`, nothing else.
+- `Allowed sub a`: `--`, an option from the lists, `--name=value` for a name from the
+  lists, `-<count>` for `log`, a glued short option (`Glued`), or not an option at all.
+- `PathSafe a`: no leading `/` or `~`, and no piece between two `/` is `..`.
+- `Good sub a`: not empty, no NUL or newline byte, `Allowed`, and `PathSafe` when it is
+  not an option. `CallOk`: the subcommand is in `subs` and every arg is `Good`.
+- `denied`: option names that read or write files or run programs.
+- `norm`: the lexical normal form of a path (split at `/`, drop empty and `.` pieces,
+  `..` drops the piece before it).
+The bound `args + 2 ≤ Usize.max` is always true in practice for the same reason as above.
 -/
 
 open Aeneas Aeneas.Std guide_check GuideCheck.Spec
@@ -243,6 +260,70 @@ def Q8_want_screen_once : Prop :=
         (if (q.panes.val[i.val]'h).state = outq.DROPPING then { q.panes.val[i.val]'h with state := outq.RESYNC }
          else q.panes.val[i.val]'h) ⦄
 
+section GitArgs
+
+open GitArgCheck.Spec
+
+/-- **A1.** `check` never panics, and it accepts only a subcommand from the list. -/
+def A1_only_listed_subcommands : Prop :=
+  ∀ (sub : Slice U8) (args : Slice (alloc.vec.Vec U8)), args.val.length + 2 ≤ Usize.max →
+    git_argcheck.check sub args ⦃ r => match r with
+      | .Ok _ => sub.val ∈ subs.map bytes
+      | .Err _ => True ⦄
+
+/-- **A2.** An accepted call runs the prefix options, then the args unchanged and in order. -/
+def A2_prefix_then_args : Prop :=
+  ∀ (sub : Slice U8) (args : Slice (alloc.vec.Vec U8)), args.val.length + 2 ≤ Usize.max →
+    git_argcheck.check sub args ⦃ r => match r with
+      | .Ok out => out.val.map (·.val) = pre sub.val ++ args.val.map (·.val)
+      | .Err _ => True ⦄
+
+/-- **A3.** In an accepted call, every arg is not empty, has no NUL or newline byte, and
+is allowed for the subcommand. -/
+def A3_every_arg_allowed : Prop :=
+  ∀ (sub : Slice U8) (args : Slice (alloc.vec.Vec U8)), args.val.length + 2 ≤ Usize.max →
+    git_argcheck.check sub args ⦃ r => match r with
+      | .Ok _ => ∀ a ∈ args.val, a.val ≠ [] ∧ byte '\x00' ∉ a.val ∧ byte '\n' ∉ a.val ∧
+          Allowed sub.val a.val
+      | .Err _ => True ⦄
+
+/-- **A4.** In an accepted call, every arg that is not an option is a path that stays in
+the tree: no leading `/` or `~`, and no `..` piece. -/
+def A4_paths_stay_in_the_tree : Prop :=
+  ∀ (sub : Slice U8) (args : Slice (alloc.vec.Vec U8)), args.val.length + 2 ≤ Usize.max →
+    git_argcheck.check sub args ⦃ r => match r with
+      | .Ok _ => ∀ a ∈ args.val, a.val.head? ≠ some (byte '-') → PathSafe a.val
+      | .Err _ => True ⦄
+
+/-- **A5.** In an accepted call, no denied option name is a prefix of any arg. -/
+def A5_no_denied_option : Prop :=
+  ∀ (sub : Slice U8) (args : Slice (alloc.vec.Vec U8)), args.val.length + 2 ≤ Usize.max →
+    git_argcheck.check sub args ⦃ r => match r with
+      | .Ok _ => ∀ a ∈ args.val, ∀ d ∈ denied, ¬ bytes d <+: a.val
+      | .Err _ => True ⦄
+
+/-- **A6.** `check` refuses only a call that breaks a rule. -/
+def A6_refuses_only_bad_calls : Prop :=
+  ∀ (sub : Slice U8) (args : Slice (alloc.vec.Vec U8)), args.val.length + 2 ≤ Usize.max →
+    git_argcheck.check sub args ⦃ r => match r with
+      | .Ok _ => True
+      | .Err _ => ¬ CallOk sub.val (args.val.map (·.val)) ⦄
+
+/-- **A7.** `rel_ok` never panics, and it says yes exactly for a path that is not empty,
+does not start with `/` or `~`, has no `..` piece and has no NUL byte. -/
+def A7_rel_ok_decides : Prop :=
+  ∀ (p : Slice U8),
+    git_argcheck.rel_ok p ⦃ r => (r = true ↔ p.val ≠ [] ∧ p.val.head? ≠ some (byte '/') ∧
+      p.val.head? ≠ some (byte '~') ∧ bytes ".." ∉ p.val.splitOn (byte '/') ∧ byte '\x00' ∉ p.val) ⦄
+
+/-- **A8.** A path that `rel_ok` accepts, read from a folder `tree`, stays under `tree`:
+the normal form of `tree/p` starts with the normal form of `tree`. -/
+def A8_rel_ok_stays_under : Prop :=
+  ∀ (tree : List U8) (p : Slice U8),
+    git_argcheck.rel_ok p ⦃ r => (r = true → norm tree <+: norm (tree ++ byte '/' :: p.val)) ⦄
+
+end GitArgs
+
 theorem check_G1 : G1_check_decides_accept := GuideCheck.Check.check_spec
 
 theorem check_G2 : G2_every_change_is_covered :=
@@ -292,5 +373,57 @@ theorem check_Q6 : Q6_the_screen_goes_first := OutQ.Queue.fill_spec
 theorem check_Q7 : Q7_take_gives_all_bytes := OutQ.Queue.take_spec
 
 theorem check_Q8 : Q8_want_screen_once := OutQ.Queue.want_screen_spec
+
+section GitArgsProofs
+
+open GitArgCheck.Spec
+
+theorem check_A1 : A1_only_listed_subcommands := fun sub args h =>
+  WP.spec_mono (GitArgCheck.Check.check_spec sub args h) (fun r hr => by
+    cases r with
+    | Ok out => exact hr.1.1
+    | Err _ => trivial)
+
+theorem check_A2 : A2_prefix_then_args := fun sub args h =>
+  WP.spec_mono (GitArgCheck.Check.check_spec sub args h) (fun r hr => by
+    cases r with
+    | Ok out => exact hr.2
+    | Err _ => trivial)
+
+theorem check_A3 : A3_every_arg_allowed := fun sub args h =>
+  WP.spec_mono (GitArgCheck.Check.check_spec sub args h) (fun r hr => by
+    cases r with
+    | Ok out =>
+      intro a ha
+      obtain ⟨h1, h2, h3, h4, -⟩ := hr.1.2 a.val (List.mem_map_of_mem ha)
+      exact ⟨h1, h2, h3, h4⟩
+    | Err _ => trivial)
+
+theorem check_A4 : A4_paths_stay_in_the_tree := fun sub args h =>
+  WP.spec_mono (GitArgCheck.Check.check_spec sub args h) (fun r hr => by
+    cases r with
+    | Ok out => exact fun a ha => (hr.1.2 a.val (List.mem_map_of_mem ha)).2.2.2.2
+    | Err _ => trivial)
+
+theorem check_A5 : A5_no_denied_option := fun sub args h =>
+  WP.spec_mono (GitArgCheck.Check.check_spec sub args h) (fun r hr => by
+    cases r with
+    | Ok out => exact fun a ha =>
+        GitArgCheck.Meaning.good_not_denied sub.val a.val (hr.1.2 a.val (List.mem_map_of_mem ha))
+    | Err _ => trivial)
+
+theorem check_A6 : A6_refuses_only_bad_calls := fun sub args h =>
+  WP.spec_mono (GitArgCheck.Check.check_spec sub args h) (fun r hr => by
+    cases r with
+    | Ok out => trivial
+    | Err _ => exact hr)
+
+theorem check_A7 : A7_rel_ok_decides := GitArgCheck.Small.rel_ok_spec
+
+theorem check_A8 : A8_rel_ok_stays_under := fun tree p =>
+  WP.spec_mono (GitArgCheck.Small.rel_ok_spec p) (fun _ hr hr1 =>
+    GitArgCheck.Meaning.norm_under tree p.val (hr.mp hr1).2.2.2.1)
+
+end GitArgsProofs
 
 end Statements

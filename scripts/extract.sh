@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Translate the verified crates (guide-check, outq) to Lean with Charon and Aeneas.
+# Translate the verified crates (proofs/CRATES) to Lean with Charon and Aeneas.
 # Set CHARON_DIR and AENEAS_DIR if the tools are not in ~/verif.
 # The commits that the proofs expect are in proofs/TOOLS.
 set -euo pipefail
@@ -15,14 +15,12 @@ export CHARON_CACHE_DIR=$HOME/.cache/charon-guide-check
 
 mkdir -p "$target"
 # Each verified crate and the Lean folder of its code.
-for pair in "guide-check:GuideCheck" "outq:OutQ"; do
-    crate=${pair%%:*}
-    lean=${pair##*:}
+while read -r crate lean; do
     llbc=$target/${crate//-/_}.llbc
     # Start clean, so a file from an older run cannot hide a problem.
     rm -rf "$root/proofs/$lean/Code"
-    (cd "$root/crates/$crate" && PATH=$charon_dir/bin:$PATH charon cargo --preset=aeneas --dest-file="$llbc")
-    "$aeneas_dir/bin/aeneas" -backend lean "$llbc" -dest "$root/proofs" -subdir "/$lean/Code" -split-files
+    (cd "$root/crates/$crate" && PATH=$charon_dir/bin:$PATH charon cargo --preset=aeneas --dest-file="$llbc" < /dev/null)
+    "$aeneas_dir/bin/aeneas" -backend lean "$llbc" -dest "$root/proofs" -subdir "/$lean/Code" -split-files < /dev/null
 
     # An axiom means Aeneas did not know a function. A sorry means it could not
     # translate a body. Either way the proofs would trust code that nobody checked.
@@ -30,4 +28,8 @@ for pair in "guide-check:GuideCheck" "outq:OutQ"; do
         echo "error: the generated code of $crate contains an axiom or a sorry" >&2
         exit 1
     fi
-done
+
+    # The hash of the Rust that the code came from, so a cheap check without the
+    # tools can see a crate change with no new Lean (scripts/check-proof-source.sh).
+    "$root/scripts/check-proof-source.sh" --print "$crate" > "$root/proofs/$lean/Code/Source.sha256"
+done < <(grep -v '^#' "$root/proofs/CRATES")

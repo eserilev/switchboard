@@ -24,3 +24,11 @@ import Statements
 #print axioms Statements.check_Q6
 #print axioms Statements.check_Q7
 #print axioms Statements.check_Q8
+#print axioms Statements.check_A1
+#print axioms Statements.check_A2
+#print axioms Statements.check_A3
+#print axioms Statements.check_A4
+#print axioms Statements.check_A5
+#print axioms Statements.check_A6
+#print axioms Statements.check_A7
+#print axioms Statements.check_A8
