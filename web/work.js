@@ -80,7 +80,9 @@
   // you in another tab or on another repo: then the open stops. A part shown after
   // you left would expand the agent again and pull you back here.
   async function open() {
-    if (!W.repo || W.opening) return;
+    if (!W.repo) return;
+    // An open asked for while one runs (a resync, a pick) runs again after it.
+    if (W.opening) { W.again = true; return; }
     const repo = W.repo;
     const still = () => S.tab === "work" && W.repo === repo;
     W.opening = true;
@@ -110,9 +112,12 @@
       toast(e);
     } finally {
       W.opening = false;
+      const again = W.again;
+      W.again = false;
       if (S.tab === "work") {
-        // You picked another repo while this one opened: that one opens now.
-        if (W.repo !== repo) draw();
+        // You picked another repo while this one opened, or an open was asked for
+        // meanwhile: it runs now.
+        if (W.repo !== repo || again) draw();
         else { drawBar(); drawEmpty(); }
       }
     }
