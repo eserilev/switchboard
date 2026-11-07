@@ -1,9 +1,36 @@
 # Checks the Quint models (SPEC 25, 26, 29) with scripts/check-models.sh, at the
 # full count of random runs: with 20,000 a broken model (initAnyAnswer) can pass.
+# It runs when a model or the code it describes changes (CLAUDE.md), and nightly.
 name: models
 on:
   push:
+    paths:
+      - "models/**"
+      - "scripts/check-models.sh"
+      - ".github/workflows/models.yml"
+      - "crates/core/src/hub.rs"
+      - "crates/core/src/hub_review.rs"
+      - "crates/core/src/review.rs"
+      - "crates/core/src/cleanup.rs"
+      - "crates/core/src/remote.rs"
+      - "crates/core/src/dispatch.rs"
+      - "crates/sb/src/**"
+      - "crates/app/src/main.rs"
+      - "web/app.js"
   pull_request:
+    paths:
+      - "models/**"
+      - "scripts/check-models.sh"
+      - ".github/workflows/models.yml"
+      - "crates/core/src/hub.rs"
+      - "crates/core/src/hub_review.rs"
+      - "crates/core/src/review.rs"
+      - "crates/core/src/cleanup.rs"
+      - "crates/core/src/remote.rs"
+      - "crates/core/src/dispatch.rs"
+      - "crates/sb/src/**"
+      - "crates/app/src/main.rs"
+      - "web/app.js"
   schedule:
     - cron: "41 3 * * *"
   workflow_dispatch:
