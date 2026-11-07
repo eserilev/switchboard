@@ -29,7 +29,10 @@ if [ "$(cat "$dir/aeneas/charon-pin" | grep -v '^#')" != "$charon_rev" ]; then
     exit 1
 fi
 
-# Charon: a Rust program on a pinned nightly (charon/rust-toolchain).
+# Charon: a Rust program on a pinned nightly (charon/rust-toolchain). Its build runs
+# cargo fmt, and charon-driver links that nightly's rustc.
+tc=$(sed -n 's/^channel = "\(.*\)"/\1/p' "$dir/charon/rust-toolchain")
+rustup toolchain install "$tc" --profile minimal --component rustc-dev,llvm-tools,rust-src,miri,rustfmt
 (cd "$dir/charon" && $make build-charon-rust)
 
 # Aeneas: OCaml 5, with the Charon OCaml library.

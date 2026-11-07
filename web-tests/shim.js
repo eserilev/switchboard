@@ -169,7 +169,8 @@ window.__TAURI__ = {
         case "panes": return structuredClone(d.panes);
         case "connections": return d.connections;
         // A copy, as from the hub: the window never shares an object with the hub.
-        case "settings": return { ...d.settings };
+        // The app puts the leader of this computer's config in (main.rs), as in remote mode.
+        case "settings": return { ...d.settings, leader: "ctrl+space" };
         case "settings_save": {
           // A copy of the hub rule: a site must be a plain host name.
           const bad = args.set.web_domains.find((x) => !/^[A-Za-z0-9.-]+$/.test(x.trim()));
