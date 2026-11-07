@@ -223,11 +223,16 @@ window.__TAURI__ = {
         case "review_open_local": {
           if (!d.reviews.some((x) => x.id === "rL")) d.reviews.push(Object.assign(structuredClone(d.reviews[0]), {
             id: "rL", kind: "local", pane: args.pane, url: "", number: 0, repo: "lighthouse", title: "2 commits on feat", base: "b0b0b0b0b0b0", head: "ac92ae9aaaa",
-            guide: null, steps: [], threads: [], pins: [], drafts: d.reviews[0].drafts, posted: [], scope_note: "Commits not on origin/unstable.", coverage: null, range: "new", reviewed: false }));
+            guide: null, steps: [], threads: [], pins: [], drafts: d.reviews[0].drafts, posted: [], scope_note: "Commits not on upstream/unstable (sigp/lighthouse, the parent of this fork).", coverage: null, range: "new", reviewed: false,
+            // The base (SPEC 11.11): the rule's ref, why, the menu, and a fetch 2 h ago.
+            base_ref: "upstream/unstable", base_label: "upstream/unstable (sigp/lighthouse, the parent of this fork)", base_pick: null, base_fetched: Math.floor(Date.now() / 1000) - 7200,
+            bases: [{ ref: "upstream/unstable", why: "in use" }, { ref: "origin/unstable", why: "the upstream of this branch" }, { ref: "upstream/main", why: "a branch of upstream" }] }));
           return "rL";
         }
         case "review_send_agent": return 1;
-        case "review_range": case "review_mark_reviewed": return null;
+        case "review_range": case "review_mark_reviewed": case "review_base_update": return null;
+        // As the hub: a ref that looks like an option is refused.
+        case "review_base": if (String(args.pick).startsWith("-")) throw `${args.pick} is not a ref: a ref never starts with -`; return null;
         case "review_chat": return [
           { step: "s1", question: "what does the PR add?", answer: "ILs for **gloas**.", at: 1 },
           { step: "s2", question: "is slot 0 real?", answer: "Yes: it saturates.", at: 2 },

@@ -5,6 +5,7 @@ use crate::hub::Hub;
 use crate::now;
 use crate::nvim;
 use crate::repos;
+use crate::base::{self, BaseOption, BaseRule, Fork};
 use crate::review::{self, PrInfo, Run, Stream};
 use crate::store::{DraftRow, ReviewRow, ThreadRow};
 use crate::{connections, coverage, expand};
@@ -27,8 +28,18 @@ pub(crate) struct ReviewState {
     pub coverage: Option<CoverageView>,
     /// The pid of the guide's `claude -p` run while it runs. A close stops it.
     pub run_pid: Option<u32>,
-    /// The PR's base branch, for example `unstable`, from the last `gh pr view`.
+    /// The PR's base branch, for example `unstable`, from the last `gh pr view`. For a
+    /// local review: the ref the base came from, for example `upstream/unstable`.
     pub base_ref: Option<String>,
+    /// A local review: the base you chose for this review (store version 12).
+    pub base_pick: Option<String>,
+    /// A local review: the choice the last load used, this review's or the repo's.
+    pub base_choice: Option<String>,
+    /// A local review: the base ref and why, the refs of the Base menu, and when the
+    /// base ref was last fetched (seconds since the epoch).
+    pub base_label: Option<String>,
+    pub bases: Vec<BaseOption>,
+    pub base_fetched: Option<u64>,
     /// A local review (SPEC 11.14): `new` (since Mark reviewed) or `all`.
     pub range: String,
     /// A local review: HEAD of its folder when the view loaded. The head of the view
@@ -59,6 +70,11 @@ impl ReviewState {
             coverage: None,
             run_pid: None,
             base_ref: None,
+            base_pick: None,
+            base_choice: None,
+            base_label: None,
+            bases: vec![],
+            base_fetched: None,
             range: "new".into(),
             head_commit: None,
             reviewed: false,
@@ -67,6 +83,16 @@ impl ReviewState {
             pending_turn: false,
         }
     }
+}
+
+/// What a load of a local review fetches first.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Fetch {
+    No,
+    /// Restart: every remote.
+    All,
+    /// Update base: only the branch of the base ref.
+    Base,
 }
 
 /// The error of a background job whose review closed while it ran.
@@ -125,8 +151,18 @@ pub struct ReviewView {
     pub status: String,
     pub error: Option<String>,
     pub new_head: Option<String>,
-    /// The PR's base branch, once a fetch or a poll has read it.
+    /// The PR's base branch, once a fetch or a poll has read it. For a local review:
+    /// the ref the base came from, for example `upstream/unstable`.
     pub base_ref: Option<String>,
+    /// A local review: the base ref and why it is the base.
+    pub base_label: Option<String>,
+    /// A local review: the refs of the Base menu.
+    pub bases: Vec<BaseOption>,
+    /// A local review: the base you chose (for this review or for the repo), or None
+    /// for the usual rule.
+    pub base_pick: Option<String>,
+    /// A local review: when the base ref was last fetched, in seconds since the epoch.
+    pub base_fetched: Option<u64>,
     pub guide: Option<Value>,
     pub steps: Vec<StepState>,
     pub threads: Vec<ThreadView>,
@@ -330,18 +366,19 @@ fn e(x: impl std::fmt::Display) -> String {
 
 impl Hub {
     pub(crate) fn load_reviews(&self) {
-        let rows: Vec<(ReviewRow, Option<String>)> = {
+        let rows: Vec<(ReviewRow, Option<String>, Option<String>)> = {
             let store = self.store.lock().unwrap();
             let rows = store.open_reviews().unwrap_or_default();
             rows.into_iter()
                 .map(|r| {
                     let range = store.review_range(&r.id).ok().flatten();
-                    (r, range)
+                    let pick = store.review_base(&r.id).ok().flatten();
+                    (r, range, pick)
                 })
                 .collect()
         };
         let mut reviews = self.reviews.lock().unwrap();
-        for (row, range) in rows {
+        for (row, range, pick) in rows {
             // A local review has no guide: it is ready once it has its commits.
             let done = if row.is_local() { !row.head.is_empty() } else { row.guide.is_some() };
             let status = if done { "ready" } else { "error" };
@@ -354,6 +391,7 @@ impl Hub {
             if let Some(range) = range.filter(|r| r == "new" || r == "all") {
                 st.range = range;
             }
+            st.base_pick = pick;
             reviews.insert(st.row.id.clone(), st);
         }
     }
@@ -419,6 +457,10 @@ impl Hub {
             error: r.error.clone(),
             new_head: r.new_head.clone(),
             base_ref: r.base_ref.clone(),
+            base_label: r.base_label.clone(),
+            bases: r.bases.clone(),
+            base_pick: r.base_choice.clone(),
+            base_fetched: r.base_fetched,
             guide: r
                 .row
                 .guide
@@ -539,7 +581,7 @@ impl Hub {
         reviews.insert(id.clone(), ReviewState::new(row, "fetching", None));
         drop(reviews);
         self.save_row(&id);
-        self.local_refresh_bg(&id, false)?;
+        self.local_refresh_bg(&id, Fetch::No)?;
         Ok(id)
     }
 
@@ -548,7 +590,7 @@ impl Hub {
     /// quick clicks start one load.
     /// Loads the commits of a local review in the background. With `fetch`, the
     /// remotes are fetched first, so the range uses their branches as they are now.
-    fn local_refresh_bg(&self, id: &str, fetch: bool) -> Res<()> {
+    fn local_refresh_bg(&self, id: &str, fetch: Fetch) -> Res<()> {
         self.claim_local(id, |_| Ok(()))?;
         self.spawn_local(id, fetch);
         Ok(())
@@ -573,7 +615,7 @@ impl Hub {
 
     /// Runs the load that `claim_local` claimed. When a turn ended during it, one
     /// more snapshot runs after it (`turn_snapshot`).
-    fn spawn_local(&self, id: &str, fetch: bool) {
+    fn spawn_local(&self, id: &str, fetch: Fetch) {
         let hub = self.arc();
         let rid = id.to_owned();
         std::thread::spawn(move || {
@@ -596,25 +638,54 @@ impl Hub {
 
     /// The commits of a local review: the range rule, then the diff model. The
     /// drafts move to the new head as after a PR update (`load_model`).
-    fn local_refresh(&self, id: &str, fetch: bool) -> Res<()> {
-        let tree = self.reviews.lock().unwrap().get(id).map(|r| r.row.tree.clone()).ok_or("gone")?;
+    fn local_refresh(&self, id: &str, fetch: Fetch) -> Res<()> {
+        let (tree, row_pick, old_ref) = self
+            .reviews
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|r| (r.row.tree.clone(), r.base_pick.clone(), r.base_ref.clone()))
+            .ok_or("gone")?;
+        let dir = Path::new(&tree);
         // A failed fetch (no network, a login prompt) still loads the range, with a note.
-        let fetched = if fetch {
-            match repos::git(Path::new(&tree), &["fetch", "--all", "--no-tags", "-q"]) {
+        let fetched = match fetch {
+            Fetch::No => None,
+            Fetch::All => match repos::git(dir, &["fetch", "--all", "--no-tags", "-q"]) {
                 Ok(_) => None,
                 Err(err) => {
                     tracing::warn!(target: "sb::review", review = id, %err, "fetch of the remotes failed");
                     Some(format!(" The fetch of the remotes failed, so this uses them as they were: {err}"))
                 }
-            }
-        } else {
-            None
+            },
+            // Update base: only the branch of the base ref.
+            Fetch::Base => match old_ref.as_deref() {
+                Some(r) => match base::fetch_one(dir, r) {
+                    Ok(()) => None,
+                    Err(err) => {
+                        tracing::warn!(target: "sb::review", review = id, base = r, %err, "fetch of the base failed");
+                        Some(format!(" The fetch of {r} failed, so this uses it as it was: {err}"))
+                    }
+                },
+                None => Some(" This base is not a branch of a remote, so there is nothing to fetch.".to_owned()),
+            },
         };
-        let dir = Path::new(&tree);
-        let mut range = review::local_range(dir)?;
+        // The base: your choice for this review, else for the repo, else the rules
+        // with the parent of a fork. gh runs here, on the load's thread, with no lock.
+        let pick = match row_pick {
+            Some(p) => Some(p),
+            None => match base::repo_root(dir) {
+                Some(root) => self.store.lock().unwrap().repo_base(&root).ok().flatten(),
+                None => None,
+            },
+        };
+        let rule = BaseRule { pick, fork: self.fork_of(dir) };
+        let mut range = review::local_range(dir, &rule)?;
         if let Some(n) = fetched {
             range.note += &n;
         }
+        let bases = base::options(dir, &rule, range.base_ref.as_deref());
+        let base_fetched = range.base_ref.as_deref().and_then(|r| base::fetched_at(dir, r));
+        let (base_ref, base_label) = (range.base_ref.clone(), range.label.clone());
         // The head of the view is the work tree as a commit: the agent's commits and
         // its uncommitted work (SPEC 11.14).
         let snap = review::snapshot(dir)?;
@@ -663,6 +734,11 @@ impl Hub {
                 r.new_head = None;
                 r.head_commit = Some(snap.head);
                 r.reviewed = has_reviewed;
+                r.base_ref = base_ref;
+                r.base_label = base_label;
+                r.bases = bases;
+                r.base_fetched = base_fetched;
+                r.base_choice = rule.pick;
             }
             None => return Err(CLOSED.into()),
         }
@@ -689,8 +765,98 @@ impl Hub {
             Ok(())
         })?;
         let _ = self.store.lock().unwrap().set_review_range(id, range);
-        self.spawn_local(id, false);
+        self.spawn_local(id, Fetch::No);
         Ok(())
+    }
+
+    /// Sets the base of a local review to `pick`, a branch or a commit, or back to
+    /// the usual rule with an empty `pick` (SPEC 11.11). The choice is kept for the
+    /// review and for its repo, so every worktree of the repo shares it.
+    pub fn review_base(&self, id: &str, pick: &str) -> Res<()> {
+        let pick = pick.trim();
+        let tree = {
+            let reviews = self.reviews.lock().unwrap();
+            let r = reviews.get(id).ok_or(format!("no review {id}"))?;
+            if !r.row.is_local() {
+                return Err("Only a review of local work has a base to choose.".into());
+            }
+            r.row.tree.clone()
+        };
+        // git runs with no lock held.
+        let dir = Path::new(&tree);
+        if !pick.is_empty() {
+            base::verify(dir, pick)?;
+        }
+        let root = base::repo_root(dir);
+        let chosen = (!pick.is_empty()).then(|| pick.to_owned());
+        self.claim_local(id, |r| {
+            if r.status == "fetching" {
+                return Err("the commits are still loading".into());
+            }
+            r.base_pick = chosen.clone();
+            Ok(())
+        })?;
+        {
+            let store = self.store.lock().unwrap();
+            let _ = store.set_review_base(id, chosen.as_deref());
+            if let Some(root) = &root {
+                let _ = store.set_repo_base(root, chosen.as_deref());
+            }
+        }
+        tracing::info!(target: "sb::review", review = id, base = ?chosen, "base chosen");
+        self.spawn_local(id, Fetch::No);
+        Ok(())
+    }
+
+    /// Update base: fetches only the branch of the base ref, then reads the range again.
+    pub fn review_base_update(&self, id: &str) -> Res<()> {
+        self.claim_local(id, |r| {
+            if !r.row.is_local() {
+                return Err("Only a review of local work has a base to update.".into());
+            }
+            if r.status == "fetching" {
+                return Err("the commits are still loading".into());
+            }
+            Ok(())
+        })?;
+        self.spawn_local(id, Fetch::Base);
+        Ok(())
+    }
+
+    /// What GitHub says about the repo of HEAD's remote in `tree`: from memory, else
+    /// from the store (for a week), else one `gh api` call. No lock is held during the
+    /// call. A failed call is tried again after 10 minutes.
+    fn fork_of(&self, tree: &Path) -> Fork {
+        const WEEK: u64 = 7 * 24 * 3600;
+        let Some(repo) = base::head_github(tree) else { return Fork::Unknown };
+        let t = now();
+        let mem = FORKS.lock().unwrap().iter().find(|e| e.0 == repo).map(|e| (e.1.clone(), e.2));
+        match mem {
+            Some((f, at)) if f != Fork::Unknown || t < at + 600 => return f,
+            _ => {}
+        }
+        let key = format!("gh.fork:{repo}");
+        let stored = self.store.lock().unwrap().get(&key).ok().flatten();
+        let kept = stored.and_then(|s| serde_json::from_str::<(Fork, u64)>(&s).ok()).filter(|(_, at)| t < at + WEEK);
+        let (fork, at) = match kept {
+            Some(k) => k,
+            None => {
+                let f = base::gh_fork(&repo).unwrap_or_else(|err| {
+                    tracing::info!(target: "sb::review", %repo, %err, "no fork answer from GitHub");
+                    Fork::Unknown
+                });
+                if f != Fork::Unknown {
+                    if let Ok(v) = serde_json::to_string(&(&f, t)) {
+                        let _ = self.store.lock().unwrap().set(&key, &v);
+                    }
+                }
+                (f, t)
+            }
+        };
+        let mut forks = FORKS.lock().unwrap();
+        forks.retain(|e| e.0 != repo);
+        forks.push((repo, fork.clone(), at));
+        fork
     }
 
     /// Marks what the view shows as reviewed: the next `new` view starts here.
@@ -721,7 +887,7 @@ impl Hub {
             return Err(CLOSED.into());
         }
         tracing::info!(target: "sb::review", review = id, %head, "marked reviewed");
-        self.spawn_local(id, false);
+        self.spawn_local(id, Fetch::No);
         Ok(())
     }
 
@@ -1327,7 +1493,7 @@ impl Hub {
     pub fn review_restart(&self, id: &str) -> Res<()> {
         // A local review: fetch the remotes, then read the range again.
         if self.pr_only(id).is_err() {
-            return self.local_refresh_bg(id, true);
+            return self.local_refresh_bg(id, Fetch::All);
         }
         // The check and the new status in one step: two clicks start one run.
         let row = {
@@ -1369,7 +1535,7 @@ impl Hub {
 
     pub fn review_retry(&self, id: &str) -> Res<()> {
         if self.pr_only(id).is_err() {
-            return self.local_refresh_bg(id, false);
+            return self.local_refresh_bg(id, Fetch::No);
         }
         self.claim_run(id, "fetching")?;
         let hub = self.arc();
@@ -2455,7 +2621,7 @@ impl Hub {
     /// Moves the review to the new head: stale steps, re-anchored threads, a guide update.
     pub fn review_update(&self, id: &str) -> Res<()> {
         if self.pr_only(id).is_err() {
-            return self.local_refresh_bg(id, false);
+            return self.local_refresh_bg(id, Fetch::No);
         }
         self.claim_run(id, "updating")?;
         let hub = self.arc();
@@ -2921,6 +3087,9 @@ fn normalize(mut guide: Value) -> Res<Value> {
 
 /// Threads that wait for an answer.
 static BUSY: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// The fork answers of GitHub this run: `owner/name`, the answer, and when.
+static FORKS: std::sync::Mutex<Vec<(String, Fork, u64)>> = std::sync::Mutex::new(Vec::new());
 
 /// The reviews with a send to GitHub in progress.
 static SENDING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
