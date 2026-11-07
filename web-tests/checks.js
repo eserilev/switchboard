@@ -456,7 +456,7 @@
     $('[data-rview="nvim"]').click();
     await wait(200);
     const at = called("review_nvim").at(-1)?.[1];
-    check("nvim opens at the clicked line", at?.line === +td.dataset.ln && at?.path === $$("#rdiff .file > span")[+td.dataset.sec].firstChild.textContent && inCol("p3"), JSON.stringify(at));
+    check("nvim opens at the clicked line", at?.line === +td.dataset.ln && at?.path === $$("#rdiff .file > span")[+td.dataset.sec].firstChild.textContent.trim() && inCol("p3"), JSON.stringify(at));
     td.click();
     await wait(100);
     // The nvim button of a file opens it in the column too, not on the board.
