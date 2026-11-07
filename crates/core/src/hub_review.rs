@@ -2886,10 +2886,9 @@ impl Hub {
 }
 
 /// True for a path that stays inside the folder it joins: not empty, not absolute,
-/// not from `~`, no `..` piece and no NUL. A proved `rel_ok` replaces this later,
-/// with the same meaning.
+/// not from `~`, no `..` piece and no NUL. The proved check (SPEC 24.1, A7 and A8).
 pub(crate) fn rel_ok(path: &str) -> bool {
-    !path.is_empty() && !path.starts_with('/') && !path.starts_with('~') && !path.contains('\0') && !path.split('/').any(|p| p == "..")
+    git_argcheck::rel_ok(path.as_bytes())
 }
 
 /// Checks the shape of a guide, and gives every step a `ranges` list.

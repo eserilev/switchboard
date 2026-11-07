@@ -1,5 +1,5 @@
-# Checks the Quint models (SPEC 25, 26, 29) with scripts/check-models.sh. A push
-# or pull request runs fewer random runs; the nightly run takes the full count.
+# Checks the Quint models (SPEC 25, 26, 29) with scripts/check-models.sh, at the
+# full count of random runs: with 20,000 a broken model (initAnyAnswer) can pass.
 name: models
 on:
   push:
@@ -19,6 +19,4 @@ jobs:
       - name: Install Quint
         run: npm install -g @informalsystems/quint@0.33.1
       - name: Check the models
-        env:
-          SAMPLES: ${{ github.event_name == 'schedule' && '100000' || '20000' }}
         run: scripts/check-models.sh

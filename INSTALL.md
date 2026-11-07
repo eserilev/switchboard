@@ -101,7 +101,7 @@ Only for work on the verified crates (`proofs/CRATES`, SPEC 24) and the Quint mo
 - **Lean:** install [elan](https://github.com/leanprover/elan). `proofs/lean-toolchain` picks the Lean version. In `proofs/`, run `lake exe cache get` once, so Mathlib comes as a download and not as a build.
 - **Charon and Aeneas:** `scripts/install-proof-tools.sh` clones them at the commits in `proofs/TOOLS` into `~/verif` and builds them (the first build takes a while: OCaml and the Rust nightly come too). It needs git, rustup (Charon pins its own nightly Rust), opam, GNU make and libgmp. On macOS: `brew install opam make gmp`. On Debian or Ubuntu: `apt-get install opam libgmp-dev libzstd-dev pkg-config`. Set `VERIF_DIR` for another folder, and then `CHARON_DIR` and `AENEAS_DIR` for the scripts.
 - **Check the proofs:** `scripts/check-proofs.sh`. It regenerates `proofs/*/Code` from the Rust, builds the proofs, and allows only the standard axioms. Commit the regenerated code with the change.
-- **Quint:** `npm i -g @informalsystems/quint` (Node 18 or newer). Then `scripts/check-models.sh`; `SAMPLES=20000` makes it faster.
+- **Quint:** `npm i -g @informalsystems/quint` (Node 18 or newer). Then `scripts/check-models.sh`; `SAMPLES=20000` makes it faster, but a witness can then pass by chance; CI uses the full count.
 
 ## Problems
 

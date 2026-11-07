@@ -969,14 +969,14 @@ Where the build differs from the text above:
   - `.github/workflows/release.yml`: a `v*` tag builds `switchboard-linux-x86_64.tar.gz` (Ubuntu 22.04) and `Switchboard-macos-arm64.zip`, and puts them on a GitHub release.
   - `.github/workflows/macos.yml` checks that the Lean of the verified crates came from the Rust in the tree (`scripts/check-proof-source.sh`, a hash that `scripts/extract.sh` writes), runs clippy, the tests with tmux from Homebrew, the window checks in Chrome, and the app build on a macOS runner. It runs when the repo is on GitHub.
   - `.github/workflows/proofs.yml` runs `scripts/check-proofs.sh` on Ubuntu when a verified crate, `proofs/` or the proof scripts change, and every week. Charon and Aeneas build once for each `proofs/TOOLS` (`scripts/install-proof-tools.sh`) and stay in the cache; Mathlib comes from `lake exe cache get`.
-  - `.github/workflows/models.yml` runs `scripts/check-models.sh` on Ubuntu with Quint from npm: 20,000 random runs for each profile on a push or a pull request, the full 100,000 every night. With 2,000 runs, the witness `NoResync` of the remote model did not fail, so the count must stay high enough to reach it.
+  - `.github/workflows/models.yml` runs `scripts/check-models.sh` on Ubuntu with Quint from npm: the full 100,000 random runs for each profile on every push, pull request and night (about 3 minutes). With 20,000, the witness `initAnyAnswer` of the remote model could pass, and with 2,000 so could `NoResync`: the count must stay high enough to reach them.
   - The verified crates are listed in `proofs/CRATES`; the proof scripts read the list.
   - From Linux, `cargo clippy --target aarch64-apple-darwin` checks the macOS code. A C compiler that does nothing lets the SQLite build step pass, because a check does not link.
 
 - `time` in a state message is seconds since the Unix epoch.
 - `idle_end_minutes` is 0 (off) by default. Ending a session is safe, because the tile resumes it, but it is a surprise the first time.
 - The guide session has no board tile. Its state shows in the review header.
-- `review_nvim` checks its path with a small local `rel_ok` in `hub_review.rs`. A proved `rel_ok` with the same meaning is to replace it.
+- `review_nvim` checks its path with the proved `git_argcheck::rel_ok` (24.1, A7 and A8).
 - The guide prompt (11.3) names the base commit, not a `git merge-base` call: the first round diffs against `{{base}}`. A custom prompt from the config with no `{{base}}` still works, with the old risk.
 - A connection with no `dir` uses your own `~/.claude` and its login.
 - A thread fork and the pin and draft summaries use the active connection.

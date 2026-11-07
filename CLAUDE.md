@@ -15,12 +15,12 @@ A desktop app for many AI agents on one screen, plus a guided PR review. `SPEC.m
 
 ## Proofs
 
-`crates/guide-check` (SPEC 24) and `crates/outq` (SPEC 29) are proved in Lean with Aeneas (`proofs/`). They stay in the Aeneas subset:
+`crates/guide-check` (SPEC 24), `crates/git-argcheck` (SPEC 24.1) and `crates/outq` (SPEC 29) are proved in Lean with Aeneas (`proofs/`). They stay in the Aeneas subset:
 - `while` loops and small functions. No `?`, no closures, no `&&` or `||` in a loop condition, no iterators.
 - A `return` inside a loop only when the loop is the last statement.
 - No add that can overflow: loop with an index `k < bound`, not `l <= to`.
 - No `VecDeque`, `HashMap`, `pop` or `remove`: Aeneas has no model of them. Use a `Vec` and an index.
-After a change to `guide-check` or `outq`, run `scripts/check-proofs.sh`. It regenerates `proofs/GuideCheck/Code` and `proofs/OutQ/Code`; commit them too. Never weaken a statement in `proofs/Statements.lean` to make a proof pass.
+After a change to `guide-check`, `git-argcheck` or `outq`, run `scripts/check-proofs.sh`. It regenerates `proofs/GuideCheck/Code`, `proofs/GitArgCheck/Code` and `proofs/OutQ/Code`; commit them too. CI fails when a proved crate changes and its `Code/Source.sha256` does not. `scripts/install-proof-tools.sh` installs Charon and Aeneas. Never weaken a statement in `proofs/Statements.lean` to make a proof pass.
 
 After a change to the permission flow (`sb permit`, `on_permit`, `permit_answer`, `answer_permits`), run `scripts/check-models.sh` and keep `models/permit.qnt` true (SPEC 25).
 After a change to remote mode (`remote.rs`: takeover, `run`, the writer, the screen thread; `dispatch::ORDERED`; the lane in the app; `expand` in `web/app.js`), run it too and keep `models/remote.qnt` true (SPEC 29). All window traffic of `sb serve` goes through the writer thread: never write to the socket from another thread.
