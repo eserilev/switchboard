@@ -26,22 +26,27 @@
   check("unseen tiles get the class", $$(".pane.unseen").length === 2);
   check("tally lists needs before turn", /1 needs you.*1 your turn/.test($("#tally").textContent), $("#tally").textContent);
   check("ANSI is stripped from tails", !$("#board").textContent.includes("\x1b") && $("#board").textContent.includes("test result: ok"));
-  check("rss shows in GB", $("#board").textContent.includes("ra 2.4 GB"));
+  // The shell (SPEC 33): a wide rail on the Board, one 52 px header, no tab bar.
+  check("the rail is wide on the Board, with Board, Tasks, Work and Reviews", document.body.classList.contains("rail-wide") && Math.round($("#rail").getBoundingClientRect().width) === 184
+    && $$("#tabs .nav").map((b) => b.querySelector(".nl").textContent).join() === "Board,Tasks,Work,Reviews" && $('#tabs [data-tab="board"]').getAttribute("aria-current") === "page",
+    `${$("#rail").getBoundingClientRect().width} ${$$("#tabs .nav").map((b) => b.textContent).join("|")}`);
+  check("the board header is 52 px, with the state chips and Next waiting", Math.round($("#bhead").getBoundingClientRect().height) === 52 && !!$('#tally [data-jump="needs"]') && !!$("#bnext") && !$("#bhead h1"));
+  check("the leader shows only while it waits for its key", $("#leader").hidden);
+  check("each state chip has the shape of its lamp", $('#tally [data-jump="needs"] svg.lamp')?.dataset.shape === "needs" && $('#tally [data-jump="turn"] svg.lamp')?.dataset.shape === "turn");
   check("permit buttons on the tile", !!$('[data-allow="p2-1"]') && !!$('[data-deny="p2-1"]'));
   check("nvim tile has no nvim button", !$('.pane[data-id="p3"] [data-nvim]'));
   check("connection button shows a", $("#conn").textContent === "a");
-  check("a sandboxed agent says sandbox on its info line, others do not (SPEC 31)",
-    $('.pane[data-id="p2"] .pmeta .meta')?.textContent.endsWith("· sandbox") && !$('.pane[data-id="p1"] .pmeta .meta')?.textContent.includes("sandbox"),
-    $('.pane[data-id="p2"] .pmeta .meta')?.textContent);
   {
-    // The title row has only the name, the state and Close: the tool buttons sit on
-    // the info line, so a long name keeps its room.
+    // The title row has only the unseen dot, the name and the state: the chips and
+    // the buttons sit on the last row, so a long name keeps its room.
     const row = $('.pane[data-id="p1"] .ptitle');
-    check("the title row holds only the name, the state and Close", [...row.querySelectorAll("button")].map((b) => b.getAttribute("aria-label")).join() === "Close"
-      && $$('.pane[data-id="p1"] .pmeta .ptools [data-ptaskmenu], .pane[data-id="p1"] .pmeta .ptools [data-lreview], .pane[data-id="p1"] .pmeta .ptools [data-part="nvim"]').length === 3);
+    check("the title row holds only the name and the state; the last row holds the chips and the task", !row.querySelector("button") && row.querySelector(".state")?.textContent === "Your turn"
+      && $$('.pane[data-id="p1"] .pfoot [data-part]').length === 2 && !!$('.pane[data-id="p1"] .pfoot [data-ptask]'), $('.pane[data-id="p1"]').innerHTML);
     const name = $('.pane[data-id="p1"] .name');
-    check("the name takes most of the title row", name.getBoundingClientRect().width > row.getBoundingClientRect().width * 0.6, `${name.getBoundingClientRect().width} of ${row.getBoundingClientRect().width}`);
-    check("the task button shows with no hover", getComputedStyle($('.pane[data-id="p2"] [data-ptaskmenu]')).display !== "none");
+    check("the name takes most of the title row", name.getBoundingClientRect().width > row.getBoundingClientRect().width * 0.5, `${name.getBoundingClientRect().width} of ${row.getBoundingClientRect().width}`);
+    check("the nvim and term chips show with no hover (SPEC 28.3)", getComputedStyle($('.pane[data-id="p2"] [data-part="nvim"]')).display !== "none" && getComputedStyle($('.pane[data-id="p2"] [data-part="term"]')).display !== "none");
+    check("an unseen tile has a dot, a seen one none", getComputedStyle($('.pane[data-id="p1"] .udot')).display !== "none" && getComputedStyle($('.pane[data-id="p3"] .udot')).display === "none");
+    check("a tile shows two tail lines at most, with no ANSI", $('.pane[data-id="p1"] .term-tail').textContent === "test result: ok\nDone.", JSON.stringify($('.pane[data-id="p1"] .term-tail').textContent));
   }
   check("worktree tile is named by branch", $('.pane[data-id="p2"] .name').textContent === "il", $('.pane[data-id="p2"] .name').textContent);
 
@@ -50,11 +55,12 @@
     const from = $('.pane[data-id="p3"]').getBoundingClientRect();
     const to = $('.pane[data-id="p1"]').getBoundingClientRect();
     const pt = (x, y) => ({ clientX: x, clientY: y, bubbles: true, button: 0, pointerId: 1 });
-    $('.pane[data-id="p3"] .term-tail').dispatchEvent(new PointerEvent("pointerdown", pt(from.left + 40, from.top + 150)));
-    window.dispatchEvent(new PointerEvent("pointermove", pt(from.left + 30, from.top + 150)));
-    window.dispatchEvent(new PointerEvent("pointermove", pt(to.left + 20, to.top + 150)));
+    const fy = from.top + from.height / 2, ty = to.top + to.height / 2;
+    $('.pane[data-id="p3"] .term-tail').dispatchEvent(new PointerEvent("pointerdown", pt(from.left + 40, fy)));
+    window.dispatchEvent(new PointerEvent("pointermove", pt(from.left + 30, fy)));
+    window.dispatchEvent(new PointerEvent("pointermove", pt(to.left + 20, ty)));
     check("drag marks the drop side", $('.pane[data-id="p1"]').classList.contains("drop-before"));
-    window.dispatchEvent(new PointerEvent("pointerup", pt(to.left + 20, to.top + 150)));
+    window.dispatchEvent(new PointerEvent("pointerup", pt(to.left + 20, ty)));
     $('.pane[data-id="p3"] .term-tail')?.click();
     await wait(50);
     const order = called("pane_reorder")[0]?.[1].ids;
@@ -63,6 +69,47 @@
     check("a drag is not a click", !called("pane_expand").length);
     window.__emit("panes", structuredClone(window.__data.panes));
     await wait(50);
+  }
+
+  // The inspector (SPEC 33): closed at first; Leader i opens it on the focused tile.
+  {
+    const facts = () => Object.fromEntries($$("#insp .ifacts dt").map((d) => [d.textContent, d.nextElementSibling.textContent]));
+    check("the inspector starts closed, with its toggle in the header", $("#insp").hidden && !$("#itoggle").hidden && $("#itoggle").getAttribute("aria-pressed") === "false");
+    $('.pane[data-id="p1"]').focus();
+    await wait(60);
+    key(" ", { ctrl: true, code: "Space" });
+    key("i");
+    await wait(20);
+    check("Leader i opens the inspector of the focused tile, 280 px wide", !$("#insp").hidden && Math.round($("#insp").getBoundingClientRect().width) === 280 && $("#insp .ititle").textContent === "lighthouse" && $("#itoggle").getAttribute("aria-pressed") === "true",
+      `${$("#insp").hidden} ${$("#insp").getBoundingClientRect().width} ${$("#insp .ititle")?.textContent}`);
+    check("the inspector shows the repo, the branch and the rust-analyzer memory", facts().Repo === "lighthouse" && facts().Branch === "unstable" && facts()["rust-analyzer"] === "2.4 GB" && !facts().Bash && facts().Task === "Review PR 10071", JSON.stringify(facts()));
+    check("the inspector has the repeat actions, then Close pane at the end", $$("#insp .iacts [data-iact]").map((b) => b.dataset.iact).join() === "lreview,taskmenu,rename,left,right" && $$("#insp .idanger [data-iact]").map((b) => b.dataset.iact).join() === "close",
+      $$("#insp [data-iact]").map((b) => b.dataset.iact).join());
+    check("the open inspector is remembered for the board", localStorage.getItem("sb.insp.board") === "1");
+    $('.pane[data-id="p2"]').focus();
+    await wait(80);
+    check("a sandboxed agent says so in the inspector, others do not (SPEC 31)", facts().Bash === "sandbox" && $("#insp .ititle").textContent === "il", JSON.stringify(facts()));
+    check("Allow is gold on the focused tile", $('[data-allow="p2-1"]').classList.contains("primary"));
+    $('.pane[data-id="p1"]').focus();
+    await wait(80);
+    check("Allow is neutral on a tile without the focus", !$('[data-allow="p2-1"]').classList.contains("primary") && facts().Repo === "lighthouse");
+    $('#insp [data-iact="close"]').click();
+    await wait(20);
+    check("Close pane in the inspector closes the focused pane", called("pane_close").at(-1)?.[1].id === "p1");
+    const t3 = $('.pane[data-id="p3"]');
+    t3.focus();
+    t3.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    await wait(20);
+    check("Delete on a focused tile closes its pane", called("pane_close").at(-1)?.[1].id === "p3");
+    window.SB.setTab("tasks");
+    await wait(30);
+    check("the Tasks screen has no inspector, and the rail is narrow there", $("#insp").hidden && $("#itoggle").hidden && Math.round($("#rail").getBoundingClientRect().width) === 52 && !document.body.classList.contains("rail-wide"));
+    window.SB.setTab("board");
+    await wait(30);
+    check("back on the board its inspector is open again", !$("#insp").hidden);
+    $("#itoggle").click();
+    await wait(20);
+    check("the toggle closes it, and that is remembered", $("#insp").hidden && localStorage.getItem("sb.insp.board") === "0");
   }
 
   $('[data-allow="p2-1"]').click();
@@ -159,7 +206,7 @@
   check("leader shows", !$("#leader").hidden);
   key("x");
   await wait(100);
-  check("leader x collapses", $("#live").hidden && called("pane_collapse").length === 1);
+  check("leader x collapses, and the leader hides", $("#live").hidden && called("pane_collapse").length === 1 && $("#leader").hidden);
   key(" ", { ctrl: true, code: "Space" });
   key("j");
   await wait(300);
@@ -169,6 +216,15 @@
   window.__emit("pane", Object.assign({}, window.__data.panes[0], { lamp: "limit", unseen: true, summary: "API Error: Rate limit reached", alert: true }));
   await wait(50);
   check("limit tile offers a switch", $('.pane[data-id="p1"] [data-switch]')?.textContent === "Switch to b", "live=" + window.SB.S.live + " board=" + $$("#board .pane").map((p) => p.dataset.id + ":" + p.dataset.lamp).join() + " title=" + $("#livetitle").innerHTML.slice(0, 300));
+  {
+    // A state chip of the board header goes to the next tile in that state.
+    $('#tally [data-jump="limit"]').click();
+    await wait(150);
+    check("a state chip goes to the next tile in its state", called("pane_expand").at(-1)?.[1].id === "p1", JSON.stringify(called("pane_expand").at(-1)));
+    $("#bnext").click();
+    await wait(150);
+    check("Next waiting goes to the most urgent unseen tile", called("pane_expand").at(-1)?.[1].id === "p2", JSON.stringify(called("pane_expand").at(-1)));
+  }
 
   // Launcher
   $("#newpane").click();
@@ -222,12 +278,13 @@
   check("PR URL opens the review tab", called("review_open").length === 2 && called("review_open")[1][1].roundOf === null && !$("#view-review").hidden);
 
   // Review
-  check("review tab button", $$('#tabs [data-tab="r1"]').length === 1);
+  check("the open review is in the Reviews menu and under Reviews on the wide rail", $$('#revmenu [data-tab="r1"]').length === 1 && $$('#revsubs [data-tab="r1"]').length === 1);
   {
-    // Three tabs: Board, Tasks, and Code reviews with a menu of the open reviews.
-    const tabs = $$("#tabs > .tab, #tabs > .revtab > .tab").map((t) => t.textContent.trim());
-    check("the tabs are Board, Tasks, Work environment and Code reviews", tabs.length === 4 && tabs[0] === "Board" && tabs[1] === "Tasks" && tabs[2] === "Work environment" && tabs[3].startsWith("Code reviews"), JSON.stringify(tabs));
-    check("the Code reviews tab shows the open review", $("#revtab").getAttribute("aria-selected") === "true" && $("#revtab .cur")?.textContent === "#10071", $("#revtab").textContent);
+    // The rail is narrow on a review: icons with tooltips that name the Leader key.
+    check("a review tab has the narrow rail and no tab bar", !document.body.classList.contains("rail-wide") && Math.round($("#rail").getBoundingClientRect().width) === 52 && !$(".bar") && !$("#tabs .tab"));
+    check("the rail tooltips name the Leader keys", $('#tabs [data-tab="board"]').title.endsWith("(Leader b)") && $('#tabs [data-tab="tasks"]').title.endsWith("(Leader t)") && $('#tabs [data-tab="work"]').title.endsWith("(Leader w)") && $("#revtab").title.endsWith("(Leader r)"), $("#revtab").title);
+    check("the Board icon has a badge of the tiles that wait on you", $('#tabs [data-tab="board"] .rbadge').textContent !== "" && $('#tabs [data-tab="board"] .rbadge').classList.contains("hot"));
+    check("the Reviews entry shows the open review", $("#revtab").getAttribute("aria-current") === "page" && $("#revtab").title.includes("#10071") && $("#revtab .rbadge").textContent === String(window.SB.S.reviews.size), $("#revtab").title);
     check("the review menu starts closed", $("#revmenu").hidden);
     $("#revtab").click();
     check("a click opens the menu of open reviews", !$("#revmenu").hidden && $$('#revmenu [data-tab]').length === window.SB.S.reviews.size && $("#revmenu").textContent.includes("Add IL transactions"), $("#revmenu").textContent);
@@ -243,6 +300,11 @@
     $("#revtab").click();
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     check("Escape closes the menu", $("#revmenu").hidden);
+    // The inspector of a review: the facts and Close review (phase 2 adds the rest).
+    window.SBInsp.open();
+    check("a review has its own inspector, with its facts and Close review", !$("#insp").hidden && $("#insp").textContent.includes("sigp/lighthouse #10071") && !!$('#insp .idanger [data-iact="close"]') && localStorage.getItem("sb.insp.review") === "1", $("#insp").textContent);
+    window.SBInsp.close();
+    check("the review header leaves room for the inspector toggle", parseInt(getComputedStyle($("#rhead")).paddingRight) >= 60 && $("#rhead").getBoundingClientRect().height >= 52);
   }
   check("steps render", $$("#rsteps .step").length === 2);
   docKey("j");
@@ -823,9 +885,21 @@
   // A review of an agent's unpushed commits (SPEC 11.11).
   window.SB.setTab("board");
   await wait(100);
-  check("a Claude tile has a review button, nvim has none", !!$('.pane[data-id="p1"] [data-lreview]') && !$('.pane[data-id="p3"] [data-lreview]'));
+  {
+    // Review the commits not pushed: in the inspector of an agent; nvim has none.
+    $('.pane[data-id="p3"]').focus();
+    await wait(60);
+    window.SBInsp.open();
+    const nvimHas = !!$('#insp [data-iact="lreview"]');
+    $('.pane[data-id="p1"]').focus();
+    await wait(60);
+    window.SBInsp.refresh();
+    await wait(60);
+    check("the inspector of an agent has Review the commits not pushed, nvim's has none", !nvimHas && !!$('#insp [data-iact="lreview"]'));
+  }
   window.__calls.length = 0;
-  $('.pane[data-id="p1"] [data-lreview]').click();
+  $('#insp [data-iact="lreview"]').click();
+  window.SBInsp.close();
   await wait(400);
   check("review opens a local review of that pane", called("review_open_local")[0]?.[1].pane === "p1" && window.SB.S.tab === "rL", JSON.stringify(called("review_open_local")));
   check("the tab says it is local commits", $('#tabs [data-tab="rL"]')?.textContent.includes("lighthouse commits"));
@@ -1106,7 +1180,8 @@
     key("t");
     await wait(100);
     const tv = $("#view-tasks");
-    check("leader t shows the Tasks tab", !tv.hidden && $("#view-board").hidden && $("#view-review").hidden && $('#tabs [data-tab="tasks"]').getAttribute("aria-selected") === "true");
+    check("leader t shows the Tasks tab", !tv.hidden && $("#view-board").hidden && $("#view-review").hidden && $('#tabs [data-tab="tasks"]').getAttribute("aria-current") === "page");
+    check("the Tasks header is the 52 px header with the sprint name as its title", $(".thead").getBoundingClientRect().height >= 52 && getComputedStyle($(".thead .tsname")).fontSize === "20px");
     check("the board has a column for each status", $$("#view-tasks .tcol").map((c) => c.dataset.status).join() === "todo,doing,blocked,review,done");
     check("cards sit in their status columns", $('.tcol[data-status="doing"] [data-task="t1"]') && $('.tcol[data-status="blocked"] [data-task="t3"]') && !$('#view-tasks .tboard [data-task="t5"]'));
     check("a blocked card shows who blocks it", $('[data-task="t3"]').textContent.includes("Blocked by spec PR 4512"));
@@ -1375,25 +1450,35 @@
     // The task menu of a tile.
     window.SB.setTab("board");
     await wait(50);
-    check("an nvim tile has no task menu", !$('.pane[data-id="p3"] [data-ptaskmenu]'));
-    const tm = $('.pane[data-id="p2"] [data-ptaskmenu]');
-    tm.click();
+    // Link to a task is in the inspector of the focused tile.
+    const tm = () => $('#insp [data-iact="taskmenu"]');
+    $('.pane[data-id="p3"]').focus();
+    await wait(60);
+    window.SBInsp.open();
+    check("an nvim tile has no task menu", !tm() && $("#insp .ititle").textContent === "timeways · nvim", $("#insp .ititle").textContent);
+    $('.pane[data-id="p2"]').focus();
+    await wait(60);
+    window.SBInsp.refresh();
+    await wait(60);
+    tm().click();
     await wait(30);
-    tm.click();
+    check("the task button opens the task menu", !$("#taskmenu").hidden);
+    tm().click();
     await wait(30);
     check("a second click on the task button closes the menu", $("#taskmenu").hidden);
-    $('.pane[data-id="p2"] [data-ptaskmenu]').click();
+    tm().click();
     await wait(30);
     check("the tile task menu offers a new task and open tasks", !$("#taskmenu").hidden && $("#taskmenu").textContent.includes("New task from this pane") && $("#taskmenu").textContent.includes("Unlink from"));
     $('#taskmenu [data-tm="link"]').click();
     await wait(80);
     check("a pick in the menu links the pane", called("task_link").slice(-1)[0]?.[1].pane === "p2" && $("#taskmenu").hidden);
-    $('.pane[data-id="p2"] [data-ptaskmenu]').click();
+    tm().click();
     await wait(30);
     $('#taskmenu [data-tm="new"]').click();
     await wait(120);
     const na = called("task_add").slice(-1)[0]?.[1].task;
     check("New task from this pane adds a task and links it", na?.title === "il" && na.repo === "/c/lighthouse" && called("task_link").slice(-1)[0]?.[1].pane === "p2", JSON.stringify(na));
+    window.SBInsp.close();
     $('.pane[data-id="p2"] .ptask').click();
     await wait(50);
     check("the task line of a tile opens the task", !$("#view-tasks").hidden && $(".tpanel")?.dataset.panel === called("task_link").slice(-1)[0]?.[1].task);
@@ -1695,9 +1780,11 @@
     check("the hub gets the size of the nvim terminal", [...called("pane_attach"), ...called("part_resize")].filter((c) => c[1].id === "pn1").length && [...window.__calls].reverse().find((c) => (c[0] === "pane_attach" || c[0] === "part_resize") && c[1].id === "pn1")?.[1].cols === PT.T.nvim.term.cols && PT.T.nvim.term.cols > 10, JSON.stringify(called("pane_attach").at(-1)?.[1]) + " " + PT.T.nvim.term.cols);
     check("nvim draws its screen in its own terminal", text(PT.T.nvim.term).includes("part pn1") && !screen().includes("part pn1"));
     check("the nvim of an agent has no tile", !$('#board .pane[data-id="pn1"]') && !!$('#board .pane[data-id="p3"]'));
-    check("the agent tile shows a running nvim chip", /● nvim/.test($('.pane[data-id="p1"] [data-part="nvim"]')?.textContent || ""), $('.pane[data-id="p1"] .ptools')?.innerHTML);
+    check("the agent tile shows a running nvim chip", $('.pane[data-id="p1"] [data-part="nvim"]')?.classList.contains("on") && !!$('.pane[data-id="p1"] [data-part="nvim"] .cdot'), $('.pane[data-id="p1"] .pfoot')?.innerHTML);
     check("the live title shows nvim pressed", $('#livetitle [data-ptoggle="nvim"]')?.getAttribute("aria-pressed") === "true" && $('#livetitle [data-ptoggle="term"]')?.getAttribute("aria-pressed") === "false");
     check("the nvim header has the keys", $("#pnvim .parthead").classList.contains("on") && !$("#pagent .parthead").classList.contains("on"));
+    check("a part header is slim: its name, and zoom only on the part with the keys", Math.round($("#pnvim .parthead").getBoundingClientRect().height) === 24 && !$("#pnvim .parthead [data-stop], #pnvim .parthead [data-hide]")
+      && getComputedStyle($("#pnvim .parthead [data-zoom]")).display !== "none" && getComputedStyle($("#pagent .parthead [data-zoom]")).display === "none");
     leader("s");
     await wait(150);
     check("Leader s opens the shell under the agent", called("shell_open").at(-1)?.[1].tree === "/c/lighthouse" && !$("#pterm").hidden && !$("#pnvim").hidden && $("#pterm").parentElement === $("#lleft"));
@@ -1736,10 +1823,13 @@
     leader("o");
     await wait(30);
     check("Leader o goes to the next part", PT.P.focus === "nvim");
-    $('#pnvim [data-hide="nvim"]').click();
+    window.SBInsp.open();
+    check("the inspector of the live agent has its parts: show or hide, the sizes, stop", ["hide-nvim", "hide-term", "reset"].every((a) => !!$(`#insp .iacts [data-iact="${a}"]`)) && !!$('#insp .idanger [data-iact="stop-nvim"]') && !!$('#insp .idanger [data-iact="stop-term"]'),
+      $$("#insp [data-iact]").map((b) => b.dataset.iact).join());
+    $('#insp [data-iact="hide-nvim"]').click();
     await wait(60);
-    check("× hides nvim and it keeps running", $("#pnvim").hidden && called("pane_detach").at(-1)?.[1].id === "pn1" && !called("pane_close").some((c) => c[1].id === "pn1"));
-    check("the top bar counts the hidden parts", $("#tally .phidden")?.textContent === "1 hidden", $("#tally").innerHTML);
+    check("Hide nvim hides it and it keeps running", $("#pnvim").hidden && called("pane_detach").at(-1)?.[1].id === "pn1" && !called("pane_close").some((c) => c[1].id === "pn1"));
+    check("the Board tooltip counts the hidden parts", $('#tabs [data-tab="board"]').title.includes("1 part runs hidden"), $('#tabs [data-tab="board"]').title);
     window.SB.collapse();
     await wait(90);
     check("a collapse hides the parts", $("#pterm").hidden && !$("#lparts").classList.contains("split") && PT.T.term.id === null);
@@ -1756,19 +1846,22 @@
     window.__emit("pane", Object.assign(structuredClone(window.__data.panes.find((x) => x.id === "pn1")), { modified: true }));
     await wait(90);
     check("a buffer that is not saved shows [+] on the chip and in the header", /\[\+\]/.test($('.pane[data-id="p1"] [data-part="nvim"]')?.textContent || "") && $("#pnvim .parthead .pmod")?.textContent === "[+]");
-    $('#pnvim [data-stop="nvim"]').click();
-    await wait(30);
-    check("Stop asks first when a buffer is not saved", !!$("#pnvim [data-stopyes]") && !called("pane_close").some((c) => c[1].id === "pn1"));
-    $("#pnvim [data-stopyes]").click();
+    window.SBInsp.refresh();
+    await wait(60);
+    $('#insp [data-iact="stop-nvim"]').click();
+    await wait(80);
+    check("Stop asks first when a buffer is not saved", !!$('#insp .ialert [data-iact="stopyes-nvim"]') && !called("pane_close").some((c) => c[1].id === "pn1"));
+    $('#insp [data-iact="stopyes-nvim"]').click();
     await wait(90);
     check("Stop anyway closes nvim", called("pane_close").some((c) => c[1].id === "pn1") && $("#pnvim").hidden);
     window.__emit("nvim_reloaded", "/c/lighthouse");
     window.__emit("pane", Object.assign(structuredClone(window.__data.panes.find((x) => x.id === "ps1")), { busy: true }));
     await wait(90);
-    check("a busy shell shows ▸ on the chip", /▸ term/.test($('.pane[data-id="p1"] [data-part="term"]')?.textContent || ""), $('.pane[data-id="p1"] .ptools')?.innerHTML);
+    check("a busy shell shows ▸ on the chip", /term ▸/.test($('.pane[data-id="p1"] [data-part="term"]')?.textContent || ""), $('.pane[data-id="p1"] .pfoot')?.innerHTML);
     window.__emit("pane", Object.assign(structuredClone(window.__data.panes.find((x) => x.id === "ps1")), { busy: false }));
     await wait(90);
-    check("an ended command shows ✓ done for a short time", /✓ term done/.test($('.pane[data-id="p1"] [data-part="term"]')?.textContent || ""));
+    check("an ended command shows ✓ done for a short time", /term ✓ done/.test($('.pane[data-id="p1"] [data-part="term"]')?.textContent || ""));
+    window.SBInsp.close();
     // Without an agent, the shell gets its tile back.
     window.SB.collapse();
     window.__data.panes = window.__data.panes.filter((x) => x.id !== "pn1");
@@ -1958,6 +2051,23 @@
       JSON.stringify({ live: S.live, host: S.termHost, parent: $("#live").parentElement?.id, shown: window.SBParts.P.shown }));
     check("nvim takes the left half", nv.right <= ag.left + 1 && Math.abs(nv.width - lp.width / 2) < lp.width * 0.08, JSON.stringify({ nv, lp }));
     check("Claude is top right and the terminal under it", tm.top >= ag.bottom - 1 && Math.abs(tm.left - ag.left) < 2 && ag.left > lp.left + lp.width / 3, JSON.stringify({ ag, tm }));
+    check("the Work header: the repo picker is the title, then the checkout and branch, and the agent's state", getComputedStyle($("#wrepo")).fontSize === "20px" && $("#wmeta").textContent === "main checkout · unstable" && $("#wstate").textContent === "Claude: Your turn" && $("#wbar").getBoundingClientRect().height === 52 && $("#wgo").hidden,
+      $("#wbar").textContent);
+    check("the Work tab has no live title: the header has the state", getComputedStyle($("#livetitle")).display === "none");
+    {
+      // The inspector of the work tab: closed at first, its own memory, the parts.
+      check("the work inspector starts closed", $("#insp").hidden && !$("#itoggle").hidden);
+      window.SBInsp.toggle();
+      const wkey = `sb.parts.work.${repo}`;
+      check("the work inspector has the facts, Hide nvim, Hide the terminal and Reset the sizes", $("#insp .ititle").textContent === "Work details" && $("#insp .ifacts").textContent.includes("nvim")
+        && ["hide-nvim", "hide-term", "reset", "lreview"].every((a) => !!$(`#insp [data-iact="${a}"]`)) && !!$('#insp [data-iact="stop-term"]'), $$("#insp [data-iact]").map((b) => b.dataset.iact).join());
+      $('#insp [data-iact="reset"]').click();
+      let saved = null;
+      try { saved = JSON.parse(localStorage.getItem(wkey) || "{}"); } catch (_) { /* no storage */ }
+      check("Reset the sizes clears the divider sizes of the tab", saved && saved.nvimW == null && saved.termH == null, JSON.stringify(saved));
+      window.SBInsp.toggle();
+      check("the work inspector closes, and the board's stays as it was", $("#insp").hidden && localStorage.getItem("sb.insp.work") === "0" && localStorage.getItem("sb.insp.board") === "0");
+    }
     check("nvim and the shell open in the repo", called("nvim_open").some((c) => c[1].tree === repo) && called("shell_open").some((c) => c[1].tree === repo));
     let kept = boardLayout;
     try { kept = localStorage.getItem(layoutKey); } catch (_) { /* no storage */ }
@@ -2017,12 +2127,18 @@
     await window.SB.expand("pb1");
     await wait(100);
     const t = $('#board .pane[data-id="p2"]');
-    const x = t.querySelector("[data-close]");
+    const x = t.querySelector("[data-allow]");
     const col = $("#livetitle [data-collapse]");
     window.__emit("pane", { ...now("p2"), tail: ["a new tail line"], summary: "a new summary", rss: 3 * 1073741824 });
     window.__emit("pane", { ...now("pb1"), tail: ["more"], summary: "pb1 works" });
     await wait(100);
-    check("a pane event keeps the tile and its buttons, and shows the change", $('#board .pane[data-id="p2"]') === t && x.isConnected && t.textContent.includes("a new tail line") && t.textContent.includes("a new summary") && t.textContent.includes("ra 3.0 GB"), t.textContent);
+    check("a pane event keeps the tile and its buttons, and shows the change", $('#board .pane[data-id="p2"]') === t && x.isConnected && t.textContent.includes("a new tail line") && t.textContent.includes("a new summary"), t.textContent);
+    {
+      S.focus = "p2";
+      window.SBInsp.open();
+      check("the inspector shows the change too", $("#insp").textContent.includes("3.0 GB"), $("#insp").textContent);
+      window.SBInsp.close();
+    }
     check("a pane event keeps the buttons of the live title", col.isConnected && $("#livetitle [data-collapse]") === col);
     {
       const list = structuredClone(S.panes);
@@ -2040,7 +2156,7 @@
     $('#tabs [data-tab="work"]').click();
     await upto(() => S.live === "p9" && S.termHost === "work" && window.SBParts.P.shown.term);
     await wait(100);
-    const sel = $("#wrepo"), go = $("#wgo"), stop = $("#pterm .parthead [data-stop]");
+    const sel = $("#wrepo"), go = $("#wgo"), stop = $("#pterm .parthead [data-zoom]");
     window.__emit("panes", structuredClone(S.panes));
     window.__emit("pane", { ...now("p9"), tail: ["busy"] });
     await wait(100);
