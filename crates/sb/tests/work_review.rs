@@ -105,6 +105,10 @@ fn review_uncommitted_work_in_steps() {
     assert_eq!((v.base.as_str(), v.range.as_str(), v.reviewed), (base.as_str(), "new", false));
     assert_ne!(v.head, head, "the head is a snapshot of the work tree");
     assert!(v.title.starts_with("1 commit and uncommitted work on a detached HEAD"), "{}", v.title);
+    // The commits of the view, for the inspector: the agent's one commit, not the snapshot.
+    let ids: Vec<(String, String)> = v.commits.iter().map(|c| (c.id.clone(), c.subject.clone())).collect();
+    assert_eq!(ids, [(g(&wt, &["rev-parse", "--short", "HEAD"]), "b.rs".to_owned())]);
+    assert_eq!(v.reviewed_at, None);
     assert_eq!(files(&id), ["a.rs", "b.rs", "c.rs"]);
     assert_eq!(g(&wt, &["status", "--porcelain"]), status, "the snapshot changed the agent's files or index");
     assert_eq!(g(&wt, &["rev-parse", "HEAD"]), head);
@@ -119,6 +123,8 @@ fn review_uncommitted_work_in_steps() {
     let v = hub.review_view(&id).unwrap();
     assert!(v.title.starts_with("Since you marked reviewed"), "{}", v.title);
     assert!(files(&id).is_empty(), "{:?}", files(&id));
+    assert_eq!(v.reviewed_at.as_deref(), Some(head.as_str()), "the commit the mark was on");
+    assert!(v.commits.is_empty(), "{:?}", v.commits);
 
     // The agent's turn ends with a new file: the review shows New changes.
     std::fs::write(wt.join("d.rs"), "fn d() {}\n").unwrap();

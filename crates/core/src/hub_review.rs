@@ -47,6 +47,10 @@ pub(crate) struct ReviewState {
     pub head_commit: Option<String>,
     /// A local review: Mark reviewed was pressed, so `new` has a start.
     pub reviewed: bool,
+    /// A local review: the commit that Mark reviewed was on, and the commits of the
+    /// view, newest first (at most `COMMITS_MAX`). In memory only.
+    pub reviewed_at: Option<String>,
+    pub commits: Vec<CommitLine>,
     /// What the last answer of the Ask pane refers to (SPEC 11.15). In memory only.
     pub mentions: Vec<crate::mentions::Mention>,
     /// The places of the last `review_show` call. In memory only.
@@ -78,6 +82,8 @@ impl ReviewState {
             range: "new".into(),
             head_commit: None,
             reviewed: false,
+            reviewed_at: None,
+            commits: vec![],
             mentions: vec![],
             show: None,
             pending_turn: false,
@@ -183,6 +189,10 @@ pub struct ReviewView {
     pub range: String,
     /// A local review: Mark reviewed was pressed, so `new` has a start.
     pub reviewed: bool,
+    /// A local review: the commit that Mark reviewed was on.
+    pub reviewed_at: Option<String>,
+    /// A local review: the commits of the view, newest first.
+    pub commits: Vec<CommitLine>,
     /// What the last answer of the Ask pane refers to (SPEC 11.15).
     pub mentions: Vec<crate::mentions::Mention>,
     /// The places of the last `review_show` call.
@@ -197,6 +207,16 @@ pub struct PostPreview {
     pub plan: crate::post::Plan,
     pub token: String,
 }
+
+/// One commit of a local review, for the list in the inspector.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct CommitLine {
+    pub id: String,
+    pub subject: String,
+}
+
+/// A local review lists at most this many commits.
+pub const COMMITS_MAX: usize = 30;
 
 #[derive(Serialize, Clone, Debug)]
 pub struct StepState {
@@ -478,6 +498,8 @@ impl Hub {
             dismissed: store.dismissed(id).map_err(e)?,
             range: r.range.clone(),
             reviewed: r.reviewed,
+            reviewed_at: r.reviewed_at.clone(),
+            commits: r.commits.clone(),
             mentions: r.mentions.clone(),
             show: r.show.clone(),
         })
@@ -695,12 +717,20 @@ impl Hub {
         let branch = repos::git(dir, &["symbolic-ref", "--short", "-q", "HEAD"]).unwrap_or_default();
         let on = if branch.is_empty() { "a detached HEAD".to_owned() } else { branch };
         let has_reviewed = reviewed.is_some();
+        // A snapshot's own parent is the HEAD it was made on.
+        let rv_head = reviewed.as_ref().map(|rv| {
+            let snapped = repos::git(dir, &["log", "-1", "--format=%s", rv]).unwrap_or_default().starts_with(review::SNAP_SUBJECT);
+            if snapped {
+                format!("{rv}^")
+            } else {
+                rv.clone()
+            }
+        });
+        let reviewed_at = rv_head.as_deref().and_then(|h| repos::git(dir, &["rev-parse", "--verify", "-q", &format!("{h}^{{commit}}")]).ok());
         let (base, title, mut note) = match reviewed.filter(|_| mode == "new") {
             Some(rv) => {
                 let mut note = "The changes since you marked the work reviewed.".to_owned();
-                // A snapshot's own parent is the HEAD it was made on.
-                let snapped = repos::git(dir, &["log", "-1", "--format=%s", &rv]).unwrap_or_default().starts_with(review::SNAP_SUBJECT);
-                let rv_head = if snapped { format!("{rv}^") } else { rv.clone() };
+                let rv_head = rv_head.clone().unwrap_or_else(|| rv.clone());
                 if repos::git(dir, &["merge-base", "--is-ancestor", &rv_head, &snap.head]).is_err() {
                     note += " HEAD moved off the commit you reviewed (a reset, a rebase or another branch), so this shows the whole difference.";
                 }
@@ -716,6 +746,7 @@ impl Hub {
         if !snap.skipped.is_empty() {
             note += &format!(" Left out, bigger than {} MB: {}.", review::SNAP_MAX >> 20, snap.skipped.join(", "));
         }
+        let commits = commit_lines(dir, &base, &snap.head);
         // The ref keeps the snapshot from `git gc` while the view shows it. Written
         // first, then the row is checked: a close that took the row before the check
         // has maybe dropped the refs already, so this drops them again (no leak).
@@ -734,6 +765,8 @@ impl Hub {
                 r.new_head = None;
                 r.head_commit = Some(snap.head);
                 r.reviewed = has_reviewed;
+                r.reviewed_at = reviewed_at;
+                r.commits = commits;
                 r.base_ref = base_ref;
                 r.base_label = base_label;
                 r.bases = bases;
@@ -3220,6 +3253,22 @@ fn thread_prompt(step: &Value, t: &ThreadRow, pins: &[String], question: &str) -
     p += "\nDo not call the guide tools. Respond tersely.\n\nQuestion: ";
     p += question;
     p
+}
+
+/// The commits of a local view, newest first: `base..head`, at most `COMMITS_MAX`.
+/// A failed `git log` gives no list; the view still loads.
+fn commit_lines(dir: &Path, base: &str, head: &str) -> Vec<CommitLine> {
+    let range = format!("{base}..{head}");
+    let max = format!("-n{COMMITS_MAX}");
+    let fmt = "--format=%h%x09%s";
+    // The base of a root commit is the empty tree, which is no commit: every commit counts.
+    let root = repos::git(dir, &["rev-parse", "--verify", "-q", &format!("{base}^{{commit}}")]).is_err();
+    let out = if root { repos::git(dir, &["log", &max, fmt, head, "--"]) } else { repos::git(dir, &["log", &max, fmt, &range, "--"]) };
+    let out = out.unwrap_or_default();
+    out.lines()
+        .filter_map(|l| l.split_once('\t'))
+        .map(|(id, subject)| CommitLine { id: id.to_owned(), subject: subject.to_owned() })
+        .collect()
 }
 
 /// A line for the review header about pages the agent could not fetch, so a spec
