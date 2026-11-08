@@ -83,16 +83,18 @@ Rules for review sessions, from your memory files:
 
 ### 6.1 Tiles
 
-The board is a grid of tiles. A tile shows:
+The board is a grid of tiles under the live pane. Its header (33) has a chip for each state that waits on you, with its count and the shape of its lamp, and **Next waiting** (Leader `j`). A click on a chip opens the next unseen tile in that state. The board has no title and no list of what waits: the tiles show it. A tile shows:
 
-- The title in large condensed capitals. The default is the branch for a new worktree, or the repo name.
-- The lamp: a soft tint and a 4 px stripe in the title bar, and a border in the state color.
-- The meta line: repo, branch, connection, and rust-analyzer memory when it runs.
-- The summary line (6.4).
-- The last 4 lines of the pane, from `tmux capture-pane -p -e`.
-- The actions for the state: Allow and Deny for Needs you, Switch for Limit.
+- The title in condensed capitals (Archivo, 15 px, 700). The default is the branch for a new worktree, or the repo name. A small dot before it: the tile is unseen (6.3).
+- The state: its word and the shape of its lamp (6.2).
+- One summary line (6.4).
+- The last 2 lines of the pane, from `tmux capture-pane -p -e`.
+- The nvim and term chips (28.3), the task chip (27.6), and the buttons of the state: Allow and Deny for Needs you, Trust and Exit for the trust dialog, Switch for Limit, Resume for an ended or failed agent. The buttons are neutral; Allow is the gold primary only on the focused tile.
+- The focused tile has a 1 px light border.
 
-Expand a tile, and it becomes the live pane. It takes the full width and shows the full scrollback. The tile stays in its place on the board, so the other tiles do not move. Its border and title bar turn light blue. A click on it goes to the live terminal. The live pane stays open when you go to another tab. A review tab can take the terminal for its Claude pane; back on the board, the board pane opens again with its parts. Only Collapse closes it.
+The rest is in the inspector (33): repo, branch, folder, connection, rust-analyzer memory, the sandbox, the task; Review the commits not pushed, Link to a task, Rename, Move left and right; and Close pane. Delete on a focused tile closes its pane too, and Enter opens it.
+
+Expand a tile, and it becomes the live pane. It takes the full width and shows the full scrollback. Its title line has the name, the state, the repo and branch, the task chip, the buttons of the state, Review, the nvim and term switches, and Collapse. The tile stays in its place on the board, so the other tiles do not move. Its border turns light blue and its state says live. A click on it goes to the live terminal. The live pane stays open when you go to another tab. A review tab can take the terminal for its Claude pane; back on the board, the board pane opens again with its parts. Only Collapse closes it.
 Only one pane is live at a time. The Claude TUI never draws at tile width, so many panes fit on a small screen.
 
 ### 6.2 Lamps
@@ -106,6 +108,7 @@ Only one pane is live at a time. The Claude TUI never draws at tile width, so ma
 | Error | An API error ended the turn, or the agent crashed. | `StopFailure`; tmux pane exit with a non-zero code |
 | Idle | A new pane before the first prompt. | Pane start |
 
+Each lamp has a shape, so a state reads without its color: Needs you a gold diamond, Your turn a green dot, Working a dashed ring, Limit a purple square (the Claude purple), Error a red triangle, Idle a ring, Ended a ring with a stroke.
 nvim and shell panes have no lamp. They have a dashed border.
 
 Rules:
@@ -121,7 +124,7 @@ Rules:
 - A lamp that turns on sets the tile to unseen.
 - Expand the tile, or type into the pane, to clear it. Focus alone does not clear it.
 - If the window is not focused when a lamp turns on, the app sends a desktop notification (`osascript` on macOS, `notify-send` on Linux) and sets the window urgency hint.
-- The tally in the top bar counts unseen tiles for each state: Needs you, Limit, Error, Your turn.
+- The chips of the board header count unseen tiles for each state: Needs you, Limit, Error, Your turn. The Board icon of the rail has a badge with their sum.
 - Leader, `j` opens the next unseen tile. The order is Needs you, Limit, Error, Your turn.
 
 ### 6.4 Summary line
@@ -174,7 +177,7 @@ A live pane gets every key you type. Esc in Claude Code stops the agent. So app 
 
 | Keys | Action |
 |---|---|
-| `Ctrl+Space` | Leader. The next key goes to the app. The leader times out after 1.5 s. |
+| `Ctrl+Space` | Leader. The next key goes to the app. The leader times out after 1.5 s. A small gold mark at the bottom left shows only while it waits. |
 | Leader, `x` | Expand the focused tile, or collapse the live pane. With a zoomed part (28), take the zoom back first. |
 | Leader, `j` / `k` | Next or previous unseen tile. |
 | Leader, `H` `J` `K` `L` | Move focus between tiles. |
@@ -184,12 +187,14 @@ A live pane gets every key you type. Esc in Claude Code stops the agent. So app 
 | Leader, `h` / `l` | The keys go to the part on the left or the right (28). |
 | Leader, `z` | Zoom the part with the keys to the whole live pane, or take the zoom back (28). |
 | Leader, `n` | Launcher. |
+| Leader, `i` | Open or close the inspector of the screen (33). |
 | Leader, `r` | Review tab. |
 | Leader, `b` | Board tab. |
 | Leader, `t` | Tasks tab (27). |
 | Leader, `w` | Work environment tab (30). |
 | Leader, `a` | Switch the active connection. |
 | Leader, `<` / `>` | Move the focused tile one place left or right. |
+| Enter / Delete on a focused tile | Open the tile, or close its pane. |
 | Review: `j` / `k` | Next or previous step. |
 | Review: `n` | Mark the step reviewed and go to the next one. In a tour of Claude's places (11.15), the next place. |
 | Review: `p` | In a tour of Claude's places, the place before (11.15). |
@@ -229,15 +234,15 @@ The token comes from the system keyring through `secret-tool`. It is never in th
 
 ### 8.3 Active connection
 
-- The top bar shows the active connection. Leader, `a` or a click on it opens the list.
+- The rail shows the active connection at its foot: the name on the wide rail, an icon with the name in its tooltip on the narrow one. Leader, `a` or a click on it opens the list.
 - A switch changes the connection for new panes, new guide sessions and new review threads.
-- Running panes keep their connection. The tile meta line shows it.
+- Running panes keep their connection. The inspector of the tile shows it.
 - A thread fork runs on the active connection, also when its guide session ran on another one (S4).
 
 ### 8.4 Limit: switch and resume
 
 - When a connection hits its limit, the app marks it "at limit" for one hour. The hook input has no reset time (S1). The next Working event on that connection clears the mark.
-- If the active connection is at limit, the top bar shows it in the Limit color.
+- If the active connection is at limit, the rail shows it in the Limit color.
 - A Limit tile has one action: Switch to the next connection that is not at limit.
 - That action makes the next connection active, then resumes the pane on it:
   1. The app stops the agent with `C-c` twice. If the process does not exit in 5 s, it kills the tmux pane.
@@ -317,7 +322,7 @@ Opening a layout starts all its panes. Panes that already run are not started ag
 | Guide + diff | The current step: what the code does, what to check, pins, context links. Under it, the diff at the PR head: only the parts of each file that the step's ranges name, with 6 rows of context. The file's header line has a short note, "+N lines in K other steps" (its tooltip names the steps), and a **whole file** button that opens the file in the Files view. Each gap in a diff has buttons that show 20 hidden lines above or below, or the whole gap. The hidden lines come from `all_rows`: the proved numbering with no cut. |
 | Claude | A Claude Code pane for questions (11.5). Below it, the drafts. |
 
-The tab bar has four tabs: Board, Tasks, Work environment (30), and Code reviews. More than one review can be open. A click on Code reviews opens a menu of the open reviews (number, round, title, and the state while it works) and New review…, which opens the launcher. The tab shows the review on screen, the count of open reviews when none shows, and a dot while any review works. Leader, `r` steps through the open reviews.
+The rail (33) has four entries: Board, Tasks, Work (30), and Reviews. More than one review can be open. A click on Reviews opens a menu of the open reviews (number, round, title, and the state while it works) and New review…, which opens the launcher. The menu changes in place while a review works, so the item under the mouse stays. On the wide rail of the Board, the open reviews also show under Reviews, with the state while one works. The entry is marked while a review shows; its count and badge give the open reviews, its tooltip names them, and a dot shows while any review works. Leader, `r` steps through the open reviews.
 The review header shows the state of the guide session: fetching, writing, updating, ready or error.
 
 ### 11.2 Guide session
@@ -435,7 +440,7 @@ Cost: each fork sends the guide context again. The prompt cache lasts a few minu
 ### 11.7 New commits
 
 - The app polls `headRefOid` every 2 minutes while the review tab is open. It compares GitHub's head with the review's head as it is when `gh` returns, so an Update that ran meanwhile is no false alarm.
-- When the head changes, the top bar shows the old and the new head.
+- When the head changes, the review header shows the old and the new head.
 - Steps whose files changed get a stale mark.
 - "Diff since last review" shows `git diff <old>..<new>` for each stale step.
 - Threads on a line move with the rule of the drafts below: a thread keeps its head, its line text and up to 2 lines of code around it. If the code is gone, the thread shows "line removed" and keeps the old line.
@@ -477,7 +482,7 @@ Limits:
 After you send a review, the author pushes new commits. A new round reviews only what changed since your round.
 
 - When the head changes (11.7), the header offers **Start round N+1** next to **Update guide**.
-- A round is a new review of the same PR, in its own item of the Code reviews menu (`#10182 R2`) and its own worktree (`pr10182-r2`). The round before stays open until you close it.
+- A round is a new review of the same PR, in its own item of the Reviews menu (`#10182 R2`) and its own worktree (`pr10182-r2`). The round before stays open until you close it.
 - A round can also start after the round before is closed: open the PR again, and the launcher offers the next round (9.2). `since` is then the head of the last closed round with a guide. Its pinned ref keeps that commit, also after a force-push and a `git gc` (11.10).
 - `since` is the head that the round before covered. The base of the round's diff is:
   - `since`, when the author only added commits on top of it.
@@ -800,7 +805,7 @@ A missing file gives the defaults. An unknown key is an error with the key name.
 
 ### 14.1 Settings
 
-The gear at the top right opens Settings. It changes these keys, so nobody has to find and edit the file:
+The gear at the foot of the rail opens Settings. It changes these keys, so nobody has to find and edit the file:
 
 - Repo folders: `scan`. A folder that does not exist shows "not found".
 - Spec clones: `review.spec_clones`.
@@ -881,9 +886,9 @@ At start:
 | `gh` is not logged in | The launcher shows the `gh auth login` command. |
 | A worktree path exists | The launcher offers the existing worktree. |
 | Two agents in one tree | The launcher warns and selects New worktree. |
-| A connection is not logged in | The pane shows Claude's own login prompt. The connection gets a warning in the top bar. |
+| A connection is not logged in | The pane shows Claude's own login prompt. The connection gets a warning on the rail. |
 | An endpoint does not answer | The pane shows Claude's own API error, and the tile shows Error. |
-| Every connection is at limit | The top bar shows the earliest reset time. |
+| Every connection is at limit | The rail shows the earliest reset time. |
 | nvim socket is stale | The core removes it and starts a new nvim, but only when the nvim pane ended. An nvim pane that runs and does not answer stays (10). |
 
 ## 18. Spikes
@@ -1007,8 +1012,8 @@ Where the build differs from the text above:
 - The 3 s calls that time out may still reach nvim and run after Enter, so the call can run twice. `edit` and the review diff are safe to run twice.
 - Parts (28): each part has its own tmux window size, from `refresh-client -C @window:WxH`. tmux 3.2 or newer has it. The live pane also gets its window size, so an old part size never stays on it.
 - Parts (28): the layout memory and the divider sizes are in the window's local storage, not in the store.
-- Parts (28): a chip of a part that does not run shows on the focused tile and the open tile, not on hover. A redraw that changes the buttons of the info line drops the hover, and the info line then jumps.
-- The board, the live title, the part heads and the bar of the Work environment change in place. A pane event comes about once a second for a busy pane. A redraw that writes new elements under the mouse drops a click whose press and release fall on each side of it. So a tile element stays while its pane is on the board: its title, its buttons, its meta and summary text and its tail change apart, and only when they change. The tab bar and the menu of reviews do the same.
+- Parts (28): the chips of a tile always show (28.3). Before the redesign (33), a chip of a part that did not run showed only on the focused or open tile.
+- The board, the live title, the part heads and the bar of the Work environment change in place. A pane event comes about once a second for a busy pane. A redraw that writes new elements under the mouse drops a click whose press and release fall on each side of it. So a tile element stays while its pane is on the board: its title, its buttons, its summary text and its tail change apart, and only when they change. The rail, the menu of reviews and each part of the inspector do the same.
 - Leader `j` and `k` put an ended pane after every urgent state. Leader keys use the focused pane only when it has a tile or shows: the pane of a work or review tab stays out of them after its tab is gone.
 - Remote (29): the hub uses `pause` and `continue` for a fresh screen, not the `pause-after` flag of tmux.
 - Remote (29): `sb attach` copies with its own loop, not `std::io::copy`. `io::copy` on Linux uses `splice`, and it held back short command lines.
@@ -1036,6 +1041,10 @@ Where the build differs from the text above:
 - Local review base (11.11): the `upstream` name stands for the parent only when gh gave no answer. When GitHub says the repo is not a fork, a remote named `upstream` is just a remote.
 - Local review base (11.11): a fresh clone writes no reflog for its remote branches, so the header shows no age until the first fetch.
 - Local review base (11.11): the window checks for the Base menu were written without a browser to run them (no Chromium on the build machine); the JavaScript was only checked for syntax.
+- The shell (33), phase 1: built and checked without a browser (no Chromium on the build machine). The window checks were changed to the new markup and new checks were added, but they were only checked for syntax; CI runs them. Not verified by eye: the rail, the headers, the tiles and the inspector against the C v2 mockups; the vendored fonts in the Tauri webviews (WKWebView, WebKitGTK); that xterm.js has the right cell size after the mono font loads.
+- The shell (33): the inspector sits next to the whole screen, its header included, not under the header as in the mockups. It is one panel for every screen, and its own 52 px title row lines up with the header. The toggle is one button that sits over the right end of every header; each header keeps 64 px free for it.
+- The shell (33): the vendored fonts are latin subsets. Other characters come from the next font of the list (system fonts).
+- The shell (33): a review screen keeps its own header row and layout inside the shell until phase 2. Tasks keeps its task panel and has no inspector.
 - A diff header `@@ old N · new M @@` gives the number of the next old line and of the next new line, also on a side where the next row has no line. The "No newline at end of file" note follows its line and does not count for the context cut.
 
 Tests:
@@ -1278,7 +1287,7 @@ Rules:
 
 ### 27.4 The Tasks tab
 
-The Tasks tab sits next to Board in the tab bar. It has two views. A switch at the top picks one, and the app keeps your choice.
+The Tasks tab sits under Board on the rail (33). It has two views. A switch at the top picks one, and the app keeps your choice.
 
 - **Board view**: one column for each status, for the current sprint. A column shows the tasks of one status in rank order. Drag a card to another column or another place. The `done` column shows the last 10 done tasks and a "show all" link. With no open sprint, the board view shows the backlog and a New sprint button.
 - **List view**: the backlog and the open and planned sprints, as sections. Drag a task between sections to plan the sprint. Each section header shows the task count and the points: done, and total.
@@ -1471,23 +1480,23 @@ An agent pane gets nvim and a shell next to it, in its worktree, when you ask. I
 
 - nvim shows on the right at full height. The shell shows under the agent, on the left. They start at half the width and 220 px.
 - Drag a divider to change a size. A double-click resets it. The sizes stay for each worktree.
-- With a part, each part gets a header: its name, the worktree, zoom, and for nvim and the shell also stop and ×.
+- With a part, each part gets a slim header (24 px): its name and its state (`[+]`, "changed on disk, reloaded", `▸`). Zoom shows on the part with the keys.
 - The part with the keys has a gold line on its header and a brighter header.
-- × hides a part. Its process keeps running. Stop ends it. When nvim has a buffer that is not saved, Stop asks first.
+- The inspector (33) of the live agent has Hide or Show nvim and the terminal, Reset the sizes, and Stop for each part. Hide takes a part off; its process keeps running. Stop ends it. When nvim has a buffer that is not saved, Stop asks first, in the inspector's alert.
 - Zoom fills the live pane with one part. Leader, `x` takes the zoom back first, then collapses.
 - After an agent edit, nvim reloads the files with no changes (10), and its header shows "changed on disk, reloaded" for 6 s.
 - A window narrower than 1100 px shows one part at a time, in place of the agent.
 - The next open of the agent shows the parts that showed the last time, when they still run.
 - In a review tab, the live pane has no parts.
 
-### 28.3 Tiles and the top bar
+### 28.3 Tiles and the rail
 
-- An agent tile has an nvim chip and a term chip. A chip of a part that runs is filled, with a dot. It always shows.
+- An agent tile has an nvim chip and a term chip. They always show, also on a tile with no focus. A chip of a part that runs is filled, with a dot.
 - `[+]` on the nvim chip: a buffer is not saved. It has no lamp color, so it does not look like an alert.
-- `▸` on the term chip: a command runs in the shell. When it ends, the chip shows `✓ term done` for 10 s.
+- `▸` on the term chip: a command runs in the shell. When it ends, the chip shows `term ✓ done` for 10 s.
 - The tooltip of a chip gives the rust-analyzer memory of that pane.
 - A click on a chip expands the agent with that part. The live title has an nvim and a term switch.
-- The top bar counts the parts that run but do not show.
+- The tooltip of the Board entry of the rail counts the parts that run but do not show.
 
 ### 28.4 Hub
 
@@ -1502,7 +1511,7 @@ An agent pane gets nvim and a shell next to it, in its worktree, when you ask. I
 ### 28.5 Tests
 
 - A hub test (`crates/sb/tests/parts.rs`) on a real tmux: one shell for each worktree, no part with no live pane or for another live pane, a resize right after an expand stays, a close of the live pane takes its parts, each window at its own size, output with the part's id, `busy` on and off, no output after a detach, a detach never takes the live pane, an expand and a close take parts off, and `modified` from a real nvim. An open of an nvim at "Press ENTER" keeps the same pane and its unsaved buffer, and the file opens after Enter.
-- 30 window checks: Leader `e`, `s`, `z`, `x`, `h`, `l` and `o`; output and keys go to the right terminal; × keeps the pane; the hidden count; the layout memory; `[+]`; Stop asks; `▸` and `✓ done`; a part gets its tile back when no agent is left or the agent ended; Leader `z` does nothing in a narrow window.
+- 30 window checks: Leader `e`, `s`, `z`, `x`, `h`, `l` and `o`; output and keys go to the right terminal; Hide keeps the pane; the hidden count; the layout memory; `[+]`; Stop asks; `▸` and `✓ done`; a part gets its tile back when no agent is left or the agent ended; Leader `z` does nothing in a narrow window.
 
 ## 29. Remote mode
 
@@ -1632,14 +1641,16 @@ Status: built.
 
 A tab for working in one repo yourself: nvim takes the left half, Claude Code the top right, and a terminal the bottom right.
 
-- **The tab.** Work environment, between Tasks and Code reviews. Leader, `w` opens it.
+- **The tab.** Work, between Tasks and Reviews on the rail. Leader, `w` opens it.
+- **The header.** The repo picker is the title (20 px). Then "main checkout · branch", the state of the tab's agent with the buttons of that state (Allow, Trust…), and **Start Claude** or **Open** as the gold primary. The live pane has no title line in this tab: the header has its state.
+- **The inspector** (33): the folder, the agent's state, the connection, the rust-analyzer memory, and whether nvim has a buffer that is not saved; Hide or Show nvim (`e`) and the terminal (`s`), Reset the sizes, Review the commits not pushed; Stop nvim and Stop term.
 - **The repo.** A picker lists the repo list (9.1). The choice stays for the next start (browser storage of the window; a convenience only). A repo where the tab's own agent runs opens that agent at once. A repo with none shows **Start Claude**, which opens Claude in the main checkout with the title `Work environment`. An agent of the board in the same checkout is never taken. Another repo in the picker takes the live pane off the one before.
-- **The layout.** The tab hosts the live pane, as a review tab does (11.5), but with its parts (28): nvim and the shell of the worktree. A `work` class turns the parts around: nvim on the left at half the width, Claude on top of the right half, and the terminal under it at half the height. The dividers, zoom, stop, ×, and Leader `e`, `s`, `o`, `z` work as on the board. Leader `h` and `l` turn around with the layout. A narrow window shows one part at a time, as on the board. Without nvim on PATH, Claude and the terminal share the tab.
+- **The layout.** The tab hosts the live pane, as a review tab does (11.5), but with its parts (28): nvim and the shell of the worktree. A `work` class turns the parts around: nvim on the left at half the width, Claude on top of the right half, and the terminal under it at half the height. The dividers, zoom, Hide and Stop (in the inspector), and Leader `e`, `s`, `o`, `z` work as on the board. Leader `h` and `l` turn around with the layout. A narrow window shows one part at a time, as on the board. Without nvim on PATH, Claude and the terminal share the tab.
 - **Apart from the board.** The tab's agent (a Claude pane with the title `Work environment`) has no tile on the board. The window finds the agent by that title, so a rename never moves it: the agent keeps its title (a double-click on it says so), and a rename of another pane to `Work environment` is refused, in the window and in the hub. An expand of it from elsewhere (a notice, the next pane that waits) opens this tab on its repo. The tab keeps its own layout for each worktree (`sb.parts.work.<tree>`), so it never changes the board's. The board's live pane comes back when you return. nvim and the shell are still one of each for a worktree (28): the tab and a board agent in the same checkout share them, so two editors never fight over the files.
 - **Other tabs.** Another tab takes the live pane back to the board, the right way round. Back in this tab, the repo's agent opens again with its parts.
 - **An open that you leave.** An open waits for the agent, nvim and the shell in turn. When you leave the tab or pick another repo in that time, it stops: it never pulls you back to the tab, and a repo you picked meanwhile opens after it.
 - **An ended agent.** The tab's agent has no tile, so when it ends, the tab shows it for its repo with **Resume** (with a session) and **Close**, as a tile does. The tab marks it seen, so Leader `j` goes there once and not again.
-- **In place.** The bar changes in place, and a picker that has the focus keeps its list, so a pane event never closes it or takes the button under the mouse.
+- **In place.** The header changes in place, and a picker that has the focus keeps its list, so a pane event never closes it or takes the button under the mouse.
 - **Not yet.** A worktree other than the main checkout, and more than one work tab.
 
 Tests: window checks for the tab, the picker, a board agent in the repo that is not taken, Start Claude (the request and its title), no tile on the board, an expand from elsewhere, the board's own layout and live pane after a visit, the layout (nvim on the left half, Claude above the terminal on the right), nvim and the shell in the repo, and the trip to the board and back. Also: tiles, the live title, the part heads and the bar that stay through a pane event; a focused picker that keeps its list; an open that stops when you pick another repo or leave; a work pane left in the focus; Leader `j` with an ended work agent; and its Resume and Close.
@@ -1873,7 +1884,7 @@ Pure code in `usage::summary`, on a worker thread with its own read-only connect
 
 ### 32.9 The views
 
-**History.** Leader `i` opens the Insights view, as a full view with no tab button; the Settings window has an Insights button too (`#gear` opens Settings; there is no gear menu).
+**History.** Leader `u` opens the Insights view (Leader `i` is the inspector, 33), as a full view with no tab button; the Settings window has an Insights button too (`#gear` opens Settings; there is no gear menu).
 - Left column: History at the top, then the reports (date, period, model, a mark when failed), newest first.
 - History, with no AI: the metrics of 32.7 as small tables and bars, for the last 28 days and the 28 before, with the deltas. Recording on or off, rows, size, oldest day, dropped events.
 - Header: Run insights. Under it, muted: "Sends a summary of counts and times (no code, no prompts, no file names) to <connection> (<model>). Show what is sent." The link shows the exact summary JSON; Send starts the run.
@@ -1945,7 +1956,7 @@ Not in version 1. Its own phase, after a few weeks of real data.
 - **Maybe instead: Always allow on the tile.** A third tile button, for a head on the safe list, that adds the rule for that repo. It catches the moment better than a weekly report.
 - **The config write.** `Config::edit` has no lock, and Settings sends the whole `SettingsEdit` with the whole sandbox struct. So a Settings dialog opened before an Apply would wipe the applied item on Save, and two saves can race. Before Apply: a config mutex in the hub around every read-change-write of the file; an edit path that adds or removes one item (`Config::add_item(path, key, value)`); and Settings save sends only the fields you changed, or fails when the file changed since the dialog opened. `SettingsEdit` has no `idle_end_minutes`; a setting candidate needs it added.
 - **Apply.** A card shows the exact config lines, the effect ("New agents in owner/name run `cargo test ...` with no ask"), and Apply. One click applies; a toast has Undo. Nothing is applied by a run, a timer or `sb`.
-- **Also later:** a weekly run (default off, a quiet dot in the top bar), Compare two reports, daily rollups past 90 days (keeping `ref`, `n` and the fields that coverage and time per review need), repeated sequences, clicks.
+- **Also later:** a weekly run (default off, a quiet dot on the rail), Compare two reports, daily rollups past 90 days (keeping `ref`, `n` and the fields that coverage and time per review need), repeated sequences, clicks.
 - **Tests later:** Apply against a parallel Settings save (both changes stay); a stale dialog refused; the safe list; Undo.
 
 ### 32.16 SPEC 23 notes to add when built
@@ -1996,3 +2007,19 @@ Version 1 is about 4,200 lines with tests. Each phase adds its notes to section 
 - D16. The run: empty cwd, `--setting-sources user`, `--tools ""`, `--strict-mcp-config`, `--no-session-persistence`, `--system-prompt`, `--permission-mode manual`. Your user hooks and `~/.claude/CLAUDE.md` still load.
 - D17. Names chosen by others (programs, hosts, MCP tools, folders) reach a summary only when seen 3 times on 2 days.
 - D18. `sb usage clear` and `sb insights run` are refused inside an agent pane.
+
+## 33. The shell: rail, headers, inspector
+
+Status: phase 1 built. Phase 2 rebuilds what the review screens show inside the shell.
+
+The window is one shell around every screen: a rail on the left, one header for each screen, and an inspector on the right.
+
+- **Tokens.** Grounds `#12161d`, `#161b23` (the rail and the inspector), `#1a1f28` (a tile), `#212835` (a button); lines `#2c3442`; text `#dfe4ec`, soft `#b7bfcc`, muted `#8b95a6` (5.6:1 on the ground). One gold, `#d9b56c`, for at most one primary button on a screen. One Claude purple, `#9d8cc4`, for the limit lamp and Claude's opinion. Light blue `#7cc4f0` marks the live pane. Lamps have a shape and a color (6.2). No text is smaller than 11 px.
+- **Fonts.** Public Sans for the interface, JetBrains Mono for code and terminals, Archivo condensed only for tile titles. All three are vendored in `web/vendor/fonts` (latin subsets, SIL OFL 1.1): the window loads nothing from the network, and the CSP (`font-src 'self' data:`) holds. Other characters, such as box drawing in a terminal, come from the next font in the list. The terminals measure their cell again when the fonts have loaded.
+- **The rail.** 184 px on the Board: the name, New pane (Leader `n`) at the top, Board with its tile count, Tasks with the open tasks of the sprint, Work with its repo, Reviews with the open reviews under it; at the foot the hub host in remote mode (29), the active connection (Leader `a`) and Settings. 52 px of icons on Tasks, Work and Reviews: a badge gives a count (gold on Board when tiles wait on you), a dot shows while a review works, and each tooltip names its Leader key. The entry of the screen that shows is marked.
+- **The header.** 52 px for each screen. One title in 20 px, 700, sentence case (none on the Board), its facts in small grey, at most one gold primary, and the inspector toggle at the right. The Board header has the state chips and Next waiting (6.1); the Work header has the repo picker as its title (30); the Tasks header has the sprint name; a review keeps its header row (11), with room for the toggle.
+- **The inspector.** A 280 px panel on the right, closed by default. The toggle or Leader `i` opens and closes it. Each screen remembers open or closed in the window's local storage, a convenience only. The order is the same on every screen: an alert, the facts, the actions you repeat, a space, then the destructive actions in red. The Board shows the focused tile, or the live pane (6.1); Work shows the tab's agent and its parts (30); a review shows its facts and Close review. Tasks has no inspector: its task panel does that job (27.4).
+- **The API for a screen.** `SBInsp.provide(screen, fn)` with `screen` one of `board`, `tasks`, `work`, `review`. `fn(tab)` returns `{ title, display, empty, alert: { text, buttons }, facts: [[label, value, { mono, act }]], actions: [{ label, act, key, title, disabled, primary, attr }], body, danger: [...], onAct(act, el) }`. A click on a button or a fact with `act` calls `onAct`. `body` is HTML that the screen escapes itself. `SBInsp.refresh()` draws again (once per frame); `open`, `close`, `toggle`, `isOpen` and `screen` do what they say. Each part of the panel changes only when its HTML changes, so a button under the mouse stays.
+- **Less text on screen.** The leader mark shows only while the leader waits. The count of hidden parts is in the tooltip of the Board entry. The meta line of a tile is in the inspector.
+
+Tests: window checks for the wide and narrow rail, its tooltips and badges, the board header and its chips, Next waiting, the inspector (Leader `i`, the toggle, its memory for each screen, the facts of a tile, a sandboxed agent, Close pane, the parts of the live agent, Stop with a buffer that is not saved, the Work and review inspectors, Reset the sizes), Delete on a focused tile, the gold Allow only on the focused tile, the slim part headers, and the Work header.
