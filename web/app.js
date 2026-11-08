@@ -10,8 +10,34 @@ const strip = (s) => s.replace(ANSI, "");
 const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 
 const LABEL = { idle: "Idle", working: "Working", needs: "Needs you", turn: "Your turn", limit: "Limit", error: "Error", ended: "Ended" };
-const COLOR = { needs: "var(--needs)", limit: "var(--limit)", error: "var(--error)", turn: "var(--done)" };
 const URGENT = ["needs", "limit", "error", "turn"];
+
+// The shape of each lamp, so a state reads without its color: needs a diamond,
+// your turn a dot, working a dashed ring, limit a square, error a triangle, idle
+// a ring. The color comes from the `data-lamp` around it (style.css).
+const LAMP_SHAPE = {
+  needs: '<path d="M5 0.5 9.5 5 5 9.5 0.5 5Z" fill="currentColor"/>',
+  turn: '<circle cx="5" cy="5" r="4.2" fill="currentColor"/>',
+  working: '<circle cx="5" cy="5" r="3.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="4 2"/>',
+  limit: '<rect x="1" y="1" width="8" height="8" rx="1" fill="currentColor"/>',
+  error: '<path d="M5 0.8 9.5 9H0.5Z" fill="currentColor"/>',
+  idle: '<circle cx="5" cy="5" r="3.8" fill="none" stroke="currentColor" stroke-width="1.4"/>',
+  ended: '<circle cx="5" cy="5" r="3.8" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2.6 7.4l4.8-4.8" stroke="currentColor" stroke-width="1.4"/>',
+};
+const lampIcon = (lamp) => (LAMP_SHAPE[lamp] ? `<svg class="lamp" data-shape="${lamp}" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">${LAMP_SHAPE[lamp]}</svg>` : "");
+const svg = (w, body, sw = 1.5) => `<svg width="${w}" height="${w}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="${sw}" aria-hidden="true">${body}</svg>`;
+const ICON = {
+  board: svg(18, '<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>'),
+  tasks: svg(18, '<path d="M2 4l1.5 1.5L6 3M2 10l1.5 1.5L6 9M8 4.5h6M8 10.5h6"/>'),
+  work: svg(18, '<rect x="2" y="2.5" width="12" height="11" rx="1"/><path d="M8 2.5v11M8 8h6"/>'),
+  reviews: svg(18, '<circle cx="4" cy="4" r="1.6"/><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="9" r="1.6"/><path d="M4 5.6v4.8M12 7.4V6a2 2 0 0 0-2-2H7"/>'),
+  plug: svg(16, '<path d="M6 2v3M10 2v3M4.5 5h7v2.5a3.5 3.5 0 0 1-7 0zM8 11v3"/>').replace("<svg", '<svg class="plug"'),
+  caret: '<svg class="caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5"/></svg>',
+  collapse: '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 2v3H2M9 2v3h3M5 12V9H2M9 12V9h3"/></svg>',
+  close: '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>',
+};
+const gb = (b) => `${(b / 1073741824).toFixed(1)} GB`;
+const home = (path) => String(path || "").replace(/^\/home\/[^/]+|^\/Users\/[^/]+/, "~");
 
 const S = {
   panes: [],
@@ -124,6 +150,8 @@ function setTab(tab, quiet) {
   $("#view-tasks").hidden = tab !== "tasks";
   $("#view-work").hidden = tab !== "work";
   $("#view-review").hidden = tab === "board" || tab === "tasks" || tab === "work";
+  // The rail has names on the Board, and only icons on the other screens.
+  document.body.classList.toggle("rail-wide", tab === "board");
   drawTabs();
   if (tab === "board") {
     // The pane of the tab before (work, Ask) has no tile: it is no focus here.
@@ -134,10 +162,12 @@ function setTab(tab, quiet) {
   } else if (tab === "tasks") window.SBTasks?.draw();
   else if (tab === "work") window.SBWork?.draw();
   else window.SBReview?.draw(tab);
+  drawInspFrame();
 }
 
 const reviewBusy = (r) => ["fetching", "writing", "updating"].includes(r.status);
-const reviewLabel = (r) => (r.kind === "local" ? `${esc(r.repo)} commits` : `#${esc(r.number)}${r.round > 1 ? ` R${r.round}` : ""}`);
+const reviewName = (r) => (r.kind === "local" ? `${r.repo} commits` : `#${r.number}${r.round > 1 ? ` R${r.round}` : ""}`);
+const reviewLabel = (r) => esc(reviewName(r));
 // Writes the HTML only when it changed. A review sends many updates while it
 // works: a full redraw would replace the menu item under the mouse, and a click in
 // that moment lands outside the menu and closes it.
@@ -146,25 +176,55 @@ function setHTML(el, html) {
   el._html = html;
   el.innerHTML = html;
 }
-// Board, Tasks, and Code reviews: a menu of the open reviews. The tab shows the
-// review that is open, and a dot while any review works. The bar is built once and
-// then changed in place.
+// The rail (SPEC 33): Board, Tasks, Work and Reviews. It has names on the Board
+// and only icons elsewhere. Reviews opens a menu of the open reviews and New
+// review…; on the wide rail the open reviews also show under it. A count or a
+// badge shows what waits, and a dot shows while a review works. The rail is
+// built once and then changed in place.
+function railItem(tab, label) {
+  return `<button class="nav" type="button" data-tab="${tab}">${ICON[tab]}<span class="nl">${label}</span><span class="nc"></span><span class="rbadge"></span></button>`;
+}
+// The count, the badge and the tooltip of one rail entry.
+function setRail(b, { count = "", badge = "", hot = false, tip }) {
+  const nc = b.querySelector(".nc"), rb = b.querySelector(".rbadge");
+  if (nc.textContent !== String(count)) nc.textContent = String(count);
+  if (rb.textContent !== String(badge)) rb.textContent = String(badge);
+  rb.classList.toggle("hot", hot);
+  if (b.title !== tip) { b.title = tip; b.setAttribute("aria-label", tip); }
+}
+// The panes that wait on you, for each urgent state: unseen tiles.
+function waiting() {
+  const n = {};
+  for (const p of S.panes) if (p.unseen && URGENT.includes(p.lamp)) n[p.lamp] = (n[p.lamp] || 0) + 1;
+  return n;
+}
 function drawTabs() {
   if (!$("#revtab")) {
-    $("#tabs").innerHTML = [
-      '<button class="tab" role="tab" data-tab="board">Board</button>',
-      '<button class="tab" role="tab" data-tab="tasks">Tasks</button>',
-      '<button class="tab" role="tab" data-tab="work" title="nvim, Claude and a terminal in one repo (Leader w)">Work environment</button>',
-      '<span class="revtab"><button class="tab" role="tab" id="revtab" aria-haspopup="menu" aria-expanded="false"></button><div class="menu revmenu" id="revmenu" role="menu" hidden></div></span>',
-    ].join("");
+    $("#tabs").innerHTML = railItem("board", "Board") + railItem("tasks", "Tasks") + railItem("work", "Work") +
+      `<div class="revtab"><button class="nav" type="button" id="revtab" aria-haspopup="menu" aria-expanded="false">${ICON.reviews}<span class="nl">Reviews</span><i class="busy" hidden></i><span class="nc"></span><span class="rbadge"></span></button>` +
+      '<div class="menu revmenu" id="revmenu" role="menu" hidden></div><div class="revsubs" id="revsubs"></div></div>';
   }
-  for (const t of document.querySelectorAll("#tabs > .tab")) t.setAttribute("aria-selected", String(S.tab === t.dataset.tab));
+  for (const t of document.querySelectorAll("#tabs .nav[data-tab]")) {
+    if (S.tab === t.dataset.tab) t.setAttribute("aria-current", "page");
+    else t.removeAttribute("aria-current");
+  }
+  const n = waiting();
+  const wait = URGENT.reduce((a, s) => a + (n[s] || 0), 0);
+  const hidden = window.SBParts?.hiddenCount() || 0;
+  setRail($('#tabs [data-tab="board"]'), { count: tiles().length, badge: wait || "", hot: wait > 0,
+    tip: `Board${wait ? ` · ${wait} wait${wait > 1 ? "" : "s"} on you` : ""}${hidden ? ` · ${hidden} part${hidden > 1 ? "s run" : " runs"} hidden` : ""} (Leader b)` });
+  const tasks = window.SBTasks?.count?.() || 0;
+  setRail($('#tabs [data-tab="tasks"]'), { count: tasks || "", badge: tasks || "", tip: `Tasks${tasks ? ` · ${tasks} open in the sprint` : ""} (Leader t)` });
+  const repo = window.SBWork?.W.repo ? window.SBWork.W.repo.split("/").filter(Boolean).pop() : "";
+  setRail($('#tabs [data-tab="work"]'), { count: repo, tip: `Work${repo ? ` · ${repo}` : ""}: nvim, Claude and a terminal in one repo (Leader w)` });
   const list = [...S.reviews.values()];
   const cur = S.reviews.get(S.tab);
   const tab = $("#revtab");
-  tab.setAttribute("aria-selected", String(!!cur));
-  setHTML(tab, `Code reviews${cur ? `<b class="cur">${reviewLabel(cur)}</b>` : list.length ? `<b class="count">${list.length}</b>` : ""}${list.some(reviewBusy) ? '<i class="busy"></i>' : ""}<i class="caret"></i>`);
-  const menu = $("#revmenu");
+  if (cur) tab.setAttribute("aria-current", "page");
+  else tab.removeAttribute("aria-current");
+  setRail(tab, { count: list.length || "", badge: list.length || "", tip: `Reviews${list.length ? ` · ${list.map((r) => reviewName(r)).join(", ")}` : ""} (Leader r)` });
+  tab.querySelector(".busy").hidden = !list.some(reviewBusy);
+  const menu = $("#revmenu"), subs = $("#revsubs");
   const ids = list.map((r) => r.id).join("\n");
   // Another set of reviews: new items. The same set: each item changes in place.
   if (menu._ids !== ids) {
@@ -172,21 +232,28 @@ function drawTabs() {
     menu.innerHTML = list.map((r) => `<button role="menuitemradio" data-tab="${esc(r.id)}"></button>`).join("") +
       (list.length ? "" : '<div class="mnone">No open reviews</div>') +
       '<button role="menuitem" data-newreview>New review…</button>';
+    subs.innerHTML = list.map((r) => `<button class="sub" type="button" data-tab="${esc(r.id)}"></button>`).join("");
   }
-  const items = menu.querySelectorAll("[data-tab]");
+  const items = menu.querySelectorAll("[data-tab]"), rows = subs.querySelectorAll("[data-tab]");
   list.forEach((r, i) => {
     const b = items[i];
     b.setAttribute("aria-selected", String(S.tab === r.id));
     b.setAttribute("aria-checked", String(S.tab === r.id));
     setHTML(b, `<span class="rname">${reviewLabel(r)}${reviewBusy(r) ? '<i class="busy"></i>' : ""}<small>${esc(r.title || "")}</small></span><span class="at">${esc(r.status === "ready" ? "" : r.status || "")}</span>`);
+    const s = rows[i];
+    if (S.tab === r.id) s.setAttribute("aria-current", "page");
+    else s.removeAttribute("aria-current");
+    if (s.title !== (r.title || "")) s.title = r.title || "";
+    setHTML(s, `<span class="sn">${reviewLabel(r)}</span>${r.status && r.status !== "ready" ? `<span class="ss">${esc(r.status)}</span>` : ""}`);
   });
 }
 $("#tabs").addEventListener("click", (e) => {
   if (e.target.closest("#revtab")) { $("#revmenu").hidden = !$("#revmenu").hidden; $("#revtab").setAttribute("aria-expanded", String(!$("#revmenu").hidden)); return; }
-  if (e.target.closest("[data-newreview]")) { $("#revmenu").hidden = true; return openLauncher(); }
+  const shut = () => { $("#revmenu").hidden = true; $("#revtab").setAttribute("aria-expanded", "false"); };
+  if (e.target.closest("[data-newreview]")) { shut(); return openLauncher(); }
   const t = e.target.closest("[data-tab]");
   if (!t) return;
-  if ($("#revmenu")) $("#revmenu").hidden = true;
+  shut();
   setTab(t.dataset.tab);
 });
 document.addEventListener("click", (e) => { if (!e.target.closest(".revtab") && $("#revmenu") && !$("#revmenu").hidden) { $("#revmenu").hidden = true; $("#revtab").setAttribute("aria-expanded", "false"); } });
@@ -201,15 +268,17 @@ function paneName(p) {
   return base !== p.repo && p.branch ? p.branch : p.repo;
 }
 
-function actions(p) {
-  const b = (attr, label, primary) => `<button class="btn${primary ? " primary" : ""}" ${attr}>${label}</button>`;
-  if (p.trust) return `<div class="tact">${b(`data-trust="1"`, "Trust", true)}${b(`data-trust="0"`, "Exit")}</div>`;
-  if (p.permit) return `<div class="tact">${b(`data-allow="${esc(p.permit.id)}"`, "Allow", true)}${b(`data-deny="${esc(p.permit.id)}"`, "Deny")}</div>`;
+// The buttons of a state. They are neutral, but Allow is the gold primary where
+// the focus is (`primary`): one gold button on the screen at most.
+function actions(p, primary) {
+  const b = (attr, label, gold) => `<button class="btn sm${gold ? " primary" : ""}" type="button" ${attr}>${label}</button>`;
+  if (p.trust) return `<div class="tact">${b(`data-trust="1"`, "Trust")}${b(`data-trust="0"`, "Exit")}</div>`;
+  if (p.permit) return `<div class="tact">${b(`data-allow="${esc(p.permit.id)}"`, "Allow", primary)}${b(`data-deny="${esc(p.permit.id)}"`, "Deny")}</div>`;
   if (p.lamp === "limit") {
     const next = nextConnection(p.connection);
-    return next ? `<div class="tact">${b("data-switch", `Switch to ${esc(next)}`, true)}</div>` : "";
+    return next ? `<div class="tact">${b("data-switch", `Switch to ${esc(next)}`)}</div>` : "";
   }
-  if ((p.lamp === "ended" || p.lamp === "error") && p.session && p.kind === "claude") return `<div class="tact">${b("data-resume", "Resume", true)}</div>`;
+  if ((p.lamp === "ended" || p.lamp === "error") && p.session && p.kind === "claude") return `<div class="tact">${b("data-resume", "Resume")}</div>`;
   return "";
 }
 
@@ -232,51 +301,45 @@ const workOf = (p) => p.kind === "claude" && p.title === WORK_TITLE;
 // board does. A pane that shows in another tab (a review, the work tab) has none.
 const tiles = () => S.panes.filter((p) => (p.id === S.live && !S.termHost) || (!window.SBParts?.isPart(p) && !askOf(p) && !workOf(p)));
 
-function meta(p) {
-  const parts = [p.repo];
-  if (p.branch) parts.push(p.branch);
-  if (p.connection && S.conn.list.length > 1) parts.push(p.connection);
-  if (p.rss) parts.push(`ra ${(p.rss / 1073741824).toFixed(1)} GB`);
-  // Bash of this agent runs in Claude Code's sandbox (SPEC 31).
-  if (p.sandboxed) parts.push("sandbox");
-  return parts.join(" · ");
-}
+// The facts of a pane, for the live title: repo and branch. The inspector has the rest.
+const metaShort = (p) => [p.repo, p.branch].filter(Boolean).join(" · ");
+const stateWord = (p) => (p.lamp === "none" ? p.kind : LABEL[p.lamp] || p.lamp);
+// A summary that names a tool or an error reads as code.
+const CODEISH = /^[A-Z][A-Za-z]+(\(|: )|^API Error/;
 
-// A tile is built once and then changed in place (see drawBoardNow).
+// A tile is built once and then changed in place (see drawBoardNow). A tile shows
+// the name, the state, one summary line, the last two lines of the pane, the nvim
+// and term chips, the task chip and the buttons of the state. The rest is in the
+// inspector.
 function tile(p) {
-  const nvimBtn = p.kind === "claude" && window.SBParts ? SBParts.chips(p) : p.kind !== "nvim" && S.settings.nvim ? `<button class="tool" data-nvim>nvim</button>` : "";
-  const state = p.lamp === "none" ? p.kind : LABEL[p.lamp] || p.lamp;
-  const reviewBtn = p.kind === "claude" ? `<button class="tool" data-lreview title="Review the commits that are not pushed">review</button>` : "";
-  const taskBtn = p.kind !== "nvim" ? `<button class="tool" data-ptaskmenu title="Link this pane to a task">task</button>` : "";
+  const live = p.id === S.live && !S.termHost;
+  const chips = p.kind === "claude" && window.SBParts ? SBParts.chips(p) : p.kind !== "nvim" && S.settings.nvim ? `<button class="chip" type="button" data-nvim title="Open nvim in this worktree (Leader e)">nvim</button>` : "";
   return {
     cls: ["pane", p.unseen && "unseen", S.focus === p.id && "focused", p.id === S.live && "is-live"].filter(Boolean).join(" "),
-    title: `<span class="name" title="${esc(paneName(p))}">${esc(paneName(p))}</span><span class="state">${esc(state)}</span><button class="tool x" data-close aria-label="Close">×</button>`,
-    // The buttons of the info line. The meta and the summary text change more often:
-    // they change as text, so a button under the mouse stays.
-    tools: `${taskLine(p)}<div class="pmeta"><span class="meta"></span><span class="ptools">${taskBtn}${reviewBtn}${nvimBtn}</span></div><span class="text"></span>${actions(p)}`,
-    meta: meta(p),
+    title: `<i class="udot" title="Unseen"></i><span class="name" title="${esc(paneName(p))}">${esc(paneName(p))}</span><span class="state">${live ? "live" : lampIcon(p.lamp) + esc(stateWord(p))}</span>`,
+    foot: `${chips}${taskLine(p)}<span class="sp"></span>${actions(p, S.focus === p.id && !live)}`,
     text: p.summary || "",
-    tail: p.tail.map(strip).join("\n"),
+    tail: p.tail.map((l) => strip(l).trimEnd()).filter(Boolean).slice(-2).join("\n"),
   };
 }
 
-// Changes a tile element to show `t`, the parts of `tile(p)`.
+// Changes a tile element to show `t`, the parts of `tile(p)`. The summary and the
+// tail change as text, so a button under the mouse stays.
 function fillTile(el, p, t) {
   if (el.className !== t.cls) el.className = t.cls;
   if (el.dataset.lamp !== p.lamp) el.dataset.lamp = p.lamp;
-  const [head, sum, tail] = el.children;
+  const [head, sum, tail, foot] = el.children;
   setHTML(head, t.title);
-  setHTML(sum, t.tools);
-  const text = (sel, v) => { const n = sum.querySelector(sel); if (n && n.textContent !== v) n.textContent = v; };
-  text(".pmeta .meta", t.meta);
-  text(":scope > .text", t.text);
+  if (sum.textContent !== t.text) sum.textContent = t.text;
+  sum.classList.toggle("mono", CODEISH.test(t.text));
   if (tail.textContent !== t.tail) tail.textContent = t.tail;
+  setHTML(foot, t.foot);
 }
 
-// The task of a pane, under its title (SPEC 27.6). A click opens the task.
+// The task of a pane, as a chip (SPEC 27.6). A click opens the task.
 function taskLine(p) {
   const t = window.SBTasks?.forPane(p.id);
-  return t ? `<button class="ptask" data-ptask="${esc(t.id)}" title="Open the task">▸ ${esc(t.title)}</button>` : "";
+  return t ? `<button class="chip ptask" type="button" data-ptask="${esc(t.id)}" title="Open the task: ${esc(t.title)}">▸ ${esc(t.title)}</button>` : "";
 }
 
 // Many pane events can come in one frame. Draw the board once per frame.
@@ -307,7 +370,7 @@ function drawBoardNow() {
       el = document.createElement("div");
       el.dataset.id = p.id;
       el.tabIndex = 0;
-      el.innerHTML = '<div class="ptitle"></div><div class="psum"></div><pre class="term-tail"></pre>';
+      el.innerHTML = '<div class="ptitle"></div><div class="psum"></div><pre class="term-tail"></pre><div class="pfoot"></div>';
     }
     fillTile(el, p, tile(p));
     if (board.children[i] !== el) board.insertBefore(el, board.children[i] || null);
@@ -316,18 +379,22 @@ function drawBoardNow() {
   $("#bgutter").hidden = !S.live || S.termHost !== null;
   drawTally();
   drawLiveTitle();
+  drawTabs();
+  drawInspNow();
 }
 
+// The board header: a chip for each state that waits on you, with its count. A
+// click goes to the next tile in that state.
+const WAIT_WORD = { needs: (k) => (k > 1 ? "need you" : "needs you"), limit: () => "limit", error: (k) => (k > 1 ? "errors" : "error"), turn: () => "your turn" };
 function drawTally() {
-  const n = {};
-  for (const p of S.panes) if (p.unseen && COLOR[p.lamp]) n[p.lamp] = (n[p.lamp] || 0) + 1;
-  $("#tally").innerHTML = URGENT.filter((s) => n[s])
-    .map((s) => `<b style="color:${COLOR[s]}" data-jump="${s}"><i class="dot"></i>${n[s]} ${LABEL[s].toLowerCase()}</b>`)
-    .join("");
-  const hidden = window.SBParts?.hiddenCount() || 0;
-  if (hidden) $("#tally").insertAdjacentHTML("beforeend", `<span class="phidden" title="nvim and shells that run but do not show">${hidden} hidden</span>`);
+  const n = waiting();
+  setHTML($("#tally"), URGENT.filter((s) => n[s])
+    .map((s) => `<button class="schip" type="button" data-lamp="${s}" data-jump="${s}" title="The next tile at ${LABEL[s]}">${lampIcon(s)}${n[s]} ${WAIT_WORD[s](n[s])}</button>`)
+    .join(""));
+  $("#bnext").disabled = !S.panes.some((p) => p.unseen && p.id !== S.live);
 }
-$("#tally").addEventListener("click", (e) => { if (e.target.closest("b")) nextUnseen(1); });
+$("#tally").addEventListener("click", (e) => { const b = e.target.closest("[data-jump]"); if (b) nextOf(b.dataset.jump); });
+$("#bnext").addEventListener("click", () => nextUnseen(1));
 
 function upsert(p) {
   const i = S.panes.findIndex((x) => x.id === p.id);
@@ -426,38 +493,61 @@ $("#board").addEventListener("click", (e) => {
   if (b.dataset.resume !== undefined) return call("pane_resume", { id });
 });
 
-// Rename: double-click the title.
-document.addEventListener("dblclick", (e) => {
-  // Rename works on the live title. A click on a tile expands it first.
-  const name = e.target.closest("#livetitle .name");
-  if (!name || !S.live) return;
-  const id = S.live;
+// Keys on a focused tile: Enter opens it, Delete closes its pane.
+$("#board").addEventListener("keydown", (e) => {
+  const el = e.target.closest?.(".pane");
+  if (!el || e.target !== el) return;
+  if (e.key === "Enter") { e.preventDefault(); el.dataset.id === S.live && S.termHost === null ? term.focus() : expand(el.dataset.id); }
+  else if (e.key === "Delete") { e.preventDefault(); call("pane_close", { id: el.dataset.id }); }
+});
+// A tile that gets the focus (Tab, a click) is the focus of the board and of the
+// inspector. Not a button in it: the redraw would take the button from under the
+// mouse before the click.
+$("#board").addEventListener("focusin", (e) => {
+  const el = e.target.closest(".pane");
+  if (!el || e.target !== el || S.focus === el.dataset.id) return;
+  S.focus = el.dataset.id;
+  drawBoard();
+});
+
+// Rename: double-click the live title, or Rename in the inspector. `el` shows the
+// name and becomes a text field until Enter, Escape or a click away.
+function startRename(el, id) {
+  if (!el || !paneById(id)) return;
   // The Work environment tab finds its agent by its title (SPEC 30): it keeps it.
   if (workOf(paneById(id))) return toast(`The ${WORK_TITLE} agent keeps its name.`);
   renaming = true;
-  e.preventDefault();
-  name.contentEditable = "true";
-  name.focus();
-  document.getSelection().selectAllChildren(name);
+  el.textContent = paneName(paneById(id));
+  el.contentEditable = "true";
+  el.focus();
+  document.getSelection().selectAllChildren(el);
   const done = (save) => {
     if (!renaming) return;
     renaming = false;
-    name.contentEditable = "false";
-    // The name was edited by hand: the next draw writes the title again.
+    el.contentEditable = "false";
+    // The name was edited by hand: the next draw writes the titles again.
     $("#livetitle")._html = null;
-    const title = name.textContent.trim();
+    INSP.drawn = null;
+    const title = el.textContent.trim();
     if (save && title === WORK_TITLE) {
       toast(`"${WORK_TITLE}" is the name of the agent of the ${WORK_TITLE} tab. Pick another name.`);
       drawBoard();
     } else if (save) call("pane_rename", { id, title: title || null });
     else drawBoard();
   };
-  name.onkeydown = (k) => {
+  el.onkeydown = (k) => {
     if (k.key === "Enter") { k.preventDefault(); done(true); }
     if (k.key === "Escape") { k.preventDefault(); done(false); }
     k.stopPropagation();
   };
-  name.onblur = () => done(true);
+  el.onblur = () => done(true);
+}
+document.addEventListener("dblclick", (e) => {
+  // Rename works on the live title. A click on a tile expands it first.
+  const name = e.target.closest("#livetitle .name");
+  if (!name || !S.live) return;
+  e.preventDefault();
+  startRename(name, S.live);
 });
 
 // ---------- the live pane ----------
@@ -474,6 +564,14 @@ const term = new Terminal({
 const fit = new FitAddon.FitAddon();
 term.loadAddon(fit);
 term.open($("#term"));
+// The vendored mono font may load after the terminal measured its cell: measure
+// again then. A change of the font family makes xterm.js measure.
+const remeasure = (t) => document.fonts?.load('13px "JetBrains Mono"').then(() => {
+  const f = t.options.fontFamily;
+  t.options.fontFamily = "monospace";
+  t.options.fontFamily = f;
+}).catch(() => {});
+remeasure(term)?.then(() => fitSoon());
 term.attachCustomKeyEventHandler((e) => !isLeader(e));
 // Keys go in order. While one send is on its way, new keys wait in a buffer,
 // and the next send takes them all at once. So fast typing costs one round trip.
@@ -551,7 +649,8 @@ function setStrip(h) {
   wrap.style.setProperty("--strip", `${h}px`);
   return h;
 }
-const stripRoom = () => $("#view-board").getBoundingClientRect().height - 24;
+// The room under the board header: the live pane and the strip share it.
+const stripRoom = () => $("#view-board").getBoundingClientRect().height - $("#bhead").getBoundingClientRect().height - 24;
 const stripNow = () => $("#board").getBoundingClientRect().height;
 {
   const saved = SBSplit.load(STRIP_KEY);
@@ -647,15 +746,18 @@ function collapse(keep) {
 }
 
 let renaming = false;
+// The title line of the live pane: the name, the state, the repo and branch, the
+// task chip, the buttons of the state, Review, the nvim and term switches, Collapse.
 function drawLiveTitle() {
   const p = S.live && paneById(S.live);
   if (!p || renaming) return;
-  const state = p.lamp === "none" ? p.kind : LABEL[p.lamp] || p.lamp;
-  const nvimBtn = window.SBParts?.toggles(p) ?? (p.kind !== "nvim" && S.settings.nvim ? `<button class="tool" data-nvim>nvim</button>` : "");
-  const reviewBtn = p.kind === "claude" && !S.termHost ? `<button class="tool" data-lreview title="Review the commits that are not pushed">review</button>` : "";
-  setHTML($("#livetitle"), `<span class="name">${esc(paneName(p))}</span><span class="state" style="color:var(--muted)">${esc(state)}</span>
-    ${taskLine(p)}<span class="psum meta" style="border:0;padding:0;font:500 11px/1 var(--mono);color:var(--muted)">${esc(meta(p))}</span>${actions(p).replace('class="tact"', 'class="tact" style="margin:0"')}
-    ${reviewBtn}${nvimBtn}<button class="tool" data-collapse aria-label="Collapse">⤡</button>`);
+  const lt = $("#livetitle");
+  if (lt.dataset.lamp !== p.lamp) lt.dataset.lamp = p.lamp;
+  const nvimBtn = window.SBParts?.toggles(p) ?? (p.kind !== "nvim" && S.settings.nvim ? `<button class="chip" type="button" data-nvim title="Open nvim in this worktree (Leader e)">nvim</button>` : "");
+  const reviewBtn = p.kind === "claude" && !S.termHost ? `<button class="btn sm" type="button" data-lreview title="Review the commits that are not pushed">Review</button>` : "";
+  setHTML(lt, `<span class="name" title="Double-click to rename">${esc(paneName(p))}</span><span class="state">${lampIcon(p.lamp)}${esc(stateWord(p))}</span>`
+    + `<span class="lmeta">${esc(metaShort(p))}</span>${taskLine(p)}${actions(p, S.focus === p.id)}<span class="sp"></span>`
+    + `${reviewBtn}${nvimBtn}<button class="icon" type="button" data-collapse aria-label="Collapse (Leader x)" title="Collapse (Leader x)">${ICON.collapse}</button>`);
 }
 $("#livetitle").addEventListener("click", (e) => {
   const b = e.target.closest("button");
@@ -666,12 +768,18 @@ $("#livetitle").addEventListener("click", (e) => {
   if (b.dataset.ptoggle) return window.SBParts?.toggle(b.dataset.ptoggle, p.id);
   if (b.dataset.lreview !== undefined) return openLocalReview(p.id);
   if (b.dataset.ptask) return window.SBTasks?.open(b.dataset.ptask);
-  if (b.dataset.allow) return call("permit_answer", { permit: b.dataset.allow, allow: true });
-  if (b.dataset.deny) return call("permit_answer", { permit: b.dataset.deny, allow: false });
-  if (b.dataset.trust) return call("trust_answer", { id: p.id, yes: b.dataset.trust === "1" });
-  if (b.dataset.switch !== undefined) return call("connection_resume", { id: p.id });
-  if (b.dataset.resume !== undefined) return call("pane_resume", { id: p.id });
+  stateAct(b, p);
 });
+// A button of `actions(p)`: true when `b` was one.
+function stateAct(b, p) {
+  if (b.dataset.allow) call("permit_answer", { permit: b.dataset.allow, allow: true });
+  else if (b.dataset.deny) call("permit_answer", { permit: b.dataset.deny, allow: false });
+  else if (b.dataset.trust) call("trust_answer", { id: p.id, yes: b.dataset.trust === "1" });
+  else if (b.dataset.switch !== undefined) call("connection_resume", { id: p.id });
+  else if (b.dataset.resume !== undefined) call("pane_resume", { id: p.id });
+  else return false;
+  return true;
+}
 
 // A review of the pane's unpushed commits, in its own tab (SPEC 11.11).
 async function openLocalReview(pane) {
@@ -700,11 +808,18 @@ const urgency = (p) => { const i = URGENT.indexOf(p.lamp); return i < 0 ? URGENT
 function nextUnseen(dir) {
   const list = S.panes.filter((p) => p.unseen && p.id !== S.live).sort((a, b) => urgency(a) - urgency(b));
   if (!list.length) return;
-  const p = dir > 0 ? list[0] : list[list.length - 1];
-  // A review's Claude pane has no tile: go to its review tab.
+  goPane(dir > 0 ? list[0] : list[list.length - 1]);
+}
+// A review's Claude pane has no tile: go to its review tab.
+function goPane(p) {
   const r = askOf(p);
   if (r) return setTab(r.id);
   expand(p.id);
+}
+// A chip of the board header: the next unseen tile in that state.
+function nextOf(state) {
+  const p = S.panes.find((x) => x.unseen && x.lamp === state && x.id !== S.live);
+  if (p) goPane(p);
 }
 
 function moveFocus(d) {
@@ -716,9 +831,143 @@ function moveFocus(d) {
   $(`.pane[data-id="${CSS.escape(S.focus)}"]`)?.focus();
 }
 
+// ---------- the inspector (SPEC 33) ----------
+
+// A right panel of 280 px, closed by default. Leader i or the toggle at the right
+// of the header opens and closes it. Each screen (board, tasks, work, review)
+// remembers open or closed in the window's local storage, a convenience only.
+// A screen gives the content with `SBInsp.provide(screen, fn)`: `fn(tab)` returns
+//   { title, display, empty, alert: { text, buttons }, facts: [[label, value, opts]],
+//     actions: [{ label, act, key, title, disabled, primary, attr }], body, danger: [...], onAct(act, el) }
+// and the panel shows, in order: the alert, the facts, the repeat actions, the
+// body, a spacer, and the destructive actions. A value in `facts` is text; with
+// opts.act it is a link-like button. `body` is HTML that the screen escapes itself.
+const INSP = { providers: {}, open: {}, spec: null, drawn: null, queued: false };
+const screenOf = (tab) => (tab === "board" || tab === "tasks" || tab === "work" ? tab : "review");
+function inspIsOpen(screen = screenOf(S.tab)) {
+  if (!(screen in INSP.open)) {
+    try { INSP.open[screen] = localStorage.getItem(`sb.insp.${screen}`) === "1"; } catch (_) { INSP.open[screen] = false; }
+  }
+  return INSP.open[screen];
+}
+function setInsp(open) {
+  const screen = screenOf(S.tab);
+  if (!INSP.providers[screen]) return;
+  INSP.open[screen] = !!open;
+  try { localStorage.setItem(`sb.insp.${screen}`, open ? "1" : "0"); } catch (_) { /* a convenience only */ }
+  drawInspFrame();
+}
+const toggleInsp = () => setInsp(!inspIsOpen());
+// The panel and the toggle for the screen that shows.
+function drawInspFrame() {
+  const screen = screenOf(S.tab);
+  const has = !!INSP.providers[screen];
+  const open = has && inspIsOpen(screen);
+  $("#insp").hidden = !open;
+  $("#itoggle").hidden = !has;
+  $("#itoggle").setAttribute("aria-pressed", String(open));
+  if (open) drawInspNow();
+}
+// Many events can come in one frame: draw once per frame, as the board does.
+function drawInsp() {
+  if (INSP.queued) return;
+  INSP.queued = true;
+  const go = () => { if (INSP.queued) { INSP.queued = false; drawInspNow(); } };
+  requestAnimationFrame(go);
+  setTimeout(go, 50);
+}
+function drawInspNow() {
+  const box = $("#insp");
+  const fn = INSP.providers[screenOf(S.tab)];
+  // A name that you type stays as it is until you end the rename.
+  if (box.hidden || !fn || renaming) return;
+  let spec = null;
+  try { spec = fn(S.tab); } catch (e) { log("warn", "inspector:", e); }
+  spec = spec || { title: "Details", empty: "Nothing to show here." };
+  INSP.spec = spec;
+  if (!box.querySelector(".ihead")) {
+    box.innerHTML = `<div class="ihead"><span class="ititle"></span><button class="icon" type="button" data-iclose aria-label="Close the details (Leader i)" title="Close the details (Leader i)">${ICON.close}</button></div>`
+      + '<div class="ialert" role="status"></div><dl class="ifacts"></dl><div class="iacts"></div><div class="iextra"></div><span class="isp"></span><div class="idanger"></div>';
+  }
+  // Each part changes only when its HTML changes, so a button under the mouse stays.
+  const title = box.querySelector(".ititle");
+  const head = `${spec.display ? 1 : 0}|${spec.title || ""}`;
+  if (INSP.drawn !== head) { INSP.drawn = head; title.textContent = spec.title || ""; title.classList.toggle("disp", !!spec.display); }
+  const btn = (a, cls = "") => `<button class="btn${cls}${a.primary ? " primary" : ""}" type="button" data-iact="${esc(a.act)}"${a.title ? ` title="${esc(a.title)}"` : ""}${a.disabled ? " disabled" : ""}${a.attr ? ` ${a.attr}` : ""}><span>${esc(a.label)}</span>${a.key ? `<kbd>${esc(a.key)}</kbd>` : ""}</button>`;
+  const al = spec.alert;
+  setHTML(box.querySelector(".ialert"), al ? `<span>${esc(al.text)}</span>${al.buttons?.length ? `<div class="ibtns">${al.buttons.map((a) => btn(a, " sm")).join("")}</div>` : ""}` : "");
+  setHTML(box.querySelector(".ifacts"), (spec.facts || []).filter((f) => f && f[1] != null && f[1] !== "").map(([k, v, o = {}]) =>
+    `<dt>${esc(k)}</dt><dd${o.mono ? ' class="mono"' : ""}>${o.act ? `<button class="ilink" type="button" data-iact="${esc(o.act)}">${esc(v)}</button>` : esc(v)}</dd>`).join(""));
+  setHTML(box.querySelector(".iacts"), (spec.actions || []).map((a) => btn(a)).join(""));
+  setHTML(box.querySelector(".iextra"), spec.empty ? `<p class="iempty">${esc(spec.empty)}</p>` : spec.body || "");
+  setHTML(box.querySelector(".idanger"), (spec.danger || []).map((a) => btn(a)).join(""));
+}
+$("#insp").addEventListener("click", (e) => {
+  if (e.target.closest("[data-iclose]")) return setInsp(false);
+  const b = e.target.closest("[data-iact]");
+  if (b && !b.disabled) INSP.spec?.onAct?.(b.dataset.iact, b);
+});
+$("#itoggle").addEventListener("click", toggleInsp);
+window.SBInsp = {
+  provide: (screen, fn) => { INSP.providers[screen] = fn; if (screenOf(S.tab) === screen) drawInspFrame(); },
+  refresh: drawInsp,
+  open: () => setInsp(true),
+  close: () => setInsp(false),
+  toggle: toggleInsp,
+  isOpen: () => !$("#insp").hidden,
+  screen: () => screenOf(S.tab),
+};
+
+// The board's inspector: the focused tile, or the live pane.
+function boardTarget() {
+  const own = S.focus && (S.focus === S.live || tiles().some((p) => p.id === S.focus)) ? S.focus : null;
+  return paneById(own || S.live || "") || null;
+}
+SBInsp.provide("board", () => {
+  const p = boardTarget();
+  if (!p) return { title: "Details", empty: "Focus a tile to see its details here." };
+  const task = window.SBTasks?.forPane(p.id);
+  const live = p.id === S.live && !S.termHost;
+  // The parts of the live agent (SPEC 28): show, hide, sizes, stop.
+  const parts = live && p.kind === "claude" ? window.SBParts?.inspector(p) : null;
+  const actions = [];
+  if (p.kind === "claude") actions.push({ label: "Review the commits not pushed", act: "lreview", title: "A review of this agent's commits that no remote has (SPEC 11.11)" });
+  if (p.kind !== "nvim") actions.push({ label: task ? "Link to another task" : "Link to a task", act: "taskmenu", attr: "data-ptaskmenu" });
+  actions.push({ label: "Rename", act: "rename" }, { label: "Move left", act: "left", key: "<" }, { label: "Move right", act: "right", key: ">" });
+  if (parts) actions.push(...parts.actions);
+  return {
+    title: paneName(p),
+    display: true,
+    alert: parts?.alert || null,
+    facts: [
+      ["State", stateWord(p)],
+      ["Repo", p.repo],
+      ["Branch", p.branch, { mono: true }],
+      ["Folder", home(p.tree), { mono: true }],
+      ["Connection", p.connection && S.conn.list.length > 1 ? p.connection : null],
+      ["rust-analyzer", p.rss ? gb(p.rss) : null],
+      // Bash of this agent runs in Claude Code's sandbox (SPEC 31).
+      ["Bash", p.sandboxed ? "sandbox" : null],
+      ["Task", task ? task.title : null, { act: "task" }],
+    ],
+    actions,
+    danger: [...(parts?.danger || []), { label: "Close pane", act: "close", title: "Close this pane (Delete on a focused tile). An agent with a session can resume later." }],
+    onAct: (act, el) => {
+      if (act === "lreview") return openLocalReview(p.id);
+      if (act === "taskmenu") return window.SBTasks?.menu(p.id, el);
+      if (act === "task") return task && window.SBTasks?.open(task.id);
+      if (act === "rename") return startRename($("#insp .ititle"), p.id);
+      if (act === "left" || act === "right") { S.focus = p.id; return nudgeTile(act === "left" ? -1 : 1); }
+      if (act === "close") return call("pane_close", { id: p.id });
+      window.SBParts?.inspAct(act, p);
+    },
+  };
+});
+
 // ---------- keys (SPEC 7) ----------
 
 let leader = 0;
+let leaderTimer = null;
 // The leader from the config, for example "ctrl+space", "ctrl+a" or "cmd+;".
 // On macOS ctrl+space can switch the input language, so set another key there.
 function leaderKey() {
@@ -737,13 +986,17 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     e.stopPropagation();
     leader = Date.now();
+    // The leader shows only while it waits for its key.
     $("#leader").hidden = false;
+    clearTimeout(leaderTimer);
+    leaderTimer = setTimeout(() => { leader = 0; $("#leader").hidden = true; }, 1500);
     return;
   }
   if (!leader) return;
   if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
   const fresh = Date.now() - leader < 1500;
   leader = 0;
+  clearTimeout(leaderTimer);
   $("#leader").hidden = true;
   if (!fresh) return;
   e.preventDefault();
@@ -774,6 +1027,7 @@ window.addEventListener("keydown", (e) => {
     case "l": return window.SBParts?.side(1);
     case "z": return window.SBParts?.zoom();
     case "n": return openLauncher();
+    case "i": return toggleInsp();
     case "b": return setTab("board");
     case "t": return setTab("tasks");
     case "w": return setTab("work");
@@ -790,7 +1044,10 @@ function drawConn() {
   const active = S.conn.list.find((c) => c.name === S.conn.active);
   const atLimit = active?.limit_until && active.limit_until * 1000 > Date.now();
   const btn = $("#conn");
-  btn.textContent = S.conn.active;
+  // An icon on the narrow rail; the name and a caret on the wide one.
+  setHTML(btn, `${ICON.plug}<span class="nl">${esc(S.conn.active)}</span>${ICON.caret}`);
+  const tip = `Connection · ${S.conn.active}${atLimit ? " · at its limit" : ""} (Leader a)`;
+  if (btn.title !== tip) { btn.title = tip; btn.setAttribute("aria-label", tip); }
   btn.classList.toggle("limit", !!atLimit);
   btn.hidden = S.conn.list.length < 2 && S.conn.active === "default";
   $("#connmenu").innerHTML = S.conn.list
@@ -1204,7 +1461,8 @@ function copyText(text) {
   return ok;
 }
 
-window.SB = { S, LINK, invoke, call, listen, esc, setHTML, toast, setTab, WORK_TITLE, workOf, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, openLauncher, paneName, copyText, LABEL, term, isLeader, bytes, $ };
+window.SB = { S, LINK, invoke, call, listen, esc, setHTML, toast, setTab, WORK_TITLE, workOf, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, drawTabs, openLauncher, paneName, copyText, LABEL, term, isLeader, bytes, $,
+  lampIcon, actions, stateAct, stateWord, gb, home, ICON, startRename, remeasure };
 
 (async function start() {
   try {

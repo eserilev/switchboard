@@ -936,6 +936,8 @@
     },
     // For the board: the task of a pane, the task menu of a tile, and a task to open.
     forPane: (pane) => { const l = T.links.find((x) => x.pane === pane); return l ? task(l.task) : null; },
+    // For the rail: the tasks of the open sprint that are not done.
+    count: () => { const sp = T.loaded && openSprint(); return sp ? listOf(sp.id).filter((t) => t.status !== "done").length : 0; },
     menu,
     open: (id) => { if (!task(id)) return; window.SB.setTab("tasks"); openPanel(id); },
     // A pane changed: a hint ends when its pane leaves Your turn; dots follow lamps.

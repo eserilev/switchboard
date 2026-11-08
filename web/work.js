@@ -16,16 +16,18 @@
   const endedIn = (path) => S.panes.find((p) => workOf(p) && p.tree === path && p.lamp === "ended");
   const shows = () => S.tab === "work" && S.termHost === "work" && !!S.live && S.live === W.pane;
 
-  // The bar is built once and then changed in place: a pane event comes about once
-  // a second, and a new select or button under the mouse drops the click.
+  // The header is built once and then changed in place: a pane event comes about
+  // once a second, and a new select or button under the mouse drops the click.
+  // The repo picker is its title; then the checkout and branch, the agent's state
+  // and the buttons of that state, and Start Claude or Open.
   function drawBar() {
     const bar = $("#wbar");
     if (!$("#wrepo")) {
-      bar.innerHTML = '<label class="wpick">Repo <select id="wrepo" aria-label="Repo"></select></label>' +
-        '<button class="btn small primary" id="wgo" type="button"></button><span class="wnote"></span>';
+      bar.innerHTML = '<select id="wrepo" aria-label="Repo" title="Pick a repo"></select><span class="hmeta" id="wmeta"></span><span class="wstate" id="wstate"></span>' +
+        '<span id="wacts"></span><span class="sp"></span><button class="btn primary" id="wgo" type="button"></button>';
     }
     const sel = $("#wrepo");
-    const opts = S.repos.map((r) => `<option value="${esc(r.path)}"${r.path === W.repo ? " selected" : ""}>${esc(r.name)}${r.branch ? ` · ${esc(r.branch)}` : ""}</option>`).join("");
+    const opts = S.repos.map((r) => `<option value="${esc(r.path)}" title="${esc(r.path)}"${r.path === W.repo ? " selected" : ""}>${esc(r.name)}</option>`).join("");
     // A repo that is no longer in the list (a scan folder went) still shows.
     const gone = W.repo && !S.repos.some((r) => r.path === W.repo) ? `<option value="${esc(W.repo)}" selected>${esc(W.repo)}</option>` : "";
     // A select that has the focus may be open: its list stays until it lets go.
@@ -40,9 +42,20 @@
     if (go.textContent !== label) go.textContent = label;
     const off = !W.repo || W.opening;
     if (go.disabled !== off) go.disabled = off;
-    const note = open ? "nvim, Claude and a terminal in " + W.repo : W.repo ? "Claude, nvim and a terminal open in the repo's main checkout." : "Pick a repo to work in.";
-    const n = bar.querySelector(".wnote");
-    if (n.textContent !== note) n.textContent = note;
+    const repo = S.repos.find((r) => r.path === W.repo);
+    const meta = W.repo ? `main checkout${repo?.branch ? ` · ${repo.branch}` : ""}` : "";
+    const m = $("#wmeta");
+    if (m.textContent !== meta) m.textContent = meta;
+    if (m.title !== (W.repo || "")) m.title = W.repo || "";
+    // The state of the tab's agent, with the buttons of that state (Allow, Trust…):
+    // the live title does not show in this tab.
+    const a = open ? paneById(W.pane) : null;
+    const st = $("#wstate");
+    if (st.dataset.lamp !== (a?.lamp || "")) st.dataset.lamp = a?.lamp || "";
+    setHTML(st, a ? `${window.SB.lampIcon(a.lamp)}Claude: ${esc(window.SB.stateWord(a))}` : "");
+    setHTML($("#wacts"), a ? window.SB.actions(a, true) : "");
+    window.SBInsp?.refresh();
+    window.SB.drawTabs();
   }
 
   // Empties the tab's box, but never the live pane: after a collapse it stays here,
@@ -167,7 +180,41 @@
     if (W.repo && agentIn(W.repo)) open();
     else draw();
   });
-  $("#wbar").addEventListener("click", (e) => { if (e.target.closest("#wgo")) open(); });
+  $("#wbar").addEventListener("click", (e) => {
+    if (e.target.closest("#wgo")) return open();
+    const b = e.target.closest("#wacts button");
+    const a = paneById(W.pane);
+    if (b && a) window.SB.stateAct(b, a);
+  });
+
+  // The inspector of the tab (SPEC 33): the agent's facts, the parts, and the
+  // commits that are not pushed.
+  window.SBInsp.provide("work", () => {
+    if (!W.repo) return { title: "Work details", empty: "Pick a repo in the header first." };
+    const a = shows() ? paneById(W.pane) : null;
+    const nv = window.SBParts.companion(W.repo, "nvim");
+    const parts = a ? window.SBParts.inspector(a) : null;
+    const actions = [...(parts?.actions || [])];
+    if (a) actions.push({ label: "Review the commits not pushed", act: "lreview", title: "A review of this agent's commits that no remote has (SPEC 11.11)" });
+    return {
+      title: "Work details",
+      alert: parts?.alert || null,
+      facts: [
+        ["Folder", window.SB.home(W.repo), { mono: true }],
+        ["Claude", a ? window.SB.stateWord(a) : agentIn(W.repo) ? "Runs, not open here" : "Not started"],
+        ["Connection", a?.connection && S.conn.list.length > 1 ? a.connection : null],
+        ["rust-analyzer", nv?.rss ? window.SB.gb(nv.rss) : null],
+        ["nvim", nv ? (nv.modified ? "A buffer is not saved" : "Every buffer is saved") : "Not running"],
+      ],
+      actions,
+      danger: parts?.danger || [],
+      empty: a ? null : "Start Claude, or Open the agent that runs there. Its nvim and terminal open next to it.",
+      onAct: (act) => {
+        if (act === "lreview") return a && window.SB.openLocalReview(a.id);
+        if (a) window.SBParts.inspAct(act, a);
+      },
+    };
+  });
 
   // Shows a work agent from elsewhere (a notice, the next pane that waits): its repo
   // in this tab.

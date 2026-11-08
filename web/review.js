@@ -115,6 +115,7 @@
     if (!l.term && !l.opening && !l.noTerm && r.status === "ready") openTerm(r.id);
     drawTermWait(r);
     drawDrafts(r);
+    window.SBInsp.refresh();
     const key = diffKey(r);
     if (key && !l.diff.has(key)) loadDiff(r.id);
     else drawDiff(r);
@@ -1580,6 +1581,34 @@
     else if (e.key === "o") showNvim(id);
     else return;
     e.preventDefault();
+  });
+
+  // The inspector of a review tab (SPEC 33). Phase 1 of the redesign: the facts and
+  // Close review. Phase 2 moves the review's own controls in here.
+  window.SBInsp.provide("review", (tab) => {
+    const r = S.reviews.get(tab);
+    if (!r) return null;
+    const status = r.status && r.status !== "ready" ? r.status : null;
+    return {
+      title: "Review details",
+      alert: r.error ? { text: r.error } : null,
+      facts: r.kind === "local" ? [
+        ["Repo", r.repo],
+        ["Commits", r.head ? `${short(r.base)}..${short(r.head)}` : null, { mono: true }],
+        ["Base", r.base_ref, { mono: true }],
+        ["Folder", window.SB.home(r.tree), { mono: true }],
+        ["State", status],
+      ] : [
+        ["PR", `${r.repo} #${r.number}`],
+        ["Round", r.round > 1 ? `${r.round} · since ${short(r.since)}` : null],
+        ["Head", short(r.head), { mono: true }],
+        ["Base", r.base_ref, { mono: true }],
+        ["Folder", window.SB.home(r.tree), { mono: true }],
+        ["State", status],
+      ],
+      danger: [{ label: "Close review", act: "close" }],
+      onAct: (act) => { if (act === "close") closeReview(r.id); },
+    };
   });
 
   window.SBReview = {

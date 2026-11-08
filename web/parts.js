@@ -31,6 +31,7 @@
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open($(`#t${kind}`));
+    window.SB.remeasure(term);
     term.attachCustomKeyEventHandler((e) => !window.SB.isLeader(e));
     const t = { term, fit, id: null, drawn: false, held: [], keys: "", sending: false };
     const flush = async () => {
@@ -103,20 +104,19 @@
     heads();
   }
 
+  // A slim header for each part: its name and its state. Zoom shows on the part
+  // with the keys. Hide and Stop are in the inspector (SPEC 33).
+  const ZOOM = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 5V2h3M9 2h3v3M12 9v3H9M5 12H2V9"/></svg>';
   function heads() {
-    const home = P.tree ? P.tree.replace(/^\/home\/[^/]+|^\/Users\/[^/]+/, "~") : "";
-    const zoom = (part) => `<button class="tool" data-zoom="${part}" title="Zoom (Leader z)">${P.zoom ? "unzoom" : "zoom"}</button>`;
-    const tools = (kind) => P.stopAsk === kind
-      ? `<span class="pask">A buffer is not saved. Stop nvim anyway?</span><button class="tool" data-stopyes="${kind}">Stop</button><button class="tool" data-stopno>Cancel</button>`
-      : `<button class="tool" data-stop="${kind}" title="Stop ${kind === "nvim" ? "nvim" : "the shell"}">stop</button><button class="tool x" data-hide="${kind}" aria-label="Hide ${kind}" title="Hide. It keeps running. (Leader ${KEY[kind]})">×</button>`;
-    const head = (part, name, extra) => `<span class="pn">${name}</span><span class="pp">${esc(home)}</span>${extra}<span class="sp"></span>${zoom(part)}${part === "agent" ? "" : tools(part)}`;
+    const zoom = (part) => `<button class="icon" type="button" data-zoom="${part}" aria-label="${P.zoom ? "Take the zoom back" : "Zoom"} (Leader z)" title="${P.zoom ? "Take the zoom back" : "Zoom"} (Leader z)">${ZOOM}</button>`;
+    const head = (part, name, extra) => `<span class="pn">${name}</span>${extra}<span class="sp"></span>${zoom(part)}`;
     const nv = paneById(T.nvim.id);
     const mod = nv?.modified ? `<span class="pmod" title="A buffer is not saved">[+]</span>` : "";
     const rel = Date.now() - P.reloaded < 6000 ? `<span class="prel">changed on disk, reloaded</span>` : "";
     const sh = paneById(T.term.id);
-    const busy = sh?.busy ? `<span class="pmod" title="A command runs">▸ busy</span>` : "";
+    const busy = sh?.busy ? `<span class="pmod" title="A command runs">▸</span>` : "";
     // Only a change is written: a pane event comes about once a second, and a new
-    // button under the mouse (Stop, Cancel) drops the click.
+    // button under the mouse drops the click.
     const set = (part, html) => {
       const h = $(`#p${part} .parthead`);
       setHTML(h, html);
@@ -125,6 +125,36 @@
     set("agent", head("agent", "claude", ""));
     set("nvim", head("nvim", "nvim", mod + rel));
     set("term", head("term", "term", busy));
+    window.SBInsp?.refresh();
+  }
+
+  // The parts in the inspector of the board and of the work tab: show or hide each
+  // part, reset the sizes, and stop a part. Stop asks first when nvim has a buffer
+  // that is not saved.
+  function inspector(p) {
+    if (!p || S.live !== p.id || !parted()) return null;
+    const kinds = KINDS.filter((k) => k !== "nvim" || S.settings.nvim);
+    const name = (k) => (k === "nvim" ? "nvim" : "the terminal");
+    const actions = kinds.map((k) => ({ label: `${P.shown[k] ? "Hide" : "Show"} ${name(k)}`, act: `${P.shown[k] ? "hide" : "show"}-${k}`, key: KEY[k],
+      title: P.shown[k] ? "It keeps running" : `Start or show ${name(k)} in this worktree` }));
+    actions.push({ label: "Reset the sizes", act: "reset", title: "The dividers go back to half the width and 220 px" });
+    const danger = kinds.filter((k) => T[k].id).map((k) => ({ label: `Stop ${k}`, act: `stop-${k}`, title: `End ${k === "nvim" ? "nvim" : "the shell"}` }));
+    const alert = P.stopAsk ? { text: "A buffer is not saved. Stop nvim anyway?", buttons: [{ label: "Stop", act: `stopyes-${P.stopAsk}` }, { label: "Cancel", act: "stopno" }] } : null;
+    return { actions, danger, alert };
+  }
+  function inspAct(act, p) {
+    const [verb, kind] = act.split("-");
+    if (verb === "hide" && P.shown[kind]) return hide(kind, false);
+    if (verb === "show") return show(kind, p.id);
+    if (verb === "reset") return resetSizes();
+    if (verb === "stop") return stop(kind, false);
+    if (verb === "stopyes") return stop(kind, true);
+    if (verb === "stopno") { P.stopAsk = null; heads(); }
+  }
+  // The dividers of this worktree go back to their first sizes.
+  function resetSizes() {
+    remember({ nvimW: null, termH: null });
+    sizes();
   }
 
   // Puts a running pane in a part and draws its screen.
@@ -306,24 +336,24 @@
     heads();
   }
 
-  // The nvim and term chips of an agent tile.
+  // The nvim and term chips of an agent tile. They always show (SPEC 28.3): a part
+  // that runs has a dot, and a filled chip.
   function chips(p) {
     return KINDS.filter((k) => k !== "nvim" || S.settings.nvim).map((k) => {
       const c = companion(p.tree, k);
-      if (!c) return `<button class="tool pchip off" data-part="${k}" title="Start ${k === "nvim" ? "nvim" : "a shell"} in this worktree (Leader ${KEY[k]})">${k}</button>`;
+      if (!c) return `<button class="chip pchip off" type="button" data-part="${k}" title="Start ${k === "nvim" ? "nvim" : "a shell"} in this worktree (Leader ${KEY[k]})">${k}</button>`;
       const done = k === "term" && !c.busy && Date.now() - (doneAt.get(c.id) || 0) < 10000;
-      const mark = c.busy ? "▸" : done ? "✓" : "●";
       const plus = c.modified ? ` <span class="pplus">[+]</span>` : "";
       const what = k === "nvim" ? (c.modified ? "nvim runs. A buffer is not saved" : "nvim runs") : c.busy ? "A command runs in the shell" : done ? "The command ended" : "The shell runs";
       const ra = c.rss ? `. rust-analyzer ${(c.rss / 1073741824).toFixed(1)} GB` : "";
-      return `<button class="tool pchip on" data-part="${k}" title="${esc(what + ra)}">${mark} ${k}${plus}${done ? " done" : ""}</button>`;
+      return `<button class="chip pchip on" type="button" data-part="${k}" title="${esc(what + ra)}"><span class="cdot"></span>${k}${plus}${c.busy ? " ▸" : ""}${done ? " ✓ done" : ""}</button>`;
     }).join("");
   }
 
   // The nvim and term switches in the live title.
   function toggles(p) {
     if (p.kind !== "claude" || !parted()) return null;
-    const b = (k) => `<button class="tool ptog" data-ptoggle="${k}" aria-pressed="${P.shown[k]}" title="Show or hide ${k === "nvim" ? "nvim" : "the terminal"} (Leader ${KEY[k]})">${k}</button>`;
+    const b = (k) => `<button class="chip ptog" type="button" data-ptoggle="${k}" aria-pressed="${P.shown[k]}" title="Show or hide ${k === "nvim" ? "nvim" : "the terminal"} (Leader ${KEY[k]})">${P.shown[k] ? '<span class="cdot"></span>' : ""}${k}</button>`;
     return `<span class="ptoggles" role="group" aria-label="Parts of this pane">${S.settings.nvim ? b("nvim") : ""}${b("term")}</span>`;
   }
 
@@ -335,10 +365,6 @@
       return;
     }
     if (b.dataset.zoom) return zoom(b.dataset.zoom);
-    if (b.dataset.hide) return hide(b.dataset.hide, false);
-    if (b.dataset.stop) return stop(b.dataset.stop, false);
-    if (b.dataset.stopyes) return stop(b.dataset.stopyes, true);
-    if (b.dataset.stopno !== undefined) { P.stopAsk = null; heads(); }
   });
 
   // The divider sizes, for each worktree. A double-click resets them.
@@ -386,5 +412,5 @@
   });
 
   layout();
-  window.SBParts = { P, T, isPart, hiddenCount, chips, toggles, show, toggle, hide, stop, cycle, side, zoom, unzoom, reset, afterExpand, output, panes, companion };
+  window.SBParts = { P, T, isPart, hiddenCount, chips, toggles, show, toggle, hide, stop, cycle, side, zoom, unzoom, reset, afterExpand, output, panes, companion, inspector, inspAct, resetSizes };
 })();
