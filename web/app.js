@@ -834,20 +834,27 @@ function moveFocus(d) {
 
 // ---------- the inspector (SPEC 33) ----------
 
-// A right panel of 280 px, closed by default. Leader i or the toggle at the right
-// of the header opens and closes it. Each screen (board, tasks, work, review)
-// remembers open or closed in the window's local storage, a convenience only.
+// A right panel of 280 px. Leader i or the toggle at the right of the header opens
+// and closes it. Each screen (board, tasks, work, review, local) remembers open or
+// closed in the window's local storage, a convenience only.
 // A screen gives the content with `SBInsp.provide(screen, fn)`: `fn(tab)` returns
 //   { title, display, empty, alert: { text, buttons }, facts: [[label, value, opts]],
-//     actions: [{ label, act, key, title, disabled, primary, attr }], body, danger: [...], onAct(act, el) }
+//     actions: [{ label, act, key, title, disabled, primary, attr }], body, danger: [...],
+//     onAct(act, el), onDraw(box) }
 // and the panel shows, in order: the alert, the facts, the repeat actions, the
 // body, a spacer, and the destructive actions. A value in `facts` is text; with
-// opts.act it is a link-like button. `body` is HTML that the screen escapes itself.
+// opts.act it is a link-like button. `body` is HTML that the screen escapes itself;
+// a button in it with `data-iact` calls `onAct` too. `onDraw` runs after each draw.
 const INSP = { providers: {}, open: {}, spec: null, drawn: null, queued: false };
-const screenOf = (tab) => (tab === "board" || tab === "tasks" || tab === "work" ? tab : "review");
+// A review of local work is a screen of its own: its controls live in the
+// inspector, so it starts open there (SPEC 11.11). Every other screen starts closed.
+const screenOf = (tab) => (tab === "board" || tab === "tasks" || tab === "work" ? tab : S.reviews.get(tab)?.kind === "local" ? "local" : "review");
 function inspIsOpen(screen = screenOf(S.tab)) {
   if (!(screen in INSP.open)) {
-    try { INSP.open[screen] = localStorage.getItem(`sb.insp.${screen}`) === "1"; } catch (_) { INSP.open[screen] = false; }
+    try {
+      const v = localStorage.getItem(`sb.insp.${screen}`);
+      INSP.open[screen] = v === null ? screen === "local" : v === "1";
+    } catch (_) { INSP.open[screen] = screen === "local"; }
   }
   return INSP.open[screen];
 }
@@ -902,6 +909,7 @@ function drawInspNow() {
   setHTML(box.querySelector(".iacts"), (spec.actions || []).map((a) => btn(a)).join(""));
   setHTML(box.querySelector(".iextra"), spec.empty ? `<p class="iempty">${esc(spec.empty)}</p>` : spec.body || "");
   setHTML(box.querySelector(".idanger"), (spec.danger || []).map((a) => btn(a)).join(""));
+  spec.onDraw?.(box);
 }
 $("#insp").addEventListener("click", (e) => {
   if (e.target.closest("[data-iclose]")) return setInsp(false);
@@ -911,7 +919,8 @@ $("#insp").addEventListener("click", (e) => {
 $("#itoggle").addEventListener("click", toggleInsp);
 window.SBInsp = {
   provide: (screen, fn) => { INSP.providers[screen] = fn; if (screenOf(S.tab) === screen) drawInspFrame(); },
-  refresh: drawInsp,
+  // `now`: draw at once, for a change that you made in the panel.
+  refresh: (now) => (now ? drawInspNow() : drawInsp()),
   open: () => setInsp(true),
   close: () => setInsp(false),
   toggle: toggleInsp,
