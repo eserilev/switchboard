@@ -674,11 +674,12 @@ const stripNow = () => $("#board").getBoundingClientRect().height;
   });
 }
 
-// Puts the live section back on the board.
+// Puts the live section back on the board, under the board's header: the grid
+// gives the second row to the live pane.
 function parkLive() {
   const live = $("#live");
   live.classList.remove("work");
-  if (live.parentElement !== $("#view-board")) $("#view-board").prepend(live);
+  if (live.parentElement !== $("#view-board")) $("#bhead").after(live);
 }
 
 // Shows a pane in the live terminal. With `host`, the terminal moves into that
