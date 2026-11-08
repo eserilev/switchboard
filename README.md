@@ -21,6 +21,8 @@ cargo run -p switchboard
 
 ## Use
 
+`docs/GUIDE.md` is the short user guide.
+
 The leader key is `leader` in the config: `ctrl+space` on Linux, and `ctrl+;` from the macOS install. The table uses `Ctrl+Space`.
 
 | Keys | Action |
