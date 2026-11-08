@@ -13,10 +13,24 @@
     window.__emit("pane_output", { pane: "pn1", data: btoa("  1 fn main() {\r\n  2     println!(\"hi\");\r\n  3 }\r\n") });
     window.__emit("pane_output", { pane: "ps1", data: btoa("~/lighthouse $ cargo check\r\n    Finished dev\r\n~/lighthouse $ ") });
   }
-  if (v === "review") {
+  if (v.startsWith("review")) {
     window.SB.setTab("r1");
     await new Promise((r) => setTimeout(r, 200));
     document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    await new Promise((r) => setTimeout(r, 200));
+    // #review-tour: Claude's places; #review-finish: the Finish popover; #review-insp: the inspector.
+    if (v === "review-tour") window.__emit("review", Object.assign({}, window.__data.reviews[0], { show: { at: Date.now(), points: [
+      { file: "beacon_node/gloas.rs", line: 11, end: null, side: "new", kind: "must", note: "Use `safe_sub` here.", changed: true },
+      { file: "beacon_node/gloas.rs", line: 12, end: null, side: "new", kind: "nit", note: "A name.", changed: true }] },
+      mentions: [{ file: "beacon_node/gloas.rs", line: 11, end: null, side: "new", name: null, changed: true }, { file: "beacon_node/x.rs", line: 4, end: null, side: "new", name: "far_fn", changed: false }] }));
+    if (v === "review-finish") document.querySelector('#rhead [data-act="finish"]').click();
+    if (v === "review-insp") {
+      window.__emit("review", Object.assign({}, window.__data.reviews[0], { new_head: "fff0000bbbb" }));
+      window.SBInsp.open();
+    }
+  }
+  if (v === "local") {
+    await window.SB.openLocalReview("p1");
   }
   if (v.startsWith("tasks-p3")) {
     // Phase 3: points, tags, links, a merged PR, a planned sprint and a burndown.

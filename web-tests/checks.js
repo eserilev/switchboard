@@ -305,11 +305,23 @@
     check("a review has its own inspector, with its facts and Close review", !$("#insp").hidden && $("#insp").textContent.includes("sigp/lighthouse #10071") && !!$('#insp .idanger [data-iact="close"]') && localStorage.getItem("sb.insp.review") === "1", $("#insp").textContent);
     window.SBInsp.close();
     check("the review header leaves room for the inspector toggle", parseInt(getComputedStyle($("#rhead")).paddingRight) >= 60 && $("#rhead").getBoundingClientRect().height >= 52);
+    // C v2 (SPEC 11.1): the title, #N · round, the state of the guide, and one gold button.
+    check("the review header is one 52 px row: the title, the number and round, the guide state, Finish review", Math.round($("#rhead").getBoundingClientRect().height) === 52
+      && $("#rtitle").textContent === "Add IL transactions" && getComputedStyle($("#rtitle")).fontSize === "20px" && $("#rmeta").textContent === "#10071 · round 1"
+      && $("#rstat").textContent.includes("guide ready") && !!$("#rstat .sdot.s-ready")
+      && $$("#view-review .btn.primary").length === 1 && $('#rhead [data-act="finish"]').classList.contains("primary") && $('#rhead [data-act="finish"]').textContent === "Finish review · 1"
+      && !$('#rhead [data-act="newcommits"]') && !$('#rhead [data-act="close"]') && !$('#rhead [data-act="restart"]'), $("#rhead").textContent);
+    check("the columns: steps 232 px and Claude 290 px by default", Math.round($("#rcols > .rside").getBoundingClientRect().width) === 232 && Math.round($("#rcols > .rclaude").getBoundingClientRect().width) === 290,
+      [...$$("#rcols > .col")].map((c) => Math.round(c.getBoundingClientRect().width)).join());
+    check("the steps column has the Guide and Files switch and how many steps are reviewed", !!$('#rshead #rmode [data-mode="guide"][aria-pressed="true"]') && $("#rshead .rcount").textContent === "1 / 2 reviewed", $("#rshead").textContent);
+    check("a step row has a tick or its number, the title and at most one mark; the rest is in its tooltip", $('#rsteps [data-i="0"]').classList.contains("checked") && $('#rsteps [data-i="0"] .n').textContent === "1" && $$('#rsteps [data-i="1"] > *').length === 3
+      && !$("#rsteps").textContent.includes("no notes") && !$("#rsteps .badge") && $('#rsteps [data-i="1"]').title.includes("1 thread"), $('#rsteps [data-i="1"]')?.outerHTML);
   }
   check("steps render", $$("#rsteps .step").length === 2);
   docKey("j");
   await wait(300);
   check("j goes to step 2", $('#rsteps [aria-current="step"]')?.dataset.i === "1");
+  check("a reviewed step that is not the current one shows a tick", $('#rsteps [data-i="0"] .n').textContent === "✓");
   // The Claude column: a real Claude Code pane that forks the guide session.
   {
     const first = called("review_term")[0]?.[1];
@@ -317,16 +329,19 @@
     check("the live terminal moves into the Claude column", !!$("#rterm #live") && !$("#live").hidden && window.SB.S.live === "p8" && window.SB.S.termHost === "r1");
     check("the place is saved for a restart", JSON.parse(localStorage.getItem("sb.review.place.r1") || "{}").cur === 1);
   }
-  check("guide text renders markdown", !!$("#rguide .what strong") && !!$("#rguide .check code"));
+  check("guide text renders markdown", !!$("#rguide .what strong") && !!$("#rguide .checks code"));
   {
     // A remote image would load at once and could carry the code out in its URL.
     const w = $("#rguide .what");
     check("guide markdown shows an image as text and keeps only http(s) links", !!w && !w.querySelector("img") && w.textContent.includes("leak") && !w.querySelector('a[href^="javascript"]') && !!w.querySelector('a[href="https://example.com/spec"]'), w?.innerHTML);
   }
   // Why, Claude's answers to the checks, and Claude's take (SPEC 11.12).
-  check("the step shows why it matters and why it is a step", $("#rguide .why").textContent.includes("Why it matters") && $("#rguide .why").textContent.includes("wrong inclusion list") && $("#rguide .why").textContent.includes("Why a separate step"));
-  check("each check item shows Claude's answer", [...$$("#rguide .check .ans")].map((x) => x.textContent).join("|") === "Claude: matches the spec|Claude: see the note on line 11");
-  check("the take bar shows the opinion, the verdict and the counts", $("#rtake .tk-label")?.textContent.includes("not verified") && $("#rtake .verdict")?.textContent === "needs a change" && $("#rtake").textContent.includes("1 must fix · 1 should fix · 1 nit"), $("#rtake")?.textContent);
+  check("the step leads with why it matters, and says why it is a step", $("#rguide .lead")?.textContent === "It matters because a wrong slot builds a block with the wrong inclusion list." && getComputedStyle($("#rguide .lead")).fontWeight === "600"
+    && $("#rguide .whysplit")?.textContent.includes("The only change on the proposal path"), $("#rguide .lead")?.textContent);
+  check("each check item shows Claude's answer in purple, with ✓ or !", [...$$("#rguide .checks .ans")].map((x) => x.textContent).join("|") === "✓ matches the spec|! see the note on line 11"
+    && getComputedStyle($("#rguide .checks .ans")).color === "rgb(179, 165, 220)", [...$$("#rguide .checks .ans")].map((x) => x.textContent).join("|"));
+  check("the take line shows the opinion, the verdict and the counts", $("#rtake .tk-label")?.title.includes("not verified") && $("#rtake .verdict")?.textContent === "needs a change" && $$("#rtake > .sevchip").map((x) => x.textContent).join() === "1 must,1 should,1 nit", $("#rtake")?.textContent);
+  check("severity has its own colors: should is teal, not the gold of needs you", getComputedStyle($("#rtake > .sevchip.sev-should")).borderTopColor === "rgb(108, 196, 192)" && getComputedStyle($("#rtake > .sevchip.sev-must")).borderTopColor === "rgb(236, 143, 184)");
   check("a note with a line shows under its line, with a dot", !!$('#rdiff tr.noted-must td.ln[data-ln="11"]') && $("#rdiff .tnote")?.textContent.includes("saturates") && !!$("#rdiff .tnote .sev-must"));
   check("notes with no line on screen wait in the take list", $("#rtake [data-tk=list]")?.textContent === "Show list (2)");
   $("#rtake [data-tk=list]").click();
@@ -336,15 +351,26 @@
   [...$$("#rtake .tk-list .tnote")].find((x) => x.textContent.includes("far below")).querySelector("[data-tadd]").click();
   await wait(100);
   check("Add as comment on a line that is not on screen says so and opens no form", !$("#rcform") && $("#toast")?.textContent.includes("not on screen"), $("#toast")?.textContent);
-  check("the steps list shows the worst severity and a count", $('#rsteps [data-i="1"] .badge.sev-must')?.textContent === "must fix · 1");
-  check("the header shows Claude's take on the PR", $("#rhead .prtake")?.textContent.includes("Claude on the PR: needs a change") && $("#rhead .prtake").textContent.includes("no test for slot 0"));
+  check("the steps list shows the worst severity as a dot, and the counts in the tooltip", !!$('#rsteps [data-i="1"] .sevdot.sev-must') && $('#rsteps [data-i="1"]').title.includes("Claude: 1 must fix, 1 should fix, 1 nit"), $('#rsteps [data-i="1"]')?.title);
+  {
+    // Claude's take on the PR, in the inspector.
+    window.SBInsp.open();
+    window.SBInsp.refresh(true);
+    const f = Object.fromEntries($$("#insp .ifacts dt").map((dt) => [dt.textContent, dt.nextElementSibling.textContent]));
+    check("the inspector shows Claude's take on the PR, with its notes", f.Claude === "needs a change · 1 should fix" && $("#insp .iextra").textContent.includes("no test for slot 0") && $("#insp .iextra").textContent.includes("No test covers slot 0") && !!$("#insp .iextra .tnote .sev-should"), JSON.stringify(f));
+    check("the inspector shows the coverage line of the checker", f.Coverage === "✓ All 3 changed lines in 1 files covered", f.Coverage);
+    check("the inspector has Copy all comments, Re-run take and the Files switch", ["copy", "prretake", "mode"].every((a) => !!$(`#insp .iacts [data-iact="${a}"]`)) && $('#insp [data-iact="mode"] kbd')?.textContent === "f");
+    window.SBInsp.close();
+  }
   window.__calls.length = 0;
   $("#rdiff .tnote [data-task]").click();
   await wait(100);
   check("Ask types the note into Claude's prompt", called("pane_input").some((c) => c[1].data.includes("beacon_node/gloas.rs:11 Your note")), JSON.stringify(called("pane_input")));
+  check("Re-run is in the menu of the take line", !$("#rtake [data-tk=rerun]"));
+  $("#rtake [data-tk=menu]").click();
   $("#rtake [data-tk=rerun]").click();
   await wait(50);
-  check("Re-run asks for the take of this step again", called("review_retake")[0]?.[1].step === "s2");
+  check("Re-run asks for the take of this step again", called("review_retake")[0]?.[1].step === "s2" && !$("#rtake .tk-menu"));
   $("#rdiff .tnote [data-tdis]").click();
   await wait(50);
   const dkey = called("review_dismiss")[0]?.[1];
@@ -382,8 +408,7 @@
   await wait(50);
   check("pin shows in the guide", $("#rguide").textContent.includes("Use safe_sub, not -."));
   check("diff renders with focus lines", $$("#rdiff tr.focus").length === 3, $$("#rdiff tr.focus").length);
-  check("coverage shows in the header", $("#rhead .cov.ok")?.textContent.includes("All 3 changed lines in 1 files covered"), $("#rhead").textContent);
-  check("step shows its first range", $('#rsteps [data-i="1"] .loc')?.textContent === "beacon_node/gloas.rs:11-12 +1", $('#rsteps [data-i="1"] .loc')?.textContent);
+  check("step shows its first range in its tooltip", $('#rsteps [data-i="1"]').title.startsWith("beacon_node/gloas.rs:11-12 +1"), $('#rsteps [data-i="1"]').title);
   check("removed line has the old number", [...$$("#rdiff tr.del td.ln")].map((t) => t.textContent).join() === "11");
   check("thread anchor dot on line 11", !!$('#rdiff tr.anchored td.ln[data-ln="11"][data-side="new"]'));
   window.__calls.length = 0;
@@ -502,7 +527,7 @@
     $('[data-rview="nvim"]').click();
     await wait(200);
     const first = called("review_nvim").at(-1)?.[1];
-    const shownPaths = $$("#rdiff .file > span").map((x) => x.firstChild.textContent.trim());
+    const shownPaths = $$("#rdiff .file > .fp").map((x) => x.firstChild.textContent.trim());
     check("nvim takes the column, at a file of the step", inCol("p3") && pressed() === "nvim" && first?.id === "r1" && shownPaths.includes(first.path) && first.line > 0, JSON.stringify({ first, shownPaths, live: window.SB.S.live }));
     check("the review stays open", window.SB.S.tab === "r1" && !$("#view-review").hidden);
     leader("e");
@@ -519,7 +544,7 @@
     $('[data-rview="nvim"]').click();
     await wait(200);
     const at = called("review_nvim").at(-1)?.[1];
-    check("nvim opens at the clicked line", at?.line === +td.dataset.ln && at?.path === $$("#rdiff .file > span")[+td.dataset.sec].firstChild.textContent.trim() && inCol("p3"), JSON.stringify(at));
+    check("nvim opens at the clicked line", at?.line === +td.dataset.ln && at?.path === $$("#rdiff .file > .fp")[+td.dataset.sec].firstChild.textContent.trim() && inCol("p3"), JSON.stringify(at));
     td.click();
     await wait(100);
     // The nvim button of a file opens it in the column too, not on the board.
@@ -532,20 +557,23 @@
   }
   // Restart (SPEC 11.13): a confirm first, then the review starts again.
   {
-    const btn = $('#rhead [data-act="restart"]');
-    check("a PR review has Restart", !!btn && btn.title.includes("unstable"), btn?.title);
+    window.SBInsp.open();
+    window.SBInsp.refresh(true);
+    const btn = $('#insp .idanger [data-iact="restart"]');
+    check("a PR review has Restart in the inspector", !!btn && btn.title.includes("unstable"), btn?.title);
     btn.click();
     await wait(50);
     check("Restart asks first, and names the base branch", !$("#rfinish").hidden && $("#rfinish").textContent.includes("unstable") && called("review_restart").length === 0);
     [...$$("#rfinish [data-b]")].find((b) => b.textContent === "Cancel").click();
     await wait(50);
     check("Cancel restarts nothing", $("#rfinish").hidden && called("review_restart").length === 0);
-    $('#rhead [data-act="restart"]').click();
+    $('#insp [data-iact="restart"]').click();
     await wait(50);
     [...$$("#rfinish [data-b]")].find((b) => b.textContent === "Restart").click();
     await wait(100);
     check("Restart starts the review again", called("review_restart").length === 1 && called("review_restart")[0][1].id === "r1");
     check("Restart goes back to the first step", $('#rsteps [aria-current="step"]')?.dataset.i === "0");
+    window.SBInsp.close();
     // Back to step 2, where the checks below expect to be.
     docKey("j");
     await wait(300);
@@ -567,7 +595,16 @@
     window.__emit("review", window.__data.reviews[0]);
     await wait(100);
   }
-  check("drafts list with copy", $("#rdrafts").textContent.includes("nit: use safe_sub") && !!$("#rdrafts [data-copy]"));
+  {
+    window.SBInsp.open();
+    window.SBInsp.refresh(true);
+    check("drafts list with copy, in the inspector", $("#insp #rdrafts")?.textContent.includes("nit: use safe_sub") && !!$('#insp [data-iact="copy"]') && !$("#rcols #rdrafts"));
+    window.__calls.length = 0;
+    $('#insp [data-iact="copy"]').click();
+    await wait(50);
+    check("Copy all comments copies the drafts", called("review_drafts_text")[0]?.[1].id === "r1");
+    window.SBInsp.close();
+  }
   // Diff colors come from the row kind, and the step bar does not hide them.
   {
     const bg = (sel) => { const el = $(sel); return el ? getComputedStyle(el).backgroundColor : "none"; };
@@ -589,22 +626,31 @@
   const cm = called("review_comment")[0]?.[1].comment;
   check("Add to review sends path, side, range, head and line text", cm && cm.path === "beacon_node/gloas.rs" && cm.side === "new" && cm.line === 12 && cm.start_line === 11 && cm.text === "Both lines need a test." && cm.head === "ac92ae9aaaa" && cm.line_text === "let b = 2;", JSON.stringify(cm));
   check("the form closes after the add", !$("#rcform"));
-  // Finish review: preview from GitHub, pick a type, send only on the click.
-  $("#rdrafts [data-finish]").click();
+  // Finish review: a popover under the header. Preview from GitHub, pick a type, send only on the click.
+  $('#rhead [data-act="finish"]').click();
   await wait(150);
-  check("finish shows the GitHub check", !$("#rfinish").hidden && $("#rpreview").textContent.includes("@eserilev") && $("#rpreview").textContent.includes("1 comment on lines") && $("#rpreview").textContent.includes("goes into the summary"), $("#rpreview")?.textContent);
+  check("finish shows the GitHub check", !$("#rfinpop").hidden && $("#rfinish").hidden && $("#rpreview").textContent.includes("@eserilev") && $("#rpreview").textContent.includes("On lines") && $("#rpreview").textContent.includes("1 comment")
+    && $("#rpreview").textContent.includes("In the summary") && $("#rpreview").textContent.includes("outside GitHub's diff"), $("#rpreview")?.textContent);
   check("agent drafts are marked in the preview", $("#rpreview").textContent.includes("agent draft"));
+  check("while the popover is open, Submit is the one gold button", !$('#rhead [data-act="finish"]').classList.contains("primary") && $('#rhead [data-act="finish"]').getAttribute("aria-expanded") === "true" && $$("#view-review .btn.primary").length === 1 && $("#rfinpop [data-fsend]").classList.contains("primary"));
+  check("the popover has Comment, Approve and Request changes, Comment first", $$("#rfinpop [data-ev]").map((b) => b.textContent).join() === "Comment,Approve,Request changes" && $('#rfinpop [data-ev="COMMENT"]').getAttribute("aria-checked") === "true");
   check("nothing is sent before the click", !called("review_post").length);
-  $('#rfinish input[value="APPROVE"]').click();
+  $("#rfinpop").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await wait(30);
+  check("Escape closes the popover and keeps the summary", $("#rfinpop").hidden && $('#rhead [data-act="finish"]').classList.contains("primary") && !called("review_post").length && called("review_summary").length > 0);
+  $('#rhead [data-act="finish"]').click();
+  await wait(150);
+  $('#rfinpop [data-ev="APPROVE"]').click();
   $("#rsummary").value = "LGTM";
-  $("#rfinish [data-fsend]").click();
+  $("#rfinpop [data-fsend]").click();
   await wait(150);
   const post = called("review_post")[0]?.[1];
   check("submit sends the type, summary and preview token", post && post.event === "APPROVE" && post.summary === "LGTM" && post.token === "tok1", JSON.stringify(post));
-  check("after the send, the dialog offers Close review", !$("#rfinish").hidden && $("#rfinish").textContent.includes("Review sent") && [...$$("#rfinish [data-b]")].map((b) => b.textContent).join() === "Keep open,Close review");
+  check("after the send, the dialog offers Close review", $("#rfinpop").hidden && !$("#rfinish").hidden && $("#rfinish").textContent.includes("Review sent") && [...$$("#rfinish [data-b]")].map((b) => b.textContent).join() === "Keep open,Close review");
   $('#rfinish [data-b="0"]').click();
   await wait(50);
   check("Keep open keeps the review", $("#rfinish").hidden && !called("review_close").length);
+  check("the footer has Prev and Mark reviewed & next", $("#rfoot [data-foot=prev]")?.textContent.includes("Prev") && $("#rfoot [data-foot=next]")?.textContent.includes("Mark reviewed") && $("#rfoot [data-foot=next] kbd")?.textContent === "n" && Math.round($("#rfoot").getBoundingClientRect().height) === 40, $("#rfoot")?.textContent);
   docKey("n");
   await wait(100);
   check("n marks the step", called("review_mark").some((c) => c[1].step === "s2" && c[1].checked));
@@ -633,11 +679,12 @@
   await wait(150);
   check("Files lists every changed file", $$("#rsteps .fitem").length === 2 && $("#rsteps").textContent.includes("gloas.rs") && $("#rsteps").textContent.includes("binary file"), $("#rsteps").textContent.slice(0, 120));
   check("a file diff loads from the model", called("review_file_diff").some((c) => c[1].path === "beacon_node/gloas.rs") && !!$("#rdiff tr.add"));
-  check("the file head links to its step", !!$('#rguide [data-step="1"]') && $("#rguide .fpath").textContent === "beacon_node/gloas.rs");
+  check("the file head links to its step, and the file header has the counts", !!$('#rguide [data-step="1"]') && $("#rdiff .file .fp").textContent === "beacon_node/gloas.rs" && $("#rdiff .file .fstat").textContent === "+2−1", $("#rdiff .file")?.textContent);
   check("the + comment works in Files", !!$('#rdiff [data-cm][data-n="12"]'));
   docKey("n");
   await wait(150);
   check("n marks the file viewed and opens the next one", $('#rsteps .fitem.viewed[data-f="beacon_node/gloas.rs"]') && $('#rsteps [aria-current="step"]')?.dataset.f === "docs/img.png");
+  check("the files column counts what you have seen", $("#rshead .rcount").textContent === "1 / 2 seen" && $('#rsteps [data-f="beacon_node/gloas.rs"] .vbox').textContent === "✓", $("#rshead").textContent);
   check("a binary file shows its note", $("#rdiff").textContent.includes("binary file"));
   docKey("k");
   await wait(150);
@@ -655,11 +702,19 @@
   // Round 2: after new commits, a new review of only the changes since this head.
   window.__emit("review", Object.assign({}, window.__data.reviews[0], { new_head: "fff0000bbbb" }));
   await wait(100);
-  check("new commits offer the next round", $('#rhead [data-act="round"]')?.textContent === "Start round 2" && !!$('#rhead [data-act="update"]'));
-  $('#rhead [data-act="round"]').click();
+  check("new commits show a button in the header", !!$('#rhead [data-act="newcommits"]') && $("#insp").hidden);
+  $('#rhead [data-act="newcommits"]').click();
+  window.SBInsp.refresh(true);
+  check("New commits opens the inspector, whose alert offers the next round", !$("#insp").hidden && $("#insp .ialert").textContent.includes("ac92ae9aa → fff0000bb") && $('#insp .ialert [data-iact="round"]')?.textContent === "Start round 2" && !!$('#insp .ialert [data-iact="update"]'), $("#insp .ialert").textContent);
+  $('#insp [data-iact="round"]').click();
   await wait(200);
   check("the round opens in its own tab", $('#tabs [data-tab="r2"]')?.textContent.includes("#10071 R2") && $('#tabs [data-tab="r2"]').getAttribute("aria-selected") === "true", $("#tabs").textContent);
-  check("the round header names its scope", $("#rhead .roundtag")?.textContent.includes("Round 2 · changes since ac92ae9aa") && $("#rhead .scopenote")?.textContent.includes("leaves out the changes from the base branch"), $("#rhead").textContent);
+  window.SBInsp.refresh(true);
+  {
+    const f = Object.fromEntries($$("#insp .ifacts dt").map((dt) => [dt.textContent, dt.nextElementSibling.textContent]));
+    check("the round names its scope: the header and the inspector", $("#rmeta").textContent === "#10071 · round 2" && f.Round === "2 · changes since ac92ae9aa" && f.Scope?.includes("leaves out the changes from the base branch"), JSON.stringify(f));
+  }
+  window.SBInsp.close();
   window.SB.setTab("r1");
   await wait(100);
 
@@ -738,7 +793,10 @@
     r.drafts = [Object.assign({}, r.drafts[0], { stale: true })];
     window.__emit("review", r);
     await wait(100);
-    check("a stale draft shows a note in the list and not in the diff", $("#rdrafts .draft.stale .stalenote")?.textContent.includes("code changed") && !$('#rdiff .dcard[data-d="1"]'), $("#rdrafts").textContent);
+    check("a stale draft shows a button in the header", $('#rhead [data-act="stale"]')?.textContent === "1 comment to place");
+    $('#rhead [data-act="stale"]').click();
+    window.SBInsp.refresh(true);
+    check("a stale draft shows a note in the list and not in the diff", !$("#insp").hidden && $("#rdrafts .draft.stale .stalenote")?.textContent.includes("code changed") && !$('#rdiff .dcard[data-d="1"]'), $("#rdrafts")?.textContent);
     $('#rdrafts [data-place="1"]').click();
     await wait(50);
     $('#rdiff [data-cm][data-side="new"][data-n="12"]').click();
@@ -763,6 +821,18 @@
     $("#rcform").requestSubmit();
     await wait(150);
     check("Cancel ends Place again, so a new comment keeps the stale draft", $("#rctext") === null && !called("review_draft_edit").slice(n2).some((c) => c[1].draft === 1 && c[1].text === null));
+    // An edit in the list saves on blur; a blur with no change sends nothing.
+    const ed = $('#rdrafts [data-dedit="1"]');
+    const n3 = called("review_draft_edit").length;
+    ed.focus();
+    ed.blur();
+    ed.textContent = "nit: use safe_sub here";
+    ed.focus();
+    ed.blur();
+    await wait(30);
+    const edits = called("review_draft_edit").slice(n3);
+    check("an edit of a comment in the list saves once, on blur", edits.length === 1 && edits[0][1].draft === 1 && edits[0][1].text === "nit: use safe_sub here", JSON.stringify(edits));
+    window.SBInsp.close();
     window.__emit("review", window.__data.reviews[0]);
     await wait(100);
   }
@@ -838,21 +908,31 @@
     $('#rsteps [data-i="0"]').click();
     await till(() => cur() === "0");
     window.__emit("review", Object.assign({}, window.__data.reviews[0], { mentions: ment, show: { at: Date.now(), points: pts } }));
-    await till(() => !$("#rtour").hidden && cur() === "1" && $("#rdiff .pbox"));
-    check("review_show jumps to place 1 and shows the tour bar", cur() === "1" && $("#rtour").textContent.includes("Claude pointed to 3 places") && $("#rtour .tpos").textContent === "1 of 3", $("#rtour").textContent);
-    check("each place in the diff has its number and note, the current one marked", $$("#rdiff .pbox").length === 2 && $('#rdiff .pbox.cur[data-pt="0"]')?.textContent.includes("MUST FIX") && !!$('#rdiff tr.ptcur td.ln[data-side="new"][data-ln="11"]') && !!$('#rdiff .pbox[data-pt="1"]'), $$("#rdiff .pbox").map((x) => x.outerHTML).join(" | "));
+    await till(() => $("#rtour") && cur() === "1" && $("#rdiff .pbox"));
+    check("review_show jumps to place 1 and shows the tour in the file header", cur() === "1" && !!$("#rdiff .file #rtour") && $("#rtour").title.includes("Claude pointed to 3 places") && $("#rtour .tpos").textContent === "◆ 1/3", $("#rtour")?.outerHTML);
+    check("during a tour the footer button shows Shift+N", $("#rfoot [data-foot=next] kbd")?.textContent === "⇧N", $("#rfoot")?.textContent);
+    check("each place in the diff has its number and note, the current one marked", $$("#rdiff .pbox").length === 2 && $('#rdiff .pbox.cur[data-pt="0"]')?.textContent.includes("must fix") && !!$('#rdiff tr.ptcur td.ln[data-side="new"][data-ln="11"]') && !!$('#rdiff .pbox[data-pt="1"]')
+      && $('#rdiff td.ln[data-side="new"][data-ln="11"]').dataset.mk === "1" && $('#rdiff td.ln[data-side="new"][data-ln="11"]').textContent === "11", $$("#rdiff .pbox").map((x) => x.outerHTML).join(" | "));
     check("a note renders Markdown and escapes HTML", !!$('#rdiff .pbox[data-pt="0"] code') && !$("#rdiff .pbox img") && $('#rdiff .pbox[data-pt="0"]').textContent.includes("<img") && window.__xss === undefined);
-    check("the step list shows the numbers of its places", $$('#rsteps [data-i="1"] .pmarks .mk').map((x) => x.textContent).join() === "1,2" && !!$('#rsteps [data-i="1"] .pmarks .mk.on'), $('#rsteps [data-i="1"]')?.innerHTML);
+    check("the step list names its places in the tooltip", $('#rsteps [data-i="1"]').title.includes("Claude's places 1, 2"), $('#rsteps [data-i="1"]')?.title);
     check("a Mentioned chip of a place shows its number", $$("#rment .mchip")[0].querySelector(".mk").textContent === "1" && $$("#rment .mchip")[0].classList.contains("on"));
     docKey("n");
-    await till(() => $("#rtour .tpos")?.textContent === "2 of 3");
-    check("n goes to the next place, not the next step", $("#rtour .tpos").textContent === "2 of 3" && !!$('#rdiff .pbox.cur[data-pt="1"]') && !!$('#rdiff tr.ptcur td.ln[data-side="old"][data-ln="11"]') && called("review_mark").length === marks0);
+    await till(() => $("#rtour .tpos")?.textContent === "◆ 2/3");
+    check("n goes to the next place, not the next step", $("#rtour .tpos").textContent === "◆ 2/3" && !!$('#rdiff .pbox.cur[data-pt="1"]') && !!$('#rdiff tr.ptcur td.ln[data-side="old"][data-ln="11"]') && called("review_mark").length === marks0);
     docKey("n");
-    await till(() => $("#rtour .tpos")?.textContent === "3 of 3" && $('#rdiff tr.flash td.ln[data-ln="30"]'));
-    check("a place in a file the PR does not change shows its lines, marked Not changed", $("#rguide").textContent.includes("Not changed in this PR") && $("#rtour").textContent.includes("Not changed in this PR") && !!$('#rdiff tr.flash td.ln[data-ln="30"]') && !!$('#rdiff .pbox.cur[data-pt="2"]') && !$("#rdiff [data-padd]") && called("review_context").some((c) => c[1].path === "README.md" && c[1].line === 30), $("#rguide").textContent);
+    await till(() => $("#rtour .tpos")?.textContent === "◆ 3/3" && $('#rdiff tr.flash td.ln[data-ln="30"]'));
+    check("a place in a file the PR does not change shows its lines, marked Not changed", $("#rguide").textContent.includes("Not changed in this PR") && $("#rdiff .file").textContent.includes("Not changed in this PR") && !!$("#rdiff .file #rtour") && !!$('#rdiff tr.flash td.ln[data-ln="30"]') && !!$('#rdiff .pbox.cur[data-pt="2"]') && !$("#rdiff [data-padd]") && called("review_context").some((c) => c[1].path === "README.md" && c[1].line === 30), $("#rguide").textContent);
     docKey("p");
-    await till(() => $("#rtour .tpos")?.textContent === "2 of 3");
-    check("p goes to the place before", $("#rtour .tpos").textContent === "2 of 3" && cur() === "1");
+    await till(() => $("#rtour .tpos")?.textContent === "◆ 2/3");
+    check("p goes to the place before", $("#rtour .tpos").textContent === "◆ 2/3" && cur() === "1");
+    // Shift+N marks the step and goes on, also during a tour.
+    const marks1 = called("review_mark").length;
+    docKey("N");
+    await till(() => called("review_mark").length > marks1 || cur() === "1" && false);
+    await wait(60);
+    check("Shift+N marks the step during a tour", called("review_mark").length > marks1 && called("review_mark").at(-1)[1].step === "s2", JSON.stringify(called("review_mark").slice(-2)));
+    $('#rsteps [data-i="1"]').click();
+    await till(() => cur() === "1" && $("#rtour"));
     window.__calls.length = 0;
     $('#rdiff [data-padd="0"]').click();
     await till(() => $("#rctext"));
@@ -864,20 +944,23 @@
     term.focus();
     $('#rtour [data-tour="back"]').dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
     $('#rtour [data-tour="back"]').click();
-    await till(() => $("#rtour").hidden);
-    check("Back ends the tour and goes back to where you were", $("#rtour").hidden && !$("#rdiff .pbox") && cur() === "0" && keys(), cur());
+    await till(() => !$("#rtour"));
+    check("Back ends the tour and goes back to where you were", !$("#rtour") && !$("#rdiff .pbox") && cur() === "0" && keys(), cur());
     window.__emit("review", window.__data.reviews[0]);
     await till(() => $("#rment").hidden);
-    check("an answer with no places hides Mentioned, and no tour starts again", $("#rment").hidden && $("#rtour").hidden);
+    check("an answer with no places hides Mentioned, and no tour starts again", $("#rment").hidden && !$("#rtour"));
   }
 
   // Close: a worktree with changes asks first, and nothing closes before the choice.
-  $('#rhead [data-act="close"]').click();
+  window.SBInsp.open();
+  window.SBInsp.refresh(true);
+  $('#insp .idanger [data-iact="close"]').click();
   await wait(150);
   check("a close with changes lists them and asks", !$("#rfinish").hidden && $("#rfinish").textContent.includes("notes.txt") && called("review_close").length === 1 && called("review_close")[0][1].discard === null && called("review_close")[0][1].keep === false, $("#rfinish").textContent);
   [...$$("#rfinish [data-b]")].find((b) => b.textContent === "Discard the changes").click();
   await wait(150);
   check("Discard sends the changes you saw", called("review_close").length === 2 && JSON.stringify(called("review_close")[1][1].discard) === JSON.stringify([" M beacon_node/gloas.rs", "?? notes.txt"]) && $("#rfinish").hidden);
+  window.SBInsp.close();
   window.__emit("review_cleanup", { review: "r1", note: "/c/lighthouse-pr10071 stays: in use by nvim." });
   await wait(50);
   check("a kept folder shows a note", $("#toast")?.textContent.includes("stays: in use by nvim"), $("#toast")?.textContent);
@@ -904,18 +987,24 @@
   check("review opens a local review of that pane", called("review_open_local")[0]?.[1].pane === "p1" && window.SB.S.tab === "rL", JSON.stringify(called("review_open_local")));
   check("the tab says it is local commits", $('#tabs [data-tab="rL"]')?.textContent.includes("lighthouse commits"));
   check("a local review shows Files only, with no Guide switch and no Send step", !$("#rmode") && !$("#rstep") && local_mode() === "files");
-  check("the header shows the range and what it compares with", $("#rhead").textContent.includes("2 commits on feat") && $("#rhead").textContent.includes("b0b0b0b0b..ac92ae9aa") && $("#rhead").textContent.includes("not on upstream/unstable"), $("#rhead").textContent);
+  check("the header shows the range and what it compares with", $("#rtitle").textContent === "2 commits on feat" && $("#rmeta").textContent === "lighthouse · on upstream/unstable · b0b0b0b0b..ac92ae9aa · New", $("#rhead").textContent);
+  window.SBInsp.refresh(true);
+  check("a local review opens its inspector the first time, with its controls, its note and its commits", !$("#insp").hidden && localStorage.getItem("sb.insp.local") === null && !!$('#insp [data-range="new"]') && !!$("#insp [data-base]")
+    && $("#insp .scopenote")?.textContent.includes("not on upstream/unstable") && $$("#insp .rcommits .mono").map((x) => x.textContent).join() === "a41c2e9" && $("#insp .rcommits").textContent.includes("Drop the table lifetime")
+    && !!$('#insp .idanger [data-iact="close"]') && !!$('#insp [data-iact="copy"]'), $("#insp").textContent);
   check("the agent pane is in the right column", window.SB.S.live === "p1" && !!$("#rterm #live"));
   docKey("f");
   await wait(50);
   check("f does not switch a local review to Guide", local_mode() === "files" && !!$("#rsteps [data-f]"));
-  check("Send to agent replaces Finish review", !!$("#rdrafts [data-agent]") && !$("#rdrafts [data-finish]"));
-  $("#rdrafts [data-agent]").click();
+  check("Send to agent replaces Finish review: the one gold button of the header", $('#rhead [data-act="agent"]')?.textContent === "Send 1 comment to agent" && $('#rhead [data-act="agent"]').classList.contains("primary") && !$('#rhead [data-act="finish"]'), $("#rhead").textContent);
+  $('#rhead [data-act="agent"]').click();
   await wait(100);
   check("Send to agent sends the review's comments", called("review_send_agent")[0]?.[1].id === "rL" && $("#toast")?.textContent.includes("Press Enter"), $("#toast")?.textContent);
   window.__emit("review", Object.assign({}, window.__data.reviews.find((x) => x.id === "rL"), { new_head: "fffeee0000" }));
   await wait(100);
-  $('#rhead .newhead [data-act="update"]').click();
+  window.SBInsp.refresh(true);
+  check("new changes show in the header and in the inspector's alert", $('#rhead [data-act="newcommits"]')?.textContent === "New changes" && $("#insp .ialert").textContent.includes("New changes"), $("#insp .ialert").textContent);
+  $('#insp .ialert [data-iact="update"]').click();
   await wait(50);
   check("new commits offer Refresh, which reads the commits again", called("review_update").some((c) => c[1].id === "rL"));
   {
@@ -923,16 +1012,22 @@
     window.__emit("review", Object.assign({}, window.__data.reviews.find((x) => x.id === "rL"), { new_head: null }));
     await wait(100);
     check("the work view says New changes, not New commits", !$("#rhead").textContent.includes("New commits"));
-    check("New is on, with All next to it", $('#rhead [data-range="new"]')?.getAttribute("aria-pressed") === "true" && $('#rhead [data-range="all"]')?.getAttribute("aria-pressed") === "false");
-    $('#rhead [data-range="all"]').click();
+    window.SBInsp.refresh(true);
+    check("New is on, with All next to it", $('#insp [data-range="new"]')?.getAttribute("aria-pressed") === "true" && $('#insp [data-range="all"]')?.getAttribute("aria-pressed") === "false");
+    $('#insp [data-range="all"]').click();
     await wait(50);
     check("All asks for the whole range", called("review_range").at(-1)?.[1].range === "all" && called("review_range").at(-1)?.[1].id === "rL", JSON.stringify(called("review_range")));
-    $('#rhead [data-act="mark"]').click();
+    $('#insp [data-iact="mark"]').click();
     await wait(50);
     check("Mark reviewed marks the view", called("review_mark_reviewed").at(-1)?.[1].id === "rL");
     window.__emit("review", Object.assign({}, window.__data.reviews.find((x) => x.id === "rL"), { status: "fetching" }));
     await wait(100);
-    check("while the work loads, the switch and Mark reviewed wait", $('#rhead [data-range="all"]').disabled && $('#rhead [data-act="mark"]').disabled);
+    window.SBInsp.refresh(true);
+    check("while the work loads, the switch and Mark reviewed wait", $('#insp [data-range="all"]').disabled && $('#insp [data-iact="mark"]').disabled && $("#rstat").textContent.includes("reading the work"));
+    window.__emit("review", Object.assign({}, window.__data.reviews.find((x) => x.id === "rL"), { reviewed: true, reviewed_at: "3f9c2d1aaaaa" }));
+    await wait(50);
+    window.SBInsp.refresh(true);
+    check("the inspector names the commit you marked reviewed", [...$$("#insp .rlf dt")].find((dt) => dt.textContent === "Reviewed")?.nextElementSibling.textContent === "3f9c2d1aa");
     window.__emit("review", Object.assign({}, window.__data.reviews.find((x) => x.id === "rL"), { status: "ready" }));
     await wait(100);
     const before = called("review_nvim").length;
@@ -945,7 +1040,8 @@
   }
   // A review of local commits has Restart too: it fetches the remotes and reads the range again.
   {
-    const btn = $('#rhead [data-act="restart"]');
+    window.SBInsp.refresh(true);
+    const btn = $('#insp .idanger [data-iact="restart"]');
     check("a local review has Restart", !!btn && btn.title.includes("Fetch the remotes"), btn?.title);
     btn?.click();
     await wait(50);
@@ -955,22 +1051,24 @@
   // Automatic, Update base, and escaping.
   {
     const rL = window.__data.reviews.find((x) => x.id === "rL");
-    const show = async (o) => { window.__emit("review", Object.assign({}, rL, { new_head: null, status: "ready" }, o)); await wait(20); };
-    const change = (v) => { const s = $("#rhead [data-base]"); s.value = v; s.dispatchEvent(new Event("change", { bubbles: true })); };
+    // The inspector draws once per frame: draw it at once here.
+    const show = async (o) => { window.__emit("review", Object.assign({}, rL, { new_head: null, status: "ready" }, o)); await wait(20); window.SBInsp.refresh(true); };
+    const change = (v) => { const s = $("#insp [data-base]"); s.value = v; s.dispatchEvent(new Event("change", { bubbles: true })); };
     const last = () => called("review_base").at(-1)?.[1];
     await show({});
-    const sel = $("#rhead [data-base]");
+    const sel = $("#insp [data-base]");
     const vals = [...(sel?.options || [])].map((o) => o.value);
-    check("the Base menu comes before New and All: Automatic with the rule's ref, the other refs, Pick a ref…",
-      !!sel && !!(sel.compareDocumentPosition($('#rhead [data-range="new"]')) & Node.DOCUMENT_POSITION_FOLLOWING) && sel.options[0].textContent === "Automatic: upstream/unstable" && sel.value === ""
+    check("the Base menu sits in the inspector after New and All: Automatic with the rule's ref, the other refs, Pick a ref…",
+      !!sel && !!(sel.compareDocumentPosition($('#insp [data-range="new"]')) & Node.DOCUMENT_POSITION_PRECEDING) && sel.options[0].textContent === "Automatic: upstream/unstable" && sel.value === ""
       && vals.includes("origin/unstable") && vals.includes("upstream/main") && !vals.includes("upstream/unstable") && sel.options[sel.options.length - 1].textContent === "Pick a ref…", JSON.stringify(vals));
-    check("the note names the parent and the age of the base", $("#rhead .scopenote")?.textContent === "Commits not on upstream/unstable (sigp/lighthouse, the parent of this fork). Fetched 2 h ago.", $("#rhead .scopenote")?.textContent);
+    const fetched = [...$$("#insp .rlf dt")].find((dt) => dt.textContent === "Fetched")?.nextElementSibling.textContent;
+    check("the note names the parent, and the age of the base is a fact", $("#insp .scopenote")?.textContent === "Commits not on upstream/unstable (sigp/lighthouse, the parent of this fork)." && fetched === "2 h ago", `${$("#insp .scopenote")?.textContent} ${fetched}`);
     change("origin/unstable");
     await wait(20);
     check("a ref from the menu asks for it", last()?.id === "rL" && last()?.pick === "origin/unstable", JSON.stringify(last()));
     change(sel.options[sel.options.length - 1].value);
     await wait(20);
-    let input = $("#rhead [data-baseref]");
+    let input = $("#insp [data-baseref]");
     check("Pick a ref… opens a text field that has the keys", !!input && document.activeElement === input);
     input.value = "upstream/v8";
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -978,29 +1076,29 @@
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "o", bubbles: true }));
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await wait(20);
-    check("Enter uses the typed ref, and a key typed there is no shortcut", last()?.pick === "upstream/v8" && !$("#rhead [data-baseref]") && called("review_nvim").length === before, JSON.stringify(last()));
+    check("Enter uses the typed ref, and a key typed there is no shortcut", last()?.pick === "upstream/v8" && !$("#insp [data-baseref]") && called("review_nvim").length === before, JSON.stringify(last()));
     change(sel.options[sel.options.length - 1].value);
     await wait(20);
-    input = $("#rhead [data-baseref]");
+    input = $("#insp [data-baseref]");
     input.value = "-x";
-    $('#rhead [data-act="baseuse"]').click();
+    $('#insp [data-iact="baseuse"]').click();
     await wait(30);
     check("a ref the hub refuses says why", last()?.pick === "-x" && $("#toast")?.textContent.includes("never starts with -"), $("#toast")?.textContent);
     $("#toast").hidden = true;
     await show({ base_pick: "origin/unstable", base_ref: "origin/unstable", scope_note: "Commits not on origin/unstable (your choice)." });
-    check("a chosen base shows as chosen, and Automatic goes back", $("#rhead [data-base]").value === "origin/unstable" && $("#rhead [data-base]").options[0].textContent === "Automatic");
+    check("a chosen base shows as chosen, and Automatic goes back", $("#insp [data-base]").value === "origin/unstable" && $("#insp [data-base]").options[0].textContent === "Automatic");
     change("");
     await wait(20);
     check("Automatic asks for the usual rule", last()?.pick === "", JSON.stringify(last()));
     await show({});
-    const upd = $('#rhead [data-act="basefetch"]');
+    const upd = $('#insp [data-iact="basefetch"]');
     check("Update base names the ref and its age", !!upd && upd.title.includes("upstream/unstable") && upd.title.includes("2 h ago"), upd?.title);
     upd?.click();
     await wait(20);
     check("Update base fetches the base of this review", called("review_base_update").at(-1)?.[1].id === "rL");
     const bad = "x\"><img src=x onerror=\"window.__xss=11\">";
     await show({ base_ref: bad, base_pick: bad, base_label: bad, bases: [{ ref: bad, why: "<b>why</b>" }], scope_note: `Commits not on ${bad} (your choice).` });
-    check("refs in the header are escaped", !$("#rhead img") && !$("#rhead b") && $("#rhead [data-base]").value === bad && $("#rhead [data-base]").textContent.includes("<b>why</b>") && window.__xss === undefined, $("#rhead").innerHTML.slice(0, 400));
+    check("refs in the header and the inspector are escaped", !$("#rhead img") && !$("#rhead b") && !$("#insp img") && !$("#insp b") && $("#insp [data-base]").value === bad && $("#insp [data-base]").textContent.includes("<b>why</b>") && $("#rmeta").textContent.includes(bad) && window.__xss === undefined, $("#insp").innerHTML.slice(0, 400));
     await show({});
   }
   {
@@ -1116,13 +1214,13 @@
     const right = widths()[2];
     $("#rgutl").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     await wait(50);
-    check("double-click resets only the column of that handle", widths()[0] === 280 && widths()[2] === right, JSON.stringify({ right, now: widths() }));
+    check("double-click resets only the column of that handle", widths()[0] === 232 && widths()[2] === right, JSON.stringify({ right, now: widths() }));
     // A new review tab takes the saved size.
     await drag($("#rgutl"), 30);
     window.SB.setTab("board");
     window.SB.setTab("r1");
     await wait(200);
-    check("a redrawn review keeps the dragged size", widths()[0] === 310, JSON.stringify(widths()));
+    check("a redrawn review keeps the dragged size", widths()[0] === 262, JSON.stringify(widths()));
     $("#rgutl").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     $("#rgutr").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     await wait(50);

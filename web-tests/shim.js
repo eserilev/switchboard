@@ -226,7 +226,9 @@ window.__TAURI__ = {
             guide: null, steps: [], threads: [], pins: [], drafts: d.reviews[0].drafts, posted: [], scope_note: "Commits not on upstream/unstable (sigp/lighthouse, the parent of this fork).", coverage: null, range: "new", reviewed: false,
             // The base (SPEC 11.11): the rule's ref, why, the menu, and a fetch 2 h ago.
             base_ref: "upstream/unstable", base_label: "upstream/unstable (sigp/lighthouse, the parent of this fork)", base_pick: null, base_fetched: Math.floor(Date.now() / 1000) - 7200,
-            bases: [{ ref: "upstream/unstable", why: "in use" }, { ref: "origin/unstable", why: "the upstream of this branch" }, { ref: "upstream/main", why: "a branch of upstream" }] }));
+            bases: [{ ref: "upstream/unstable", why: "in use" }, { ref: "origin/unstable", why: "the upstream of this branch" }, { ref: "upstream/main", why: "a branch of upstream" }],
+            // The commits of the view, for the inspector.
+            commits: [{ id: "a41c2e9", subject: "Drop the table lifetime" }], reviewed_at: null }));
           return "rL";
         }
         case "review_send_agent": return 1;
