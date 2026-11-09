@@ -25,6 +25,7 @@ After a change to `guide-check`, `git-argcheck` or `outq`, run `scripts/check-pr
 After a change to the permission flow (`sb permit`, `on_permit`, `permit_answer`, `answer_permits`), run `scripts/check-models.sh` and keep `models/permit.qnt` true (SPEC 25).
 After a change to remote mode (`remote.rs`: takeover, `run`, the writer, the screen thread; `dispatch::ORDERED`; the lane in the app; `expand` in `web/app.js`), run it too and keep `models/remote.qnt` true (SPEC 29). All window traffic of `sb serve` goes through the writer thread: never write to the socket from another thread.
 After a change to review close or worktree cleanup (`review_close`, `clean_after`, `sweep_closed`, `fetch`, `cleanup::verdict`), run it too and keep `models/review_close.qnt` true (SPEC 26).
+After a change to the local review load (`claim_local`, `spawn_local`, `local_refresh`, `review_open_local`, `review_mark_reviewed`, `turn_snapshot`, the local part of `review_tick`, `start_local`, `sweep_snap_refs`), run it too and keep `models/local_load.qnt` true (SPEC 26.1).
 
 ## Build and test
 
