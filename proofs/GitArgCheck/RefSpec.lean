@@ -1,6 +1,6 @@
 import GitArgCheck.Spec
 
-/-! # What the checks of a ref, a remote branch and a GitHub URL mean (SPEC 24.2)
+/-! # What the checks of a ref, a remote branch and a GitHub URL mean (SPEC 24.3)
 
 Plain definitions on byte lists. `Statements.lean` states the theorems R1, R2, B1,
 H1 and H2 with them. -/

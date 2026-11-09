@@ -65,7 +65,7 @@ pub fn remotes(tree: &Path) -> Vec<String> {
 
 /// The remote of a remote branch name like `origin/unstable`, and the branch: the
 /// longest remote name that starts it, so `a/b/x` finds the remote `a/b` before `a`.
-/// The branch is not empty. The proved `refs::split_remote` picks the remote (SPEC 24.2).
+/// The branch is not empty. The proved `refs::split_remote` picks the remote (SPEC 24.3).
 pub fn split_remote<'a>(name: &'a str, remotes: &[String]) -> Option<(String, &'a str)> {
     let list: Vec<Vec<u8>> = remotes.iter().map(|r| r.as_bytes().to_vec()).collect();
     let at = refs::split_remote(name.as_bytes(), &list)?;
@@ -76,7 +76,7 @@ pub fn split_remote<'a>(name: &'a str, remotes: &[String]) -> Option<(String, &'
 /// `owner/name` of a GitHub remote URL: `https://github.com/o/n`, `http://`,
 /// `git://`, `git@github.com:o/n` or `ssh://git@github.com[:port]/o/n`, each with an
 /// optional `.git` and then `/`. The host must be `github.com` and the path exactly
-/// two parts. The proved `refs::github_repo` finds the parts (SPEC 24.2).
+/// two parts. The proved `refs::github_repo` finds the parts (SPEC 24.3).
 pub fn github_repo(url: &str) -> Option<String> {
     let r = refs::github_repo(url.as_bytes())?;
     // Each part starts at `/` + 1 or `:` + 1 and ends at `/`, `.git` or the end: all
@@ -234,7 +234,7 @@ pub fn verify(tree: &Path, name: &str) -> Result<String, String> {
     if name.starts_with('-') {
         return Err(format!("{name} is not a ref: a ref never starts with -"));
     }
-    // `ref_ok` is proved (SPEC 24.2). The char check adds the Unicode spaces and controls.
+    // `ref_ok` is proved (SPEC 24.3). The char check adds the Unicode spaces and controls.
     if !ref_ok(name.as_bytes()) || name.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return Err("A ref has no spaces and no control characters.".into());
     }

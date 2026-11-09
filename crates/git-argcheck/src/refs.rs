@@ -1,4 +1,4 @@
-//! Checks of refs, remote branch names and GitHub URLs (SPEC 24.2).
+//! Checks of refs, remote branch names and GitHub URLs (SPEC 24.3).
 //!
 //! `ref_ok` is the pure part of `base::verify`: a ref that may go to git as one
 //! arg. `split_remote` splits `origin/main` at the longest remote. `github_repo`
