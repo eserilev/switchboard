@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Check the Quint models: the permission flow (SPEC 25), review close (SPEC 26)
-# and remote mode (SPEC 29).
+# Check the Quint models: the permission flow (SPEC 25), review close (SPEC 26),
+# the load cycle of a local review (SPEC 26.1) and remote mode (SPEC 29).
 # SAMPLES sets the number of random runs for each step profile (default 100000).
 # STEPS sets the length of each run (default 50).
 set -euo pipefail
@@ -59,6 +59,35 @@ for old in stepNoGate stepBoolDiscard stepNoGuard stepForceLock stepNoLocalGuard
         exit 1
     fi
     echo "== $old fails, as it must"
+done
+
+# The load cycle of a local review (SPEC 26.1): claims, loads, the poll, turns,
+# close, a quit and the start. The fixed traces end in a bad state for the old
+# code and a good one for the fix.
+quint typecheck local_load.qnt
+quint typecheck local_load_test.qnt
+quint test local_load_test.qnt
+for st in step stepPoll; do
+    echo "== local_load $st: $samples runs of $steps steps"
+    quint run local_load.qnt --step="$st" --invariants Always \
+        --max-samples="$samples" --max-steps="$steps" --verbosity=1
+done
+local_must_fail() {
+    if quint run local_load.qnt --step="$1" --invariant="$2" --max-samples="$samples" \
+        --max-steps="$steps" --verbosity=0 > /dev/null 2>&1; then
+        echo "error: local_load $1 $2 passed: the model lost that path" >&2
+        exit 1
+    fi
+    echo "== local_load $1 $2 fails, as it must"
+}
+# The witnesses: the runs reach each path.
+for w in NoKeptTurn NoMarkRef NoNewChanges NoSweepOfARef; do
+    local_must_fail step "$w"
+done
+# The code before each fix: the old claim rule, the old poll, no sweep of the
+# refs, no repair of the head ref, no look at start.
+for old in stepOldClaim stepPollOldTick stepNoSweep stepNoRepair stepNoLook; do
+    local_must_fail "$old" Always
 done
 
 # Remote mode (SPEC 29): takeover, a lost link, drops and fresh screens. The

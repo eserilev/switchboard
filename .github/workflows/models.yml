@@ -1,4 +1,4 @@
-# Checks the Quint models (SPEC 25, 26, 29) with scripts/check-models.sh, at the
+# Checks the Quint models (SPEC 25, 26, 26.1, 29) with scripts/check-models.sh, at the
 # full count of random runs: with 20,000 a broken model (initAnyAnswer) can pass.
 # It runs when a model or the code it describes changes (CLAUDE.md), and nightly.
 name: models
