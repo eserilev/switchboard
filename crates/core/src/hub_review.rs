@@ -603,15 +603,17 @@ impl Hub {
         reviews.insert(id.clone(), ReviewState::new(row, "fetching", None));
         drop(reviews);
         self.save_row(&id);
-        self.local_refresh_bg(&id, Fetch::No)?;
+        // The row is "fetching" from its insert: the first load is already claimed,
+        // so a Retry now is refused (`claim_local`).
+        self.emit_review(&id);
+        self.spawn_local(&id, Fetch::No);
         Ok(id)
     }
 
-    /// Reads the range again in the background: a new HEAD, or the first load. The
-    /// check that no load runs and the switch to "fetching" are one lock, so two
-    /// quick clicks start one load.
-    /// Loads the commits of a local review in the background. With `fetch`, the
-    /// remotes are fetched first, so the range uses their branches as they are now.
+    /// Reads the range again in the background: a new HEAD, or a Retry. The check
+    /// that no load runs and the switch to "fetching" are one lock, so two quick
+    /// clicks start one load. With `fetch`, the remotes are fetched first, so the
+    /// range uses their branches as they are now.
     fn local_refresh_bg(&self, id: &str, fetch: Fetch) -> Res<()> {
         self.claim_local(id, |_| Ok(()))?;
         self.spawn_local(id, fetch);
@@ -619,12 +621,15 @@ impl Hub {
     }
 
     /// The check that no load runs, `change`, and the switch to "fetching", in one
-    /// lock. So a click during a load changes nothing and says so.
+    /// lock. So a click during a load changes nothing and says so. Any "fetching"
+    /// refuses, also with no head yet (a first load, a Retry after an error): two
+    /// loads at once can leave the head ref on one snapshot and the row on the
+    /// other (SPEC 26.1). `review_open_local` starts its first load with no claim.
     fn claim_local(&self, id: &str, change: impl FnOnce(&mut ReviewState) -> Res<()>) -> Res<()> {
         {
             let mut reviews = self.reviews.lock().unwrap();
             let r = reviews.get_mut(id).ok_or(format!("no review {id}"))?;
-            if r.status == "fetching" && !r.row.head.is_empty() {
+            if r.status == "fetching" {
                 return Err("the commits are still loading".into());
             }
             change(r)?;
@@ -786,13 +791,10 @@ impl Hub {
         if !matches!(range, "new" | "all") {
             return Err(format!("unknown range {range}"));
         }
-        // The check of the status comes first: during a load nothing changes.
+        // `claim_local` checks the status first: during a load nothing changes.
         self.claim_local(id, |r| {
             if !r.row.is_local() {
                 return Err("Only a review of local work has ranges.".into());
-            }
-            if r.status == "fetching" {
-                return Err("the commits are still loading".into());
             }
             r.range = range.to_owned();
             Ok(())
@@ -823,9 +825,6 @@ impl Hub {
         let root = base::repo_root(dir);
         let chosen = (!pick.is_empty()).then(|| pick.to_owned());
         self.claim_local(id, |r| {
-            if r.status == "fetching" {
-                return Err("the commits are still loading".into());
-            }
             r.base_pick = chosen.clone();
             Ok(())
         })?;
@@ -846,9 +845,6 @@ impl Hub {
         self.claim_local(id, |r| {
             if !r.row.is_local() {
                 return Err("Only a review of local work has a base to update.".into());
-            }
-            if r.status == "fetching" {
-                return Err("the commits are still loading".into());
             }
             Ok(())
         })?;
@@ -898,9 +894,6 @@ impl Hub {
         self.claim_local(id, |r| {
             if !r.row.is_local() || r.row.head.is_empty() {
                 return Err("Only a loaded review of local work can be marked reviewed.".into());
-            }
-            if r.status == "fetching" {
-                return Err("the commits are still loading".into());
             }
             r.range = "new".into();
             seen = (r.row.tree.clone(), r.row.head.clone());
