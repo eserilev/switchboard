@@ -95,6 +95,31 @@ fn notify_command(title: &str, body: &str) -> std::process::Command {
     }
 }
 
+/// The command that shows an error that stops the app: an alert on macOS, a
+/// notification elsewhere. The text goes in as arguments, as in `notify_command`.
+fn alert_command(title: &str, body: &str) -> std::process::Command {
+    #[cfg(target_os = "macos")]
+    {
+        let mut c = std::process::Command::new("osascript");
+        c.args([
+            "-e",
+            "on run argv",
+            "-e",
+            "display alert (item 1 of argv) message (item 2 of argv) as critical",
+            "-e",
+            "end run",
+            "--",
+            title,
+            body,
+        ]);
+        c
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        notify_command(title, body)
+    }
+}
+
 type Res<T> = Result<T, String>;
 
 /// Where the commands go: the hub in this process, or a remote hub (SPEC 29).
@@ -439,9 +464,18 @@ fn main() {
                     Arc::new(Backend::Remote(remote))
                 }
                 None => {
-                    let hub = Hub::start(paths, sb_path(), sink).inspect_err(
-                        |err| tracing::error!(target: "sb::app", %err, "the hub did not start"),
-                    )?;
+                    let hub = match Hub::start(paths, sb_path(), sink) {
+                        Ok(h) => h,
+                        // No window can show it yet: an alert, then quit. Before, the
+                        // app quit with the error only in the log.
+                        Err(err) => {
+                            tracing::error!(target: "sb::app", %err, "the hub did not start");
+                            let _ = alert_command("Switchboard did not start", &err)
+                                .stdin(std::process::Stdio::null())
+                                .status();
+                            std::process::exit(1);
+                        }
+                    };
                     Arc::new(Backend::Local(hub))
                 }
             };

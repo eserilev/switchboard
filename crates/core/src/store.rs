@@ -246,6 +246,14 @@ pub struct PostedRow {
 
 type R<T> = rusqlite::Result<T>;
 
+/// The error for a store that a newer Switchboard wrote.
+fn newer_message(version: usize) -> String {
+    format!(
+        "This store was written by a newer Switchboard (version {version}); this build knows up to {}. Update Switchboard.",
+        SCHEMA.len()
+    )
+}
+
 impl Store {
     pub fn open(path: &Path) -> R<Store> {
         Store::init(Connection::open(path)?)
@@ -256,10 +264,18 @@ impl Store {
     }
 
     fn init(db: Connection) -> R<Store> {
+        // A store from a newer build may have tables or columns that this build
+        // would get wrong: refuse it, before any change to the file.
+        let version: usize = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if version > SCHEMA.len() {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+                Some(newer_message(version)),
+            ));
+        }
         db.pragma_update(None, "journal_mode", "WAL")?;
         // With WAL, NORMAL is safe and skips a disk sync on every write.
         db.pragma_update(None, "synchronous", "NORMAL")?;
-        let version: usize = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
         for (i, sql) in SCHEMA.iter().enumerate().skip(version) {
             db.execute_batch(&format!(
                 "BEGIN; {sql}; PRAGMA user_version = {}; COMMIT;",
@@ -908,6 +924,7 @@ mod tests {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             (seed >> 33) % n
         };
+        let fresh = schema(&Store::memory().unwrap());
         for from in 1..SCHEMA.len() {
             for _ in 0..20 {
                 let db = Connection::open_in_memory().unwrap();
@@ -933,8 +950,49 @@ mod tests {
                 // Drafts from before version 7 have no stored code around them: stale
                 // once. Version 7 drafts already had the columns, so they stay as they are.
                 assert!(ds.iter().all(|d| d.agent && d.start_line.is_none() && d.stale == (from < 7) && d.line_text.is_none()));
+                // The migrated schema is the fresh one.
+                assert_eq!(schema(&s), fresh, "from version {from}");
             }
         }
+    }
+
+    /// `sqlite_schema` as sorted rows of type, name, table and SQL, with each run
+    /// of white space in the SQL as one space.
+    fn schema(s: &Store) -> Vec<String> {
+        let mut q = s.db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").unwrap();
+        let rows = q.query_map([], |r| {
+            let sql: Option<String> = r.get(3)?;
+            let sql = sql.unwrap_or_default().split_whitespace().collect::<Vec<_>>().join(" ");
+            Ok(format!("{} {} on {}: {}", r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, sql))
+        });
+        let mut out: Vec<String> = rows.unwrap().map(Result::unwrap).collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn a_store_from_a_newer_build_is_refused() {
+        let path = std::env::temp_dir().join(format!("sb-store-newer-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let db = Connection::open(&path).unwrap();
+            db.execute_batch(&format!("PRAGMA user_version = {};", SCHEMA.len() + 3)).unwrap();
+        }
+        let err = Store::open(&path).err().unwrap().to_string();
+        assert_eq!(
+            err,
+            format!(
+                "This store was written by a newer Switchboard (version {}); this build knows up to {}. Update Switchboard.",
+                SCHEMA.len() + 3,
+                SCHEMA.len()
+            )
+        );
+        // The file did not change: no WAL.
+        let db = Connection::open(&path).unwrap();
+        let mode: String = db.pragma_query_value(None, "journal_mode", |r| r.get(0)).unwrap();
+        assert_eq!(mode, "delete");
+        drop(db);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -280,7 +280,7 @@ impl Hub {
             Ok(c) => (c, None),
             Err(err) => (Config::default(), Some(err)),
         };
-        let store = Store::open(&paths.store()).map_err(e)?;
+        let store = Store::open(&paths.store()).map_err(|err| format!("{}: {err}", paths.store().display()))?;
 
         let live: Live = Arc::default();
         let reader_live = Arc::clone(&live);

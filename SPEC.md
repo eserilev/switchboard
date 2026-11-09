@@ -853,7 +853,7 @@ Not used: a project `rust-analyzer.toml` for `cachePriming`, `procMacro` or `num
 
 ## 16. Store and restart
 
-SQLite at `~/.local/share/switchboard/store.db`. Schema version in `PRAGMA user_version`.
+SQLite at `~/.local/share/switchboard/store.db`. Schema version in `PRAGMA user_version`. A store with a higher version than the build knows (written by a newer Switchboard) does not open: the hub does not start, with "This store was written by a newer Switchboard (version N); this build knows up to M. Update Switchboard." The app shows it in an alert (a notification on Linux) and quits; `sb serve` prints it.
 
 ```sql
 CREATE TABLE connection (name TEXT PRIMARY KEY, active INTEGER NOT NULL, limit_until TEXT);
