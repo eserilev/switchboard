@@ -545,8 +545,8 @@ An agent commits its work in its own checkout. Before you push, you review those
   2. else, with a remote: the one commit where the history leaves every remote (a detached agent worktree), or, when the history leaves the remotes at more than one commit (a merge of remote work), the merge base with the default branch of a remote: `<remote>/HEAD`, `<remote>/main` or `<remote>/master`, with `origin` first;
   3. else the merge base with a local `main` or `master` that HEAD is not on.
   With no unpushed commit, the range is the last commit (the empty tree for a root commit), and the header says so. A shallow clone with no parent of HEAD is an error, so the whole repo never shows as new.
-- **The parent of a fork.** A fork's own copy of the main branch is often far behind, so a branch that tracks `origin/unstable` of a fork would count every commit the fork lacks. When the remote of HEAD's push or upstream branch is on GitHub, the hub asks `gh api repos/<owner>/<name>` whether it is a fork (`base::gh_fork`, 20 s at most, on the load's thread, with no lock held). For a fork, the base is `<remote>/<default branch of the parent>`, where `<remote>` is the local remote that points at the parent (`remote_for`), when that ref is here. With no answer (no gh, no network), a remote named `upstream` stands for the parent: `upstream/<branch of HEAD's upstream>`, else `upstream/HEAD`, `upstream/main` or `upstream/master`. Not a fork, or no such ref: the rule goes on. The answer is kept in memory and in the store for a week; a failed call is tried again after 10 minutes. The header then says, for example, "Commits not on upstream/unstable (sigp/lighthouse, the parent of this fork)."
-- **Base menu.** In the inspector, after New and All, a Base menu lists: Automatic (the rule above, with the ref it found), your choice, the refs the rule tries, and for each remote its HEAD, `main`, `master` and `unstable` when they exist (one `git for-each-ref refs/remotes`, at most 16 refs), then **Pick a ref…**, a text field for any branch or commit. A choice runs `review_base(id, pick)`: the hub checks the ref with `git rev-parse --verify --quiet <ref>^{commit}` and refuses one that starts with `-`, has a space or a control char, or names no commit. The check of no running load and the change are one lock, as for New and All. The choice is kept on the review (store version 12, `review.base_pick`) and for the repo (the setting `review.base:<main checkout>`), so a review of another worktree of the repo starts with it. Automatic clears both. A chosen ref that is gone falls back to the rule, and the header says so.
+- **The parent of a fork.** A fork's own copy of the main branch is often far behind, so a branch that tracks `origin/unstable` of a fork would count every commit the fork lacks. When the remote of HEAD's push or upstream branch is on GitHub, the hub asks `gh api repos/<owner>/<name>` whether it is a fork (`base::gh_fork`, 20 s at most, on the load's thread, with no lock held). The remote is the longest listed remote that starts the branch name, then `/` (`split_remote`). `<owner>/<name>` comes from the remote's URL (`base::github_repo`), and only from a real GitHub URL: `https://github.com/o/n`, `http://`, `git://`, `git@github.com:o/n` or `ssh://git@github.com[:port]/o/n`, each with an optional `.git` and `/`, the host `github.com` in any case, and a path of exactly two parts. Any other URL gives no owner and no fork question. (Before, `https://github.com.evil.io/sigp/lighthouse` and `https://evil.io/github.com/sigp/lighthouse` read as `sigp/lighthouse`, `https://github.com/o/n/pulls` as `n/pulls`, and `https://github.com/o` as `github.com/o`.) Both are proved (24.3), and `remote_for` uses the same `github_repo`. For a fork, the base is `<remote>/<default branch of the parent>`, where `<remote>` is the local remote that points at the parent (`remote_for`), when that ref is here. With no answer (no gh, no network), a remote named `upstream` stands for the parent: `upstream/<branch of HEAD's upstream>`, else `upstream/HEAD`, `upstream/main` or `upstream/master`. Not a fork, or no such ref: the rule goes on. The answer is kept in memory and in the store for a week; a failed call is tried again after 10 minutes. The header then says, for example, "Commits not on upstream/unstable (sigp/lighthouse, the parent of this fork)."
+- **Base menu.** In the inspector, after New and All, a Base menu lists: Automatic (the rule above, with the ref it found), your choice, the refs the rule tries, and for each remote its HEAD, `main`, `master` and `unstable` when they exist (one `git for-each-ref refs/remotes`, at most 16 refs), then **Pick a ref…**, a text field for any branch or commit. A choice runs `review_base(id, pick)`: the hub checks the ref with `git rev-parse --verify --quiet <ref>^{commit}` and refuses one that is empty, starts with `-`, is longer than 256 bytes, has a space or a control char, or names no commit. The byte part of this check is the proved `refs::ref_ok` (24.3); `base::verify` and `base::exists` call it before git runs, and `verify` also refuses the Unicode spaces and control chars. The check of no running load and the change are one lock, as for New and All. The choice is kept on the review (store version 12, `review.base_pick`) and for the repo (the setting `review.base:<main checkout>`), so a review of another worktree of the repo starts with it. Automatic clears both. A chosen ref that is gone falls back to the rule, and the header says so.
 - **Update base** fetches only the branch of the base ref (`git fetch --no-tags <remote> <branch>`, no login prompt, 2 minutes at most, on the load's thread), then reads the range again. A failed fetch still reads the range, and the header says so. The header tells how old the base is: "Fetched 2 h ago", from the newer of the ref's last reflog entry and `FETCH_HEAD` when it names the branch. A merge base more than 500 commits back adds "this ref may be the wrong base".
 - The tab has Files only: no guide, no agent of its own, and no gh but the fork question above. The diff model, the drawn rows, expand, `+` comments and anchors are those of 11.1 and 11.6.
 - The right column shows the agent pane itself. A click on a line number types the line into its prompt, as in 11.5.
@@ -1001,6 +1001,8 @@ Where the build differs from the text above:
 - `idle_end_minutes` is 0 (off) by default. Ending a session is safe, because the tile resumes it, but it is a surprise the first time.
 - The guide session has no board tile. Its state shows in the review header.
 - `review_nvim` checks its path with the proved `git_argcheck::rel_ok` (24.1, A7 and A8).
+- `mentions::clean_path` (11.15) strips the review tree from an absolute path, then checks the rest with the proved `rel_ok`, so A8 covers it. Its own extra rule (no empty and no `.` part) is plain code. With the tree `/a/b`, `/a/bc/x` is still refused.
+- `base::verify`, `base::exists`, `base::split_remote` and `base::github_repo` call the proved `git_argcheck::refs` (24.3) and keep only the `String` wrappers.
 - The guide prompt (11.3) names the base commit, not a `git merge-base` call: the first round diffs against `{{base}}`. A custom prompt from the config with no `{{base}}` still works, with the old risk.
 - A connection with no `dir` uses your own `~/.claude` and its login.
 - A thread fork and the pin and draft summaries use the active connection.
@@ -1206,6 +1208,34 @@ The definitions are in `proofs/DiffParse/Spec.lean`: `quote` is git's C quoting 
 
 - `crates/diffparse/src/tests.rs`: every byte and 20,000 random paths round-trip through a plain model of git's quoting, and agree with the old `unquote` on text that git writes; 20,000 random headers match a plain model, and the edge cases near `u32::MAX`.
 - `diff::tests` and `post::tests` keep all their cases, and add `@@ -1 +4294967295 @@`, `"\400"` and `context` at `u32::MAX`.
+
+### 24.3 Verified refs, remote branches and GitHub URLs
+
+The module `refs` of `git-argcheck` holds three checks of the local review (11.11), on bytes, in the same Rust subset. `proofs/GitArgCheck/Refs.lean` and `proofs/GitArgCheck/GitHub.lean` prove them; the definitions are in `proofs/GitArgCheck/RefSpec.lean`. `base.rs` keeps the `String` wrappers.
+
+- `ref_ok(r)`: the byte part of `base::verify`. `verify` and `exists` call it before git runs.
+- `split_remote(name, remotes)`: the length of the remote in a remote branch name such as `origin/main`.
+- `github_repo(u)`: where the owner and the name are in a GitHub remote URL. `base::github_repo` makes `owner/name` from them, and `review::remote_for` uses that.
+
+The statements, in `Statements.lean`:
+
+- **R1.** `ref_ok` never panics, and it says yes exactly for a ref that is not empty, does not start with `-`, has at most 256 bytes, and has no control byte (0 to 31, 127) and no space.
+- **R2.** An accepted ref is one git arg that git does not read as an option: with any bytes after it (such as `^{commit}`) it is not empty and does not start with `-`, and it has no NUL, newline or space byte.
+- **B1.** `split_remote` never panics. When it gives a length `n`, a listed remote of that length fits the name: the name is the remote, then `/`, then a branch that is not empty, and no listed remote that fits is longer. When it gives none, no listed remote fits.
+- **H1.** `github_repo` never panics, and it gives parts only for a GitHub URL (`GitHubUrl`): `https://`, `http://` or `git://`, then `github.com` (any case) and `/`; or `git@github.com:`; or `ssh://git@github.com/` or `ssh://git@github.com:<digits>/`; then the owner, `/`, the name, an optional `.git` and an optional `/`. The owner and the name are not empty and have no `/`, and the name does not end with `.git`, so a URL has one reading. The parts are in bounds and in order.
+- **H2.** For such a URL of `owner/name`, `github_repo` gives exactly that owner and that name.
+
+`mentions::clean_path` strips the review tree, then calls the proved `rel_ok`, so A7 and A8 cover what it gives.
+
+#### What stays trusted
+
+- The `String` wrappers: the parts end at an ASCII byte, so the slices of the `&str` are on char boundaries. `verify` also refuses Unicode spaces and control chars; that is plain code.
+- GitHub reads the owner and the name as the URL says. A name that ends with `.git` is not a GitHub repo name.
+
+#### Tests
+
+- The four URLs that the old code read wrong, and more, in `base::tests` and `git_argcheck::tests::refs`.
+- 200,000 random URLs from pieces give the same answer as a plain model of `GitHubUrl`, which finds every reading and checks there is at most one.
 
 ## 25. Model check of the permission flow
 
