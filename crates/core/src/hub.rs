@@ -330,6 +330,7 @@ impl Hub {
         hub.keep_session()?;
         hub.reattach()?;
         hub.load_reviews();
+        hub.start_local();
         hub.prune_tasks();
         // Old review worktrees go in the background: a removal can take seconds.
         let h = hub.clone();

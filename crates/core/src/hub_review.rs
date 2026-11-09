@@ -416,6 +416,41 @@ impl Hub {
         }
     }
 
+    /// At start, after `load_reviews`, for each open local review (SPEC 26.1):
+    /// - The head ref goes back to the head of the store. A quit during a load can
+    ///   leave the ref on a newer snapshot than the saved row, and then `git gc`
+    ///   could drop the snapshot that the view shows.
+    /// - One turn snapshot: New changes lives in memory only, so work that changed
+    ///   before the quit shows again.
+    ///
+    /// Runs before the window can start a load, so no load races the ref.
+    pub(crate) fn start_local(&self) {
+        let rows: Vec<(String, String, String)> = self
+            .reviews
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|r| r.row.is_local() && !r.row.tree.is_empty())
+            .map(|r| (r.row.id.clone(), r.row.tree.clone(), r.row.head.clone()))
+            .collect();
+        let mut trees: Vec<String> = vec![];
+        for (id, tree, head) in rows {
+            let dir = Path::new(&tree);
+            if head.is_empty() || !dir.exists() {
+                continue;
+            }
+            if let Err(err) = repos::git(dir, &["update-ref", &review::snap_ref(&id, "head"), &head]) {
+                tracing::warn!(target: "sb::review", review = %id, %err, "the head ref of the view could not be set");
+            }
+            if !trees.contains(&tree) {
+                trees.push(tree);
+            }
+        }
+        for tree in trees {
+            self.turn_snapshot(&tree);
+        }
+    }
+
     pub fn reviews(&self) -> Vec<ReviewView> {
         let ids: Vec<String> = self.reviews.lock().unwrap().keys().cloned().collect();
         let mut v: Vec<ReviewView> = ids
@@ -3102,6 +3137,7 @@ impl Hub {
     pub fn debug_reload_reviews(&self) {
         self.reviews.lock().unwrap().clear();
         self.load_reviews();
+        self.start_local();
     }
 
     /// Tests only: the cleanup that runs at start.
