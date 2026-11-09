@@ -217,29 +217,9 @@ pub fn github_repo(u: &[u8]) -> Option<Repo> {
     if s == 0 {
         return None;
     }
-    let mut e = u.len();
-    if s < e {
-        if u[e - 1] == b'/' {
-            e -= 1;
-        }
-    }
-    if ends_git(u, s, e) {
-        e -= 4;
-    }
-    let m = find_byte(u, s, b'/');
-    if m >= e {
-        return None;
-    }
-    if m == s {
-        return None;
-    }
-    if m + 1 >= e {
-        return None;
-    }
-    if find_byte(u, m + 1, b'/') < e {
-        return None;
-    }
-    if ends_git(u, m + 1, e) {
+    let e = path_end(u, s);
+    let m = owner_end(u, s, e);
+    if m == 0 {
         return None;
     }
     Some(Repo {
@@ -248,4 +228,48 @@ pub fn github_repo(u: &[u8]) -> Option<Repo> {
         name_start: m + 1,
         name_end: e,
     })
+}
+
+/// The end of the path that starts at `s`: `u.len()`, less one trailing `/`, then
+/// less a trailing `.git`. Needs `s <= u.len()`.
+pub fn path_end(u: &[u8], s: usize) -> usize {
+    let e = trim_slash(u, s);
+    if ends_git(u, s, e) {
+        return e - 4;
+    }
+    e
+}
+
+/// `u.len()`, less one when `u[s..]` ends with `/`. Needs `s <= u.len()`.
+pub fn trim_slash(u: &[u8], s: usize) -> usize {
+    let e = u.len();
+    if s < e {
+        if u[e - 1] == b'/' {
+            return e - 1;
+        }
+    }
+    e
+}
+
+/// The index of the `/` in `u[s..e]` when it is `owner/name`: two parts, not empty,
+/// with no other `/`, and a name that does not end with `.git`. Else 0. Needs
+/// `s <= e <= u.len()`.
+pub fn owner_end(u: &[u8], s: usize, e: usize) -> usize {
+    let m = find_byte(u, s, b'/');
+    if m >= e {
+        return 0;
+    }
+    if m == s {
+        return 0;
+    }
+    if m + 1 >= e {
+        return 0;
+    }
+    if find_byte(u, m + 1, b'/') < e {
+        return 0;
+    }
+    if ends_git(u, m + 1, e) {
+        return 0;
+    }
+    m
 }

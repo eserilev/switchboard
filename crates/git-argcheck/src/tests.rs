@@ -300,4 +300,73 @@ mod refs {
             assert_eq!(repo(u), None, "{u}");
         }
     }
+
+    /// `GitHubUrl` of `proofs/GitArgCheck/RefSpec.lean`, as a plain model: every way to
+    /// read `u` as a prefix, the owner, `/`, the name, `.git` or not, `/` or not.
+    fn model(u: &str) -> Vec<String> {
+        let mut pres: Vec<usize> = vec![];
+        let host = |h: &str| h.len() == 10 && h.eq_ignore_ascii_case("github.com");
+        for (scheme, sep) in [("https://", "/"), ("http://", "/"), ("git://", "/"), ("git@", ":"), ("ssh://git@", "/")] {
+            if let Some(rest) = u.strip_prefix(scheme) {
+                if rest.get(..10).is_some_and(host) && rest[10..].starts_with(sep) {
+                    pres.push(scheme.len() + 11);
+                }
+            }
+        }
+        if let Some(rest) = u.strip_prefix("ssh://git@") {
+            if rest.get(..10).is_some_and(host) && rest[10..].starts_with(':') {
+                let port = &rest[11..];
+                if let Some(k) = port.find('/') {
+                    if k > 0 && port[..k].bytes().all(|b| b.is_ascii_digit()) {
+                        pres.push(10 + 11 + k + 1);
+                    }
+                }
+            }
+        }
+        let mut out = vec![];
+        for p in pres {
+            let rest = &u[p..];
+            for g in ["", ".git"] {
+                for t in ["", "/"] {
+                    let Some(mid) = rest.strip_suffix(t).and_then(|r| r.strip_suffix(g)) else { continue };
+                    let parts: Vec<&str> = mid.split('/').collect();
+                    if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() && !parts[1].ends_with(".git") {
+                        out.push(format!("{}/{}", parts[0], parts[1]));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn github_repo_agrees_with_the_model() {
+        let pieces = [
+            "https://", "http://", "git://", "git@", "ssh://git@", "github.com", "GitHub.Com", "github.co", "evil.io",
+            "/", "/", "/", ":", ":22", "2", "x", "a", "sigp", ".git", ".", "git", "-", "",
+        ];
+        let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut found = 0;
+        for _ in 0..200_000 {
+            let n = 2 + next() % 8;
+            let mut u = String::new();
+            if next() % 2 == 0 {
+                u.push_str(["https://github.com/", "git@github.com:", "ssh://git@github.com:7/"][(next() % 3) as usize]);
+            }
+            for _ in 0..n {
+                u.push_str(pieces[(next() % pieces.len() as u64) as usize]);
+            }
+            let want = model(&u);
+            assert!(want.len() <= 1, "{u}: {want:?}");
+            assert_eq!(repo(&u), want.first().cloned(), "{u}");
+            found += want.len();
+        }
+        assert!(found > 1000, "{found}");
+    }
 }

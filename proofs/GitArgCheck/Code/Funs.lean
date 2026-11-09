@@ -1457,54 +1457,69 @@ def refs.ends_git
         (Array.make 4#usize [ 46#u8, 103#u8, 105#u8, 116#u8 ]))
     equal_at u i1 «to» s
 
+/-- [git_argcheck::refs::owner_end]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 257:0-275:1
+    Visibility: public -/
+def refs.owner_end
+  (u : Slice Std.U8) (s : Std.Usize) (e : Std.Usize) : Result Std.Usize := do
+  let m ← refs.find_byte u s 47#u8
+  if m >= e
+  then ok 0#usize
+  else
+    if m = s
+    then ok 0#usize
+    else
+      let i ← m + 1#usize
+      if i >= e
+      then ok 0#usize
+      else
+        let i1 ← refs.find_byte u i 47#u8
+        if i1 < e
+        then ok 0#usize
+        else let b ← refs.ends_git u i e
+             if b
+             then ok 0#usize
+             else ok m
+
+/-- [git_argcheck::refs::trim_slash]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 244:0-252:1
+    Visibility: public -/
+def refs.trim_slash (u : Slice Std.U8) (s : Std.Usize) : Result Std.Usize := do
+  let e := Slice.len u
+  if s < e
+  then
+    let i ← e - 1#usize
+    let i1 ← Slice.index_usize u i
+    if i1 = 47#u8
+    then ok i
+    else ok e
+  else ok e
+
+/-- [git_argcheck::refs::path_end]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 235:0-241:1
+    Visibility: public -/
+def refs.path_end (u : Slice Std.U8) (s : Std.Usize) : Result Std.Usize := do
+  let e ← refs.trim_slash u s
+  let b ← refs.ends_git u s e
+  if b
+  then e - 4#usize
+  else ok e
+
 /-- [git_argcheck::refs::github_repo]:
-    Source: 'crates/git-argcheck/src/refs.rs', lines 215:0-251:1
+    Source: 'crates/git-argcheck/src/refs.rs', lines 215:0-231:1
     Visibility: public -/
 def refs.github_repo (u : Slice Std.U8) : Result (Option refs.Repo) := do
   let s ← refs.path_start u
   if s = 0#usize
   then ok none
   else
-    let e := Slice.len u
-    let e1 ←
-      if s < e
-      then
-        do
-        let i ← e - 1#usize
-        let i1 ← Slice.index_usize u i
-        if i1 = 47#u8
-        then ok i
-        else ok e
-      else ok e
-    let b ← refs.ends_git u s e1
-    let e2 ← if b
-               then e1 - 4#usize
-               else ok e1
-    let m ← refs.find_byte u s 47#u8
-    if m >= e2
+    let e ← refs.path_end u s
+    let m ← refs.owner_end u s e
+    if m = 0#usize
     then ok none
     else
-      if m = s
-      then ok none
-      else
-        let i ← m + 1#usize
-        if i >= e2
-        then ok none
-        else
-          let i1 ← refs.find_byte u i 47#u8
-          if i1 < e2
-          then ok none
-          else
-            let b1 ← refs.ends_git u i e2
-            if b1
-            then ok none
-            else
-              ok (some
-                {
-                  owner_start := s,
-                  owner_end := m,
-                  name_start := i,
-                  name_end := e2
-                })
+      let i ← m + 1#usize
+      ok (some
+        { owner_start := s, owner_end := m, name_start := i, name_end := e })
 
 end git_argcheck
