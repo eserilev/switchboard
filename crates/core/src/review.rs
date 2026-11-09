@@ -434,7 +434,8 @@ pub fn tree_state(main: &Path, tree: &Path) -> Result<TreeState, String> {
 /// The work in a worktree that only the folder holds: changed and untracked files
 /// (not ignored ones), and commits that no branch, tag, remote or pin reaches.
 pub fn local_changes(main: &Path, tree: &Path) -> Result<Vec<String>, String> {
-    let status = git(tree, &["status", "--porcelain", "--untracked-files=all"])?;
+    // core.quotePath=false: the list shows "café.rs", not "caf\303\251.rs".
+    let status = git(tree, &["-c", "core.quotePath=false", "status", "--porcelain", "--untracked-files=all"])?;
     let mut out: Vec<String> = status.lines().map(|l| l.trim_end().to_owned()).filter(|l| !l.is_empty()).collect();
     let head = git(tree, &["rev-parse", "HEAD"])?;
     let own = git(
@@ -1146,14 +1147,18 @@ pub fn round_base(
 /// no such file. Returns the tree and the files with a conflict, sorted.
 pub fn replay(dir: &Path, since: &str, new_base: &str) -> Result<(String, Vec<String>), String> {
     let out = Command::new("git")
-        .args(["merge-tree", "--write-tree", "--no-messages", "--name-only", since, new_base])
+        // -z: names come raw, each ending with NUL. Without it git quotes a name
+        // ("caf\303\251.rs"), and the quoted name matches no file.
+        .args(["merge-tree", "-z", "--write-tree", "--no-messages", "--name-only", since, new_base])
         .current_dir(dir)
         .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("git merge-tree: {e}"))?;
     // Exit 0: a clean merge. Exit 1: conflicts, and the tree has conflict markers.
+    // The output: the tree, then each conflicted name, then an empty field before the
+    // messages (which --no-messages leaves out). Each field ends with NUL.
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    let mut lines = text.lines();
+    let mut lines = text.split('\0');
     let tree = lines.next().unwrap_or("").trim().to_owned();
     if tree.is_empty() || !matches!(out.status.code(), Some(0 | 1)) {
         return Err(format!(
@@ -1203,27 +1208,33 @@ pub fn replay(dir: &Path, since: &str, new_base: &str) -> Result<(String, Vec<St
         run(&["read-tree", &tree], None)?;
         let mut info = String::new();
         for path in &conflicts {
-            let entry = git(dir, &["ls-tree", since, "--", path])?;
+            // --literal-pathspecs: a name such as "a*.rs" matches only itself.
+            let entry = git(dir, &["--literal-pathspecs", "ls-tree", "-z", since, "--", path])?;
             match entry.split_once('\t') {
                 // "<mode> blob <oid>\t<path>" becomes "<mode> <oid>\t<path>".
                 Some((meta, _)) => {
                     let parts: Vec<&str> = meta.split_whitespace().collect();
-                    info.push_str(&format!("{} {}\t{path}\n", parts[0], parts[2]));
+                    info.push_str(&format!("{} {}\t{path}\0", parts[0], parts[2]));
                 }
-                // No such file at `since`: mode 0 removes it.
-                None => info.push_str(&format!("0 {}\t{path}\n", "0".repeat(40))),
+                // No such file at `since`: mode 0 removes it. The zero id is as long
+                // as the repo's ids (SHA-1 or SHA-256).
+                None => info.push_str(&format!("0 {}\t{path}\0", "0".repeat(tree.len()))),
             }
         }
-        run(&["update-index", "--index-info"], Some(&info))?;
+        // -z: each entry ends with NUL, and git does not unquote the name.
+        run(&["update-index", "-z", "--index-info"], Some(&info))?;
         run(&["write-tree"], None)
     })();
     let _ = std::fs::remove_file(&index);
     Ok((result?, conflicts))
 }
 
+/// The files that differ between `old` and `new`. -z keeps each name raw: without it
+/// git quotes a name with a non-ASCII byte, a tab or a quote.
 pub fn changed_files(tree: &Path, old: &str, new: &str) -> Result<Vec<String>, String> {
-    Ok(git(tree, &["diff", "--name-only", old, new])?
-        .lines()
+    Ok(git(tree, &["diff", "-z", "--name-only", "--no-ext-diff", old, new])?
+        .split('\0')
+        .filter(|f| !f.is_empty())
         .map(str::to_owned)
         .collect())
 }
@@ -1419,6 +1430,52 @@ mod tests {
         let (b, _) = round_base(&dir, &since, &new_base, &head).unwrap();
         // base.rs merged cleanly, so it does not show; a.rs shows the author's fix.
         assert_eq!(round_changes(&dir, &b, &head), ["a.rs:old:5", "a.rs:new:5"]);
+    }
+
+    /// git quotes these names without -z: "caf\303\251.rs", "a\tb.rs".
+    const ODD_NAMES: [&str; 4] = ["café.rs", "a b.rs", "a\tb.rs", "q\"uote.rs"];
+
+    /// A conflict on a file with an odd name keeps the file at its round-1 version.
+    /// Before -z, the quoted name matched nothing and the file left the round base.
+    #[test]
+    fn a_conflict_on_an_odd_name_keeps_the_file() {
+        let dir = std::env::temp_dir().join(format!("sb-round-{}-odd", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let g = |args: &[&str]| git(&dir, args).unwrap();
+        let put = |text: &str| {
+            for n in ODD_NAMES {
+                std::fs::write(dir.join(n), format!("1\n{text}\n3\n")).unwrap();
+            }
+        };
+        g(&["init", "-q", "-b", "main"]);
+        g(&["config", "user.email", "t@t"]);
+        g(&["config", "user.name", "t"]);
+        put("2");
+        g(&["add", "."]);
+        g(&["commit", "-qm", "base"]);
+        g(&["checkout", "-qb", "pr"]);
+        put("TWO");
+        g(&["commit", "-qam", "round 1"]);
+        let since = g(&["rev-parse", "HEAD"]);
+        g(&["checkout", "-q", "main"]);
+        put("zwei");
+        g(&["commit", "-qam", "main"]);
+        let new_base = g(&["rev-parse", "HEAD"]);
+        let (tree, mut conflicts) = replay(&dir, &since, &new_base).unwrap();
+        let mut want: Vec<String> = ODD_NAMES.iter().map(|n| n.to_string()).collect();
+        want.sort();
+        conflicts.sort();
+        assert_eq!(conflicts, want);
+        for n in ODD_NAMES {
+            let spec = format!("{tree}:{n}");
+            assert_eq!(git(&dir, &["show", &spec]).unwrap(), "1\nTWO\n3", "{n:?}");
+        }
+        // changed_files gives the raw names too.
+        let mut changed = changed_files(&dir, &since, &new_base).unwrap();
+        changed.sort();
+        assert_eq!(changed, want);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
