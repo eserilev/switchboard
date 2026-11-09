@@ -10,18 +10,66 @@ use std::path::{Path, PathBuf};
 /// under them that it may not. The git folder of a worktree lives in the main
 /// checkout: without it, `git commit` in a worktree fails. Its hooks and config
 /// stay closed, since a command that writes them runs outside the sandbox later.
+/// The folders with keys stay closed too, also when `sandbox.write` holds `~`.
 pub fn block<'a>(cfg: &'a SandboxCfg, tree: &Path) -> Sandbox<'a> {
     let mut write: Vec<String> = cfg.write.iter().map(|w| crate::expand(w).to_string_lossy().into_owned()).collect();
-    let mut deny_write = vec![];
+    let mut deny_write: Vec<String> =
+        crate::hooks::SECRET_DIRS.iter().map(|d| crate::expand(d).to_string_lossy().into_owned()).collect();
     if let Some(common) = git_common_dir(tree) {
         if !common.starts_with(tree) {
             write.push(common.to_string_lossy().into_owned());
         }
-        for d in ["hooks", "config"] {
-            deny_write.push(common.join(d).to_string_lossy().into_owned());
-        }
+        deny_write.extend(git_closed(&common).iter().map(|p| p.to_string_lossy().into_owned()));
     }
     Sandbox { domains: &cfg.domains, unsandboxed: &cfg.unsandboxed, write, deny_write }
+}
+
+/// The files in the git folder `common` that git runs or reads config from: the
+/// hooks and config of the repo, of each submodule (`modules/<name>`, also nested
+/// ones) and the `config.worktree` of each worktree. Claude Code skips a glob in a
+/// write rule on Linux, so these are the real paths at the start of the pane. A
+/// `config.worktree` that is not there yet is listed only when the repo reads it
+/// (`extensions.worktreeConfig`). A submodule added later is not covered (SPEC 23).
+fn git_closed(common: &Path) -> Vec<PathBuf> {
+    let mut out = vec![common.join("hooks"), common.join("config")];
+    let worktree_config = crate::repos::git(common, &["config", "--bool", "extensions.worktreeConfig"])
+        .is_ok_and(|v| v.trim() == "true");
+    let config_worktree =|dir: &Path, out: &mut Vec<PathBuf>| {
+        let p = dir.join("config.worktree");
+        if worktree_config || p.exists() {
+            out.push(p);
+        }
+    };
+    config_worktree(common, &mut out);
+    let mut trees: Vec<PathBuf> = std::fs::read_dir(common.join("worktrees"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    trees.sort();
+    for t in &trees {
+        config_worktree(t, &mut out);
+    }
+    // The git folders of the submodules. A name can hold `/`, so a folder with no
+    // HEAD file is a step of a name: look inside it.
+    let mut todo = vec![common.join("modules")];
+    while let Some(dir) = todo.pop() {
+        let mut subs: Vec<PathBuf> =
+            std::fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        subs.sort();
+        for s in subs.into_iter().rev() {
+            if s.join("HEAD").is_file() {
+                out.push(s.join("hooks"));
+                out.push(s.join("config"));
+                todo.push(s.join("modules"));
+            } else {
+                todo.push(s);
+            }
+        }
+    }
+    out
 }
 
 /// The git folder that all worktrees of the repo share, as a full path.
@@ -92,16 +140,58 @@ mod tests {
         let common = main.join(".git").to_string_lossy().into_owned();
         let b = block(&cfg, &tree);
         assert_eq!(b.write, vec!["/tmp/build".to_owned(), common.clone()]);
-        assert!(b.deny_write.contains(&format!("{common}/hooks")) && b.deny_write.contains(&format!("{common}/config")), "{:?}", b.deny_write);
+        let secrets: Vec<String> =
+            crate::hooks::SECRET_DIRS.iter().map(|d| crate::expand(d).to_string_lossy().into_owned()).collect();
+        assert_eq!(b.deny_write, [secrets.clone(), vec![format!("{common}/hooks"), format!("{common}/config")]].concat());
         assert_eq!(b.domains, &cfg.domains[..]);
         // The main checkout writes its own git folder already: only the deny rules.
         let b = block(&cfg, &main);
         assert_eq!(b.write, vec!["/tmp/build".to_owned()]);
-        assert_eq!(b.deny_write.len(), 2);
-        // A folder with no git: only the config folders.
+        assert_eq!(b.deny_write.len(), secrets.len() + 2);
+        // A folder with no git: only the folders with keys.
         let plain = root.join("plain");
         std::fs::create_dir_all(&plain).unwrap();
-        assert!(block(&cfg, &plain).deny_write.is_empty());
+        assert_eq!(block(&cfg, &plain).deny_write, secrets);
+        // `~` in `sandbox.write` does not open the keys.
+        let home = SandboxCfg { write: vec!["~".into()], ..SandboxCfg::default() };
+        let b = block(&home, &plain);
+        assert!(secrets.iter().all(|s| b.deny_write.contains(s) && s.starts_with(&b.write[0])), "{:?}", b.deny_write);
+
+        // A submodule (a nested one too, and a name with `/`) and worktree config.
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        git(&sub, &["init", "-q"]);
+        git(&sub, &["-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "s"]);
+        let file = |args: &[&str]| {
+            let mut a = vec!["-c", "protocol.file.allow=always"];
+            a.extend_from_slice(args);
+            git(&main, &a);
+        };
+        file(&["submodule", "add", "-q", sub.to_str().unwrap(), "libs/one"]);
+        file(&["submodule", "add", "-q", "--name", "a/b", sub.to_str().unwrap(), "two"]);
+        let nested = main.join(".git/modules/libs/one");
+        git(&main.join("libs/one"), &["-c", "protocol.file.allow=always", "submodule", "add", "-q", sub.to_str().unwrap(), "inner"]);
+        git(&main, &["config", "extensions.worktreeConfig", "true"]);
+        let b = block(&cfg, &tree);
+        let want = [
+            format!("{common}/hooks"),
+            format!("{common}/config"),
+            format!("{common}/config.worktree"),
+            format!("{common}/worktrees/wt/config.worktree"),
+            format!("{common}/modules/a/b/hooks"),
+            format!("{common}/modules/a/b/config"),
+            format!("{common}/modules/libs/one/hooks"),
+            format!("{common}/modules/libs/one/config"),
+            format!("{}/modules/inner/hooks", nested.display()),
+            format!("{}/modules/inner/config", nested.display()),
+        ];
+        assert_eq!(b.deny_write, [secrets.clone(), want.to_vec()].concat());
+        // Without worktreeConfig, a config.worktree that is not there is left out.
+        git(&main, &["config", "--unset", "extensions.worktreeConfig"]);
+        std::fs::write(main.join(".git/worktrees/wt/config.worktree"), "").unwrap();
+        let b = block(&cfg, &tree);
+        assert!(!b.deny_write.contains(&format!("{common}/config.worktree")));
+        assert!(b.deny_write.contains(&format!("{common}/worktrees/wt/config.worktree")));
 
         let f = root.join("p1.json");
         std::fs::write(&f, r#"{"sandbox":{"enabled":true}}"#).unwrap();

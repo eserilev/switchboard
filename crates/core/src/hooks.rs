@@ -7,8 +7,8 @@ use std::path::Path;
 
 pub const RUST_PLUGIN: &str = "rust-analyzer-lsp@claude-plugins-official";
 
-/// The folders with keys and logins. A pane in the sandbox can not read them,
-/// with Bash or with the Read tool (SPEC 31).
+/// The folders with keys and logins. A pane in the sandbox can not read or write
+/// them, with Bash or with the Read and Edit tools (SPEC 31).
 pub const SECRET_DIRS: [&str; 4] = ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/gh"];
 
 /// What goes in the settings file of one pane.
