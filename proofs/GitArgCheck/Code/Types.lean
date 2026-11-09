@@ -18,10 +18,19 @@ set_option maxRecDepth 2048
 namespace git_argcheck
 
 /-- [git_argcheck::Refusal]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 41:0-44:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 44:0-47:1
     Visibility: public -/
 structure Refusal where
   why : Std.U8
   «at» : Std.Usize
+
+/-- [git_argcheck::refs::Repo]
+    Source: 'crates/git-argcheck/src/refs.rs', lines 86:0-91:1
+    Visibility: public -/
+structure refs.Repo where
+  owner_start : Std.Usize
+  owner_end : Std.Usize
+  name_start : Std.Usize
+  name_end : Std.Usize
 
 end git_argcheck

@@ -233,3 +233,71 @@ fn normal_calls_pass() {
     assert!(!ok("diff", &["--", "--output=x"]));
     assert!(!ok("diff", &["--text", "--textconv"]));
 }
+
+mod refs {
+    use crate::refs::*;
+
+    fn repo(u: &str) -> Option<String> {
+        let r = github_repo(u.as_bytes())?;
+        Some(format!("{}/{}", &u[r.owner_start..r.owner_end], &u[r.name_start..r.name_end]))
+    }
+
+    #[test]
+    fn refs() {
+        for good in ["main", "origin/main", "HEAD~2", "a^{tree}", "é", &"x".repeat(REF_MAX)] {
+            assert!(ref_ok(good.as_bytes()), "{good:?}");
+        }
+        for bad in ["", "-x", "--all", "a b", "a\tb", "a\nb", "a\0b", "a\x7fb", &"x".repeat(REF_MAX + 1)] {
+            assert!(!ref_ok(bad.as_bytes()), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn remotes() {
+        let r: Vec<Vec<u8>> = ["origin", "a", "a/b"].iter().map(|s| s.as_bytes().to_vec()).collect();
+        assert_eq!(split_remote(b"origin/unstable", &r), Some(6));
+        assert_eq!(split_remote(b"a/b/x", &r), Some(3));
+        assert_eq!(split_remote(b"a/x/y", &r), Some(1));
+        assert_eq!(split_remote(b"origin", &r), None);
+        assert_eq!(split_remote(b"origin/", &r), None);
+        assert_eq!(split_remote(b"originx/y", &r), None);
+        assert_eq!(split_remote(b"a/b/", &r), Some(1));
+    }
+
+    #[test]
+    fn github_urls() {
+        for (u, want) in [
+            ("git@github.com:eserilev/lighthouse.git", "eserilev/lighthouse"),
+            ("https://github.com/sigp/lighthouse", "sigp/lighthouse"),
+            ("https://github.com/sigp/lighthouse.git/", "sigp/lighthouse"),
+            ("https://github.com/sigp/lighthouse/", "sigp/lighthouse"),
+            ("http://GitHub.COM/a/b", "a/b"),
+            ("git://github.com/a/b.git", "a/b"),
+            ("ssh://git@github.com/a/b.git", "a/b"),
+            ("ssh://git@github.com:22/a/b", "a/b"),
+            ("https://github.com/a/b.c", "a/b.c"),
+        ] {
+            assert_eq!(repo(u).as_deref(), Some(want), "{u}");
+        }
+        for u in [
+            "https://github.com.evil.io/sigp/lighthouse",
+            "https://evil.io/github.com/a/b",
+            "https://github.com/o/n/pulls",
+            "https://github.com/o",
+            "https://github.com/o/",
+            "https://github.com//n",
+            "https://github.com/o/n.git.git",
+            "https://github.com/o/.git",
+            "https://github.com/o/n//",
+            "ssh://git@github.com:/a/b",
+            "ssh://git@github.com:2x/a/b",
+            "git@github.com/a/b",
+            "/home/me/up",
+            "https://gitlab.com/a/b",
+            "github.com/a/b",
+            "",
+        ] {
+            assert_eq!(repo(u), None, "{u}");
+        }
+    }
+}

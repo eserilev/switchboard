@@ -6,7 +6,8 @@
 //! the options that turn off external diff and textconv programs first.
 //! `proofs/GitArgCheck` proves in Lean, with Aeneas, what `check` means.
 //!
-//! It also has `rel_ok`, the check that a path stays inside a folder.
+//! It also has `rel_ok`, the check that a path stays inside a folder, and in
+//! `refs` the checks of a ref, a remote branch name and a GitHub URL (SPEC 24.2).
 //!
 //! The code stays in the Rust subset that Aeneas translates: `while` loops,
 //! small functions, no `?`, no closures, no `&&` or `||`. It works on bytes.
@@ -16,6 +17,8 @@
 // Nested `if`s on purpose: the kernel avoids `&&` so the Aeneas translation stays plain.
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::needless_bool)]
+
+pub mod refs;
 
 #[cfg(test)]
 mod tests;

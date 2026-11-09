@@ -19,67 +19,67 @@ set_option maxRecDepth 2048
 namespace git_argcheck
 
 /-- [git_argcheck::DIFF]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 24:0-24:23
+    Source: 'crates/git-argcheck/src/lib.rs', lines 27:0-27:23
     Visibility: public -/
 @[global_simps, irreducible] def DIFF : Std.U8 := 0#u8
 
 /-- [git_argcheck::LOG]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 25:0-25:22
+    Source: 'crates/git-argcheck/src/lib.rs', lines 28:0-28:22
     Visibility: public -/
 @[global_simps, irreducible] def LOG : Std.U8 := 1#u8
 
 /-- [git_argcheck::SHOW]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 26:0-26:23
+    Source: 'crates/git-argcheck/src/lib.rs', lines 29:0-29:23
     Visibility: public -/
 @[global_simps, irreducible] def SHOW : Std.U8 := 2#u8
 
 /-- [git_argcheck::BLAME]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 27:0-27:24
+    Source: 'crates/git-argcheck/src/lib.rs', lines 30:0-30:24
     Visibility: public -/
 @[global_simps, irreducible] def BLAME : Std.U8 := 3#u8
 
 /-- [git_argcheck::MERGE_BASE]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 28:0-28:29
+    Source: 'crates/git-argcheck/src/lib.rs', lines 31:0-31:29
     Visibility: public -/
 @[global_simps, irreducible] def MERGE_BASE : Std.U8 := 4#u8
 
 /-- [git_argcheck::REV_PARSE]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 29:0-29:28
+    Source: 'crates/git-argcheck/src/lib.rs', lines 32:0-32:28
     Visibility: public -/
 @[global_simps, irreducible] def REV_PARSE : Std.U8 := 5#u8
 
 /-- [git_argcheck::NO_SUB]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 31:0-31:25
+    Source: 'crates/git-argcheck/src/lib.rs', lines 34:0-34:25
     Visibility: public -/
 @[global_simps, irreducible] def NO_SUB : Std.U8 := 6#u8
 
 /-- [git_argcheck::BAD_SUB]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 34:0-34:26
+    Source: 'crates/git-argcheck/src/lib.rs', lines 37:0-37:26
     Visibility: public -/
 @[global_simps, irreducible] def BAD_SUB : Std.U8 := 1#u8
 
 /-- [git_argcheck::EMPTY]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 35:0-35:24
+    Source: 'crates/git-argcheck/src/lib.rs', lines 38:0-38:24
     Visibility: public -/
 @[global_simps, irreducible] def EMPTY : Std.U8 := 2#u8
 
 /-- [git_argcheck::CONTROL]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 36:0-36:26
+    Source: 'crates/git-argcheck/src/lib.rs', lines 39:0-39:26
     Visibility: public -/
 @[global_simps, irreducible] def CONTROL : Std.U8 := 3#u8
 
 /-- [git_argcheck::OPTION]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 37:0-37:25
+    Source: 'crates/git-argcheck/src/lib.rs', lines 40:0-40:25
     Visibility: public -/
 @[global_simps, irreducible] def OPTION : Std.U8 := 4#u8
 
 /-- [git_argcheck::PATH]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 38:0-38:23
+    Source: 'crates/git-argcheck/src/lib.rs', lines 41:0-41:23
     Visibility: public -/
 @[global_simps, irreducible] def PATH : Std.U8 := 5#u8
 
 /-- [git_argcheck::SUBS]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 47:0-47:68
+    Source: 'crates/git-argcheck/src/lib.rs', lines 50:0-50:68
     Visibility: public -/
 @[global_simps, irreducible]
 def SUBS : Slice Std.U8 :=
@@ -93,7 +93,7 @@ def SUBS : Slice Std.U8 :=
       ])
 
 /-- [git_argcheck::DIFF_FLAGS]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 50:0-59:11
+    Source: 'crates/git-argcheck/src/lib.rs', lines 53:0-62:11
     Visibility: public -/
 @[global_simps, irreducible]
 def DIFF_FLAGS : Slice Std.U8 :=
@@ -162,7 +162,7 @@ def DIFF_FLAGS : Slice Std.U8 :=
       ])
 
 /-- [git_argcheck::DIFF_VALUES]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 62:0-65:33
+    Source: 'crates/git-argcheck/src/lib.rs', lines 65:0-68:33
     Visibility: public -/
 @[global_simps, irreducible]
 def DIFF_VALUES : Slice Std.U8 :=
@@ -194,7 +194,7 @@ def DIFF_VALUES : Slice Std.U8 :=
       ])
 
 /-- [git_argcheck::DIFF_ONLY]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 68:0-68:91
+    Source: 'crates/git-argcheck/src/lib.rs', lines 71:0-71:91
     Visibility: public -/
 @[global_simps, irreducible]
 def DIFF_ONLY : Slice Std.U8 :=
@@ -210,7 +210,7 @@ def DIFF_ONLY : Slice Std.U8 :=
       ])
 
 /-- [git_argcheck::LOG_FLAGS]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 71:0-79:59
+    Source: 'crates/git-argcheck/src/lib.rs', lines 74:0-82:59
     Visibility: public -/
 @[global_simps, irreducible]
 def LOG_FLAGS : Slice Std.U8 :=
@@ -277,7 +277,7 @@ def LOG_FLAGS : Slice Std.U8 :=
       ])
 
 /-- [git_argcheck::LOG_VALUES]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 82:0-84:53
+    Source: 'crates/git-argcheck/src/lib.rs', lines 85:0-87:53
     Visibility: public -/
 @[global_simps, irreducible]
 def LOG_VALUES : Slice Std.U8 :=
@@ -305,7 +305,7 @@ def LOG_VALUES : Slice Std.U8 :=
       ])
 
 /-- [git_argcheck::BLAME_FLAGS]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 86:0-88:61
+    Source: 'crates/git-argcheck/src/lib.rs', lines 89:0-91:61
     Visibility: public -/
 @[global_simps, irreducible]
 def BLAME_FLAGS : Slice Std.U8 :=
@@ -333,7 +333,7 @@ def BLAME_FLAGS : Slice Std.U8 :=
       ])
 
 /-- [git_argcheck::BLAME_VALUES]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 90:0-90:51
+    Source: 'crates/git-argcheck/src/lib.rs', lines 93:0-93:51
     Visibility: public -/
 @[global_simps, irreducible]
 def BLAME_VALUES : Slice Std.U8 :=
@@ -344,7 +344,7 @@ def BLAME_VALUES : Slice Std.U8 :=
       ])
 
 /-- [git_argcheck::MERGE_BASE_FLAGS]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 92:0-92:99
+    Source: 'crates/git-argcheck/src/lib.rs', lines 95:0-95:99
     Visibility: public -/
 @[global_simps, irreducible]
 def MERGE_BASE_FLAGS : Slice Std.U8 :=
@@ -360,7 +360,7 @@ def MERGE_BASE_FLAGS : Slice Std.U8 :=
       ])
 
 /-- [git_argcheck::REV_PARSE_FLAGS]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 94:0-95:74
+    Source: 'crates/git-argcheck/src/lib.rs', lines 97:0-98:74
     Visibility: public -/
 @[global_simps, irreducible]
 def REV_PARSE_FLAGS : Slice Std.U8 :=
@@ -383,7 +383,7 @@ def REV_PARSE_FLAGS : Slice Std.U8 :=
       ])
 
 /-- [git_argcheck::REV_PARSE_VALUES]
-    Source: 'crates/git-argcheck/src/lib.rs', lines 97:0-97:60
+    Source: 'crates/git-argcheck/src/lib.rs', lines 100:0-100:60
     Visibility: public -/
 @[global_simps, irreducible]
 def REV_PARSE_VALUES : Slice Std.U8 :=
@@ -395,7 +395,7 @@ def REV_PARSE_VALUES : Slice Std.U8 :=
       ])
 
 /-- [git_argcheck::equal_at]: loop body 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 105:4-112:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 108:4-115:1
     Visibility: public -/
 @[rust_loop_body]
 def equal_at_loop.body
@@ -416,7 +416,7 @@ def equal_at_loop.body
   else ok (done true)
 
 /-- [git_argcheck::equal_at]: loop 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 105:4-112:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 108:4-115:1
     Visibility: public -/
 @[rust_loop]
 def equal_at_loop
@@ -429,7 +429,7 @@ def equal_at_loop
     i
 
 /-- [git_argcheck::equal_at]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 100:0-112:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 103:0-115:1
     Visibility: public -/
 def equal_at
   (a : Slice Std.U8) («from» : Std.Usize) («to» : Std.Usize)
@@ -443,7 +443,7 @@ def equal_at
   else equal_at_loop a «from» b 0#usize
 
 /-- [git_argcheck::has_piece]: loop body 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 118:4-128:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 121:4-131:1
     Visibility: public -/
 @[rust_loop_body]
 def has_piece_loop.body
@@ -469,7 +469,7 @@ def has_piece_loop.body
        ok (done b)
 
 /-- [git_argcheck::has_piece]: loop 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 118:4-128:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 121:4-131:1
     Visibility: public -/
 @[rust_loop]
 def has_piece_loop
@@ -482,7 +482,7 @@ def has_piece_loop
     (start, k)
 
 /-- [git_argcheck::has_piece]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 115:0-128:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 118:0-131:1
     Visibility: public -/
 @[reducible]
 def has_piece
@@ -490,13 +490,13 @@ def has_piece
   has_piece_loop p sep w 0#usize 0#usize
 
 /-- [git_argcheck::in_list]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 131:0-133:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 134:0-136:1
     Visibility: public -/
 def in_list («name» : Slice Std.U8) (list : Slice Std.U8) : Result Bool := do
   has_piece list 32#u8 «name»
 
 /-- [git_argcheck::has_byte]: loop body 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 138:4-145:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 141:4-148:1
     Visibility: public -/
 @[rust_loop_body]
 def has_byte_loop.body
@@ -514,7 +514,7 @@ def has_byte_loop.body
   else ok (done false)
 
 /-- [git_argcheck::has_byte]: loop 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 138:4-145:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 141:4-148:1
     Visibility: public -/
 @[rust_loop]
 def has_byte_loop
@@ -524,14 +524,14 @@ def has_byte_loop
     i
 
 /-- [git_argcheck::has_byte]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 136:0-145:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 139:0-148:1
     Visibility: public -/
 @[reducible]
 def has_byte (p : Slice Std.U8) (x : Std.U8) : Result Bool := do
   has_byte_loop p x 0#usize
 
 /-- [git_argcheck::digits_at]: loop body 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 1:0-163:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 1:0-166:1
     Visibility: public -/
 @[rust_loop_body]
 def digits_at_loop.body
@@ -551,7 +551,7 @@ def digits_at_loop.body
   else ok (done true)
 
 /-- [git_argcheck::digits_at]: loop 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 1:0-163:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 1:0-166:1
     Visibility: public -/
 @[rust_loop]
 def digits_at_loop
@@ -561,7 +561,7 @@ def digits_at_loop
     i
 
 /-- [git_argcheck::digits_at]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 148:0-163:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 151:0-166:1
     Visibility: public -/
 def digits_at
   (a : Slice Std.U8) («from» : Std.Usize) («to» : Std.Usize) :
@@ -572,14 +572,14 @@ def digits_at
   else digits_at_loop a «to» «from»
 
 /-- [git_argcheck::is_digits]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 166:0-168:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 169:0-171:1
     Visibility: public -/
 def is_digits (s : Slice Std.U8) : Result Bool := do
   let i := Slice.len s
   digits_at s 0#usize i
 
 /-- [git_argcheck::rel_ok]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 172:0-189:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 175:0-192:1
     Visibility: public -/
 def rel_ok (p : Slice Std.U8) : Result Bool := do
   let b ← core.slice.Slice.is_empty p
@@ -605,7 +605,7 @@ def rel_ok (p : Slice Std.U8) : Result Bool := do
           else ok true
 
 /-- [git_argcheck::sub_code]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 192:0-212:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 195:0-215:1
     Visibility: public -/
 def sub_code (sub : Slice Std.U8) : Result Std.U8 := do
   let i := Slice.len sub
@@ -663,7 +663,7 @@ def sub_code (sub : Slice Std.U8) : Result Std.U8 := do
             else ok NO_SUB
 
 /-- [git_argcheck::diffs]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 215:0-223:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 218:0-226:1
     Visibility: public -/
 def diffs (code : Std.U8) : Result Bool := do
   if code = DIFF
@@ -673,7 +673,7 @@ def diffs (code : Std.U8) : Result Bool := do
        else ok (code = SHOW)
 
 /-- [git_argcheck::logs]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 226:0-231:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 229:0-234:1
     Visibility: public -/
 def logs (code : Std.U8) : Result Bool := do
   if code = LOG
@@ -681,7 +681,7 @@ def logs (code : Std.U8) : Result Bool := do
   else ok (code = SHOW)
 
 /-- [git_argcheck::flag_ok]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 234:0-257:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 237:0-260:1
     Visibility: public -/
 def flag_ok (code : Std.U8) («name» : Slice Std.U8) : Result Bool := do
   if code = DIFF
@@ -710,7 +710,7 @@ def flag_ok (code : Std.U8) («name» : Slice Std.U8) : Result Bool := do
           else ok false
 
 /-- [git_argcheck::value_ok]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 260:0-277:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 263:0-280:1
     Visibility: public -/
 def value_ok (code : Std.U8) («name» : Slice Std.U8) : Result Bool := do
   if code = DIFF
@@ -732,7 +732,7 @@ def value_ok (code : Std.U8) («name» : Slice Std.U8) : Result Bool := do
         else ok false
 
 /-- [git_argcheck::find_eq]: loop body 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 282:4-289:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 285:4-292:1
     Visibility: public -/
 @[rust_loop_body]
 def find_eq_loop.body
@@ -751,7 +751,7 @@ def find_eq_loop.body
        ok (done i2)
 
 /-- [git_argcheck::find_eq]: loop 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 282:4-289:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 285:4-292:1
     Visibility: public -/
 @[rust_loop]
 def find_eq_loop (a : Slice Std.U8) (i : Std.Usize) : Result Std.Usize := do
@@ -760,14 +760,14 @@ def find_eq_loop (a : Slice Std.U8) (i : Std.Usize) : Result Std.Usize := do
     i
 
 /-- [git_argcheck::find_eq]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 280:0-289:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 283:0-292:1
     Visibility: public -/
 @[reducible]
 def find_eq (a : Slice Std.U8) («from» : Std.Usize) : Result Std.Usize := do
   find_eq_loop a «from»
 
 /-- [git_argcheck::trim_percent]: loop body 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 294:4-301:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 297:4-304:1
     Visibility: public -/
 @[rust_loop_body]
 def trim_percent_loop.body
@@ -784,7 +784,7 @@ def trim_percent_loop.body
   else ok (done n)
 
 /-- [git_argcheck::trim_percent]: loop 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 294:4-301:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 297:4-304:1
     Visibility: public -/
 @[rust_loop]
 def trim_percent_loop
@@ -796,7 +796,7 @@ def trim_percent_loop
     n
 
 /-- [git_argcheck::trim_percent]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 292:0-301:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 295:0-304:1
     Visibility: public -/
 def trim_percent
   (a : Slice Std.U8) («from» : Std.Usize) : Result Std.Usize := do
@@ -804,7 +804,7 @@ def trim_percent
   trim_percent_loop a «from» n
 
 /-- [git_argcheck::score_ok]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 349:0-357:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 352:0-360:1
     Visibility: public -/
 def score_ok (code : Std.U8) (a : Slice Std.U8) : Result Bool := do
   let b ← diffs code
@@ -818,7 +818,7 @@ def score_ok (code : Std.U8) (a : Slice Std.U8) : Result Bool := do
     else ok false
 
 /-- [git_argcheck::glued_ok]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 304:0-346:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 307:0-349:1
     Visibility: public -/
 def glued_ok (code : Std.U8) (a : Slice Std.U8) : Result Bool := do
   let i := Slice.len a
@@ -871,7 +871,7 @@ def glued_ok (code : Std.U8) (a : Slice Std.U8) : Result Bool := do
                   else ok false
 
 /-- [git_argcheck::option_ok]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 388:0-407:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 391:0-410:1
     Visibility: public -/
 def option_ok (code : Std.U8) (a : Slice Std.U8) : Result Bool := do
   let i := Slice.len a
@@ -918,7 +918,7 @@ def option_ok (code : Std.U8) (a : Slice Std.U8) : Result Bool := do
       else glued_ok code a
 
 /-- [git_argcheck::refuse]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 360:0-385:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 363:0-388:1
     Visibility: public -/
 def refuse (code : Std.U8) (a : Slice Std.U8) : Result Std.U8 := do
   let b ← core.slice.Slice.is_empty a
@@ -952,7 +952,7 @@ def refuse (code : Std.U8) (a : Slice Std.U8) : Result Std.U8 := do
                else ok PATH
 
 /-- [git_argcheck::first_refused]: loop body 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 413:4-421:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 416:4-424:1
     Visibility: public -/
 @[rust_loop_body]
 def first_refused_loop.body
@@ -973,7 +973,7 @@ def first_refused_loop.body
        ok (done (0#u8, i1))
 
 /-- [git_argcheck::first_refused]: loop 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 413:4-421:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 416:4-424:1
     Visibility: public -/
 @[rust_loop]
 def first_refused_loop
@@ -985,7 +985,7 @@ def first_refused_loop
     k
 
 /-- [git_argcheck::first_refused]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 411:0-421:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 414:0-424:1
     Visibility: public -/
 def first_refused
   (code : Std.U8) (args : Slice (alloc.vec.Vec Std.U8)) : Result Refusal := do
@@ -993,7 +993,7 @@ def first_refused
   ok { why := i, «at» := i1 }
 
 /-- [git_argcheck::prefix]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 425:0-434:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 428:0-437:1
     Visibility: public -/
 def «prefix»
   (code : Std.U8) : Result (alloc.vec.Vec (alloc.vec.Vec Std.U8)) := do
@@ -1030,7 +1030,7 @@ def «prefix»
     else ok (alloc.vec.Vec.new (alloc.vec.Vec Std.U8))
 
 /-- [git_argcheck::push_all]: loop body 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 439:4-442:5
+    Source: 'crates/git-argcheck/src/lib.rs', lines 442:4-445:5
     Visibility: public -/
 @[rust_loop_body]
 def push_all_loop.body
@@ -1050,7 +1050,7 @@ def push_all_loop.body
   else ok (done out)
 
 /-- [git_argcheck::push_all]: loop 0:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 439:4-442:5
+    Source: 'crates/git-argcheck/src/lib.rs', lines 442:4-445:5
     Visibility: public -/
 @[rust_loop]
 def push_all_loop
@@ -1063,7 +1063,7 @@ def push_all_loop
     (out, k)
 
 /-- [git_argcheck::push_all]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 437:0-443:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 440:0-446:1
     Visibility: public -/
 @[reducible]
 def push_all
@@ -1074,7 +1074,7 @@ def push_all
   push_all_loop out args 0#usize
 
 /-- [git_argcheck::check]:
-    Source: 'crates/git-argcheck/src/lib.rs', lines 447:0-459:1
+    Source: 'crates/git-argcheck/src/lib.rs', lines 450:0-462:1
     Visibility: public -/
 def check
   (sub : Slice Std.U8) (args : Slice (alloc.vec.Vec Std.U8)) :
@@ -1091,5 +1091,420 @@ def check
       let out ← «prefix» code
       let out1 ← push_all out args
       ok (core.result.Result.Ok out1)
+
+/-- [git_argcheck::refs::REF_MAX]
+    Source: 'crates/git-argcheck/src/refs.rs', lines 13:0-13:31
+    Visibility: public -/
+@[global_simps, irreducible] def refs.REF_MAX : Std.Usize := 256#usize
+
+/-- [git_argcheck::refs::bad_ref_byte]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 16:0-21:1
+    Visibility: public -/
+def refs.bad_ref_byte (x : Std.U8) : Result Bool := do
+  if x <= 32#u8
+  then ok true
+  else ok (x = 127#u8)
+
+/-- [git_argcheck::refs::ref_ok]: loop body 0:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 36:4-43:1
+    Visibility: public -/
+@[rust_loop_body]
+def refs.ref_ok_loop.body
+  (r : Slice Std.U8) (i : Std.Usize) :
+  Result (ControlFlow Std.Usize Bool)
+  := do
+  let i1 := Slice.len r
+  if i < i1
+  then
+    let i2 ← Slice.index_usize r i
+    let b ← refs.bad_ref_byte i2
+    if b
+    then ok (done false)
+    else let i3 ← i + 1#usize
+         ok (cont i3)
+  else ok (done true)
+
+/-- [git_argcheck::refs::ref_ok]: loop 0:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 36:4-43:1
+    Visibility: public -/
+@[rust_loop]
+def refs.ref_ok_loop (r : Slice Std.U8) (i : Std.Usize) : Result Bool := do
+  loop
+    (fun i1 => refs.ref_ok_loop.body r i1)
+    i
+
+/-- [git_argcheck::refs::ref_ok]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 25:0-43:1
+    Visibility: public -/
+def refs.ref_ok (r : Slice Std.U8) : Result Bool := do
+  let b ← core.slice.Slice.is_empty r
+  if b
+  then ok false
+  else
+    let i ← Slice.index_usize r 0#usize
+    if i = 45#u8
+    then ok false
+    else
+      let i1 := Slice.len r
+      if i1 > refs.REF_MAX
+      then ok false
+      else refs.ref_ok_loop r 0#usize
+
+/-- [git_argcheck::refs::fits]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 46:0-57:1
+    Visibility: public -/
+def refs.fits («name» : Slice Std.U8) (r : Slice Std.U8) : Result Bool := do
+  let i := Slice.len r
+  let i1 := Slice.len «name»
+  if i >= i1
+  then ok false
+  else
+    let i2 := Slice.len r
+    let i3 ← i2 + 1#usize
+    let i4 := Slice.len «name»
+    if i3 >= i4
+    then ok false
+    else
+      let i5 := Slice.len r
+      let i6 ← Slice.index_usize «name» i5
+      if i6 != 47#u8
+      then ok false
+      else let i7 := Slice.len r
+           equal_at «name» 0#usize i7 r
+
+/-- [git_argcheck::refs::split_remote]: loop body 0:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 65:4-77:5
+    Visibility: public -/
+@[rust_loop_body]
+def refs.split_remote_loop.body
+  («name» : Slice Std.U8) (remotes : Slice (alloc.vec.Vec Std.U8))
+  (found : Bool) (best : Std.Usize) (k : Std.Usize) :
+  Result (ControlFlow (Bool × Std.Usize × Std.Usize) (Bool × Std.Usize))
+  := do
+  let i := Slice.len remotes
+  if k < i
+  then
+    let v ← Slice.index_usize remotes k
+    let s := alloc.vec.Vec.deref v
+    let b ← refs.fits «name» s
+    let (found1, best1) ←
+      if b
+      then
+        do
+        let i1 ←
+          if found
+          then
+            let i2 := alloc.vec.Vec.len v
+            if i2 > best
+            then ok (alloc.vec.Vec.len v)
+            else ok best
+          else ok (alloc.vec.Vec.len v)
+        ok (true, i1)
+      else ok (found, best)
+    let k1 ← k + 1#usize
+    ok (cont (found1, best1, k1))
+  else ok (done (found, best))
+
+/-- [git_argcheck::refs::split_remote]: loop 0:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 65:4-77:5
+    Visibility: public -/
+@[rust_loop]
+def refs.split_remote_loop
+  («name» : Slice Std.U8) (remotes : Slice (alloc.vec.Vec Std.U8))
+  (found : Bool) (best : Std.Usize) (k : Std.Usize) :
+  Result (Bool × Std.Usize)
+  := do
+  loop
+    (fun (found1, best1, k1) => refs.split_remote_loop.body «name» remotes
+      found1 best1 k1)
+    (found, best, k)
+
+/-- [git_argcheck::refs::split_remote]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 61:0-82:1
+    Visibility: public -/
+def refs.split_remote
+  («name» : Slice Std.U8) (remotes : Slice (alloc.vec.Vec Std.U8)) :
+  Result (Option Std.Usize)
+  := do
+  let (found, best) ←
+    refs.split_remote_loop «name» remotes false 0#usize 0#usize
+  if found
+  then ok (some best)
+  else ok none
+
+/-- [git_argcheck::refs::lower]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 94:0-101:1
+    Visibility: public -/
+def refs.lower (x : Std.U8) : Result Std.U8 := do
+  if x >= 65#u8
+  then if x <= 90#u8
+       then x + 32#u8
+       else ok x
+  else ok x
+
+/-- [git_argcheck::refs::lower_equal_at]: loop body 0:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 113:4-120:1
+    Visibility: public -/
+@[rust_loop_body]
+def refs.lower_equal_at_loop.body
+  (u : Slice Std.U8) (h : Std.Usize) (w : Slice Std.U8) (i : Std.Usize) :
+  Result (ControlFlow Std.Usize Bool)
+  := do
+  let i1 := Slice.len w
+  if i < i1
+  then
+    let i2 ← h + i
+    let i3 ← Slice.index_usize u i2
+    let i4 ← refs.lower i3
+    let i5 ← Slice.index_usize w i
+    if i4 != i5
+    then ok (done false)
+    else let i6 ← i + 1#usize
+         ok (cont i6)
+  else ok (done true)
+
+/-- [git_argcheck::refs::lower_equal_at]: loop 0:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 113:4-120:1
+    Visibility: public -/
+@[rust_loop]
+def refs.lower_equal_at_loop
+  (u : Slice Std.U8) (h : Std.Usize) (w : Slice Std.U8) (i : Std.Usize) :
+  Result Bool
+  := do
+  loop
+    (fun i1 => refs.lower_equal_at_loop.body u h w i1)
+    i
+
+/-- [git_argcheck::refs::lower_equal_at]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 105:0-120:1
+    Visibility: public -/
+def refs.lower_equal_at
+  (u : Slice Std.U8) (h : Std.Usize) (w : Slice Std.U8) : Result Bool := do
+  let i := Slice.len u
+  if h > i
+  then ok false
+  else
+    let i1 := Slice.len u
+    let i2 ← i1 - h
+    let i3 := Slice.len w
+    if i2 < i3
+    then ok false
+    else refs.lower_equal_at_loop u h w 0#usize
+
+/-- [git_argcheck::refs::host_at]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 123:0-125:1
+    Visibility: public -/
+def refs.host_at (u : Slice Std.U8) (h : Std.Usize) : Result Bool := do
+  let s ←
+    lift (Array.to_slice
+      (Array.make 10#usize [
+        103#u8, 105#u8, 116#u8, 104#u8, 117#u8, 98#u8, 46#u8, 99#u8, 111#u8,
+        109#u8
+        ]))
+  refs.lower_equal_at u h s
+
+/-- [git_argcheck::refs::starts]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 128:0-133:1
+    Visibility: public -/
+def refs.starts (u : Slice Std.U8) (p : Slice Std.U8) : Result Bool := do
+  let i := Slice.len p
+  let i1 := Slice.len u
+  if i > i1
+  then ok false
+  else let i2 := Slice.len p
+       equal_at u 0#usize i2 p
+
+/-- [git_argcheck::refs::after_host]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 136:0-148:1
+    Visibility: public -/
+def refs.after_host
+  (u : Slice Std.U8) (h : Std.Usize) (sep : Std.U8) : Result Std.Usize := do
+  let b ← refs.host_at u h
+  if b
+  then
+    let k ← h + 10#usize
+    let i := Slice.len u
+    if k >= i
+    then ok 0#usize
+    else
+      let i1 ← Slice.index_usize u k
+      if i1 != sep
+      then ok 0#usize
+      else k + 1#usize
+  else ok 0#usize
+
+/-- [git_argcheck::refs::find_byte]: loop body 0:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 153:4-160:1
+    Visibility: public -/
+@[rust_loop_body]
+def refs.find_byte_loop.body
+  (a : Slice Std.U8) (x : Std.U8) (i : Std.Usize) :
+  Result (ControlFlow Std.Usize Std.Usize)
+  := do
+  let i1 := Slice.len a
+  if i < i1
+  then
+    let i2 ← Slice.index_usize a i
+    if i2 = x
+    then ok (done i)
+    else let i3 ← i + 1#usize
+         ok (cont i3)
+  else let i2 := Slice.len a
+       ok (done i2)
+
+/-- [git_argcheck::refs::find_byte]: loop 0:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 153:4-160:1
+    Visibility: public -/
+@[rust_loop]
+def refs.find_byte_loop
+  (a : Slice Std.U8) (x : Std.U8) (i : Std.Usize) : Result Std.Usize := do
+  loop
+    (fun i1 => refs.find_byte_loop.body a x i1)
+    i
+
+/-- [git_argcheck::refs::find_byte]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 151:0-160:1
+    Visibility: public -/
+@[reducible]
+def refs.find_byte
+  (a : Slice Std.U8) («from» : Std.Usize) (x : Std.U8) :
+  Result Std.Usize
+  := do
+  refs.find_byte_loop a x «from»
+
+/-- [git_argcheck::refs::ssh_start]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 163:0-180:1
+    Visibility: public -/
+def refs.ssh_start (u : Slice Std.U8) : Result Std.Usize := do
+  let s ← refs.after_host u 10#usize 47#u8
+  if s != 0#usize
+  then ok s
+  else
+    let c ← refs.after_host u 10#usize 58#u8
+    if c = 0#usize
+    then ok 0#usize
+    else
+      let j ← refs.find_byte u c 47#u8
+      let i := Slice.len u
+      if j >= i
+      then ok 0#usize
+      else let b ← digits_at u c j
+           if b
+           then j + 1#usize
+           else ok 0#usize
+
+/-- [git_argcheck::refs::path_start]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 183:0-200:1
+    Visibility: public -/
+def refs.path_start (u : Slice Std.U8) : Result Std.Usize := do
+  let s ←
+    lift (Array.to_slice
+      (Array.make 8#usize [
+        104#u8, 116#u8, 116#u8, 112#u8, 115#u8, 58#u8, 47#u8, 47#u8
+        ]))
+  let b ← refs.starts u s
+  if b
+  then refs.after_host u 8#usize 47#u8
+  else
+    let s1 ←
+      lift (Array.to_slice
+        (Array.make 7#usize [
+          104#u8, 116#u8, 116#u8, 112#u8, 58#u8, 47#u8, 47#u8
+          ]))
+    let b1 ← refs.starts u s1
+    if b1
+    then refs.after_host u 7#usize 47#u8
+    else
+      let s2 ←
+        lift (Array.to_slice
+          (Array.make 6#usize [ 103#u8, 105#u8, 116#u8, 58#u8, 47#u8, 47#u8 ]))
+      let b2 ← refs.starts u s2
+      if b2
+      then refs.after_host u 6#usize 47#u8
+      else
+        let s3 ←
+          lift (Array.to_slice
+            (Array.make 4#usize [ 103#u8, 105#u8, 116#u8, 64#u8 ]))
+        let b3 ← refs.starts u s3
+        if b3
+        then refs.after_host u 4#usize 58#u8
+        else
+          let s4 ←
+            lift (Array.to_slice
+              (Array.make 10#usize [
+                115#u8, 115#u8, 104#u8, 58#u8, 47#u8, 47#u8, 103#u8, 105#u8,
+                116#u8, 64#u8
+                ]))
+          let b4 ← refs.starts u s4
+          if b4
+          then refs.ssh_start u
+          else ok 0#usize
+
+/-- [git_argcheck::refs::ends_git]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 203:0-208:1
+    Visibility: public -/
+def refs.ends_git
+  (u : Slice Std.U8) («from» : Std.Usize) («to» : Std.Usize) :
+  Result Bool
+  := do
+  let i ← «to» - «from»
+  if i < 4#usize
+  then ok false
+  else
+    let i1 ← «to» - 4#usize
+    let s ←
+      lift (Array.to_slice
+        (Array.make 4#usize [ 46#u8, 103#u8, 105#u8, 116#u8 ]))
+    equal_at u i1 «to» s
+
+/-- [git_argcheck::refs::github_repo]:
+    Source: 'crates/git-argcheck/src/refs.rs', lines 215:0-251:1
+    Visibility: public -/
+def refs.github_repo (u : Slice Std.U8) : Result (Option refs.Repo) := do
+  let s ← refs.path_start u
+  if s = 0#usize
+  then ok none
+  else
+    let e := Slice.len u
+    let e1 ←
+      if s < e
+      then
+        do
+        let i ← e - 1#usize
+        let i1 ← Slice.index_usize u i
+        if i1 = 47#u8
+        then ok i
+        else ok e
+      else ok e
+    let b ← refs.ends_git u s e1
+    let e2 ← if b
+               then e1 - 4#usize
+               else ok e1
+    let m ← refs.find_byte u s 47#u8
+    if m >= e2
+    then ok none
+    else
+      if m = s
+      then ok none
+      else
+        let i ← m + 1#usize
+        if i >= e2
+        then ok none
+        else
+          let i1 ← refs.find_byte u i 47#u8
+          if i1 < e2
+          then ok none
+          else
+            let b1 ← refs.ends_git u i e2
+            if b1
+            then ok none
+            else
+              ok (some
+                {
+                  owner_start := s,
+                  owner_end := m,
+                  name_start := i,
+                  name_end := e2
+                })
 
 end git_argcheck
