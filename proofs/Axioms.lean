@@ -39,3 +39,9 @@ import Statements
 #print axioms Statements.check_D5
 #print axioms Statements.check_D6
 #print axioms Statements.check_D7
+
+#print axioms Statements.check_R1
+#print axioms Statements.check_R2
+#print axioms Statements.check_B1
+#print axioms Statements.check_H1
+#print axioms Statements.check_H2

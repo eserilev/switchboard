@@ -4,3 +4,6 @@ import GitArgCheck.Small
 import GitArgCheck.Tables
 import GitArgCheck.Check
 import GitArgCheck.Meaning
+import GitArgCheck.RefSpec
+import GitArgCheck.Refs
+import GitArgCheck.GitHub

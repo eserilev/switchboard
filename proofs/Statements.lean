@@ -397,6 +397,64 @@ def D7_well_formed_hunk_ends_at_the_ends : Prop :=
 
 end DiffParseStatements
 
+/-! ## Refs, remote branches and GitHub URLs (SPEC 24.3)
+
+R1, R2, B1, H1 and H2 are about `git_argcheck::refs`. The definitions are in
+`GitArgCheck/RefSpec.lean`:
+- `RefusedByte x`: a control byte (0 to 31, 127) or a space. `RefOk r`: not empty, no
+  leading `-`, at most 256 bytes, and no refused byte.
+- `Fits nm rm`: `nm` is `rm`, then `/`, then a branch that is not empty.
+- `Host h`: `github.com` with each letter in either case. `Pre p`: `https://`, `http://`
+  or `git://` then the host and `/`; `git@` then the host and `:`; `ssh://git@` then
+  the host, then `/` or `:<digits>/`. `Part x`: not empty and no `/`.
+- `GitHubUrl u o n`: `u` is a `Pre`, the owner `o`, `/`, the name `n`, an optional
+  `.git` and an optional `/`; `o` and `n` are `Part`s and `n` does not end with `.git`.
+- `part u a b`: the bytes `u[a..b]`.
+-/
+
+section RefArgs
+
+open GitArgCheck.Spec GitArgCheck.RefSpec
+
+/-- **R1.** `ref_ok` never panics, and it says yes exactly for a `RefOk` ref. -/
+def R1_ref_ok_decides : Prop :=
+  ∀ (r : Slice U8), git_argcheck.refs.ref_ok r ⦃ b => (b = true ↔ RefOk r.val) ⦄
+
+/-- **R2.** An accepted ref is one git arg that git does not read as an option: with any
+bytes after it (such as `^{commit}`) it is not empty and does not start with `-`, and it
+has no NUL, newline or space byte. -/
+def R2_ref_is_one_arg : Prop :=
+  ∀ (r : Slice U8), git_argcheck.refs.ref_ok r ⦃ b => b = true →
+    (∀ s : List U8, r.val ++ s ≠ [] ∧ (r.val ++ s).head? ≠ some (byte '-')) ∧
+    byte '\x00' ∉ r.val ∧ byte '\n' ∉ r.val ∧ byte ' ' ∉ r.val ⦄
+
+/-- **B1.** `split_remote` never panics. When it gives a length `n`, a listed remote `rm`
+of that length fits: `nm = rm ++ "/" ++ b` with `b` not empty, and no listed remote
+that fits is longer. When it gives none, no listed remote fits. -/
+def B1_split_remote_longest : Prop :=
+  ∀ (nm : Slice U8) (rs : Slice (alloc.vec.Vec U8)),
+    git_argcheck.refs.split_remote nm rs ⦃ r => match r with
+      | some n => ∃ rm ∈ rs.val, rm.val.length = n.val ∧
+          nm.val = rm.val ++ byte '/' :: nm.val.drop (n.val + 1) ∧ nm.val.drop (n.val + 1) ≠ [] ∧
+          ∀ rm' ∈ rs.val, Fits nm.val rm'.val → rm'.val.length ≤ n.val
+      | none => ∀ rm ∈ rs.val, ¬ Fits nm.val rm.val ⦄
+
+/-- **H1.** `github_repo` never panics, and it gives parts only for a GitHub URL: the
+owner and the name it gives are those of a `GitHubUrl`, in bounds and in order. -/
+def H1_github_repo_only_github : Prop :=
+  ∀ (u : Slice U8), git_argcheck.refs.github_repo u ⦃ r => ∀ p, r = some p →
+    p.owner_start.val < p.owner_end.val ∧ p.owner_end.val + 1 = p.name_start.val ∧
+    p.name_start.val < p.name_end.val ∧ p.name_end.val ≤ u.val.length ∧
+    GitHubUrl u.val (part u.val p.owner_start p.owner_end) (part u.val p.name_start p.name_end) ⦄
+
+/-- **H2.** For a GitHub URL of the repo `o/n`, `github_repo` gives exactly `o` and `n`. -/
+def H2_github_repo_finds_the_parts : Prop :=
+  ∀ (u : Slice U8) (o n : List U8), GitHubUrl u.val o n →
+    git_argcheck.refs.github_repo u ⦃ r => ∃ p, r = some p ∧
+      part u.val p.owner_start p.owner_end = o ∧ part u.val p.name_start p.name_end = n ⦄
+
+end RefArgs
+
 theorem check_G1 : G1_check_decides_accept := GuideCheck.Check.check_spec
 
 theorem check_G2 : G2_every_change_is_covered :=
@@ -535,5 +593,22 @@ theorem check_D7 : D7_well_formed_hunk_ends_at_the_ends :=
     exact ⟨c', h7, by rw [h8, e2], by rw [h9, e4]⟩)
 
 end DiffParseProofs
+
+section RefArgsProofs
+
+theorem check_R1 : R1_ref_ok_decides := GitArgCheck.Refs.ref_ok_spec
+
+theorem check_R2 : R2_ref_is_one_arg := fun r =>
+  WP.spec_mono (GitArgCheck.Refs.ref_ok_spec r) (fun _ hb h => GitArgCheck.Refs.ref_ok_one_arg r.val (hb.mp h))
+
+theorem check_B1 : B1_split_remote_longest := GitArgCheck.Refs.split_remote_spec
+
+theorem check_H1 : H1_github_repo_only_github := fun u =>
+  WP.spec_mono (GitArgCheck.GitHub.github_repo_spec u) (fun _ hr => hr.1)
+
+theorem check_H2 : H2_github_repo_finds_the_parts := fun u o n h =>
+  WP.spec_mono (GitArgCheck.GitHub.github_repo_spec u) (fun _ hr => hr.2 o n h)
+
+end RefArgsProofs
 
 end Statements
