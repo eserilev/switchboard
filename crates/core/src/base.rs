@@ -3,6 +3,7 @@
 //! these rules; the Base menu of the window lists the refs they find.
 
 use crate::repos::git;
+use git_argcheck::refs::{self, ref_ok};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
@@ -51,9 +52,10 @@ fn ok(tree: &Path, args: &[&str]) -> Option<String> {
     git(tree, args).ok().filter(|s| !s.is_empty())
 }
 
-/// True when `name` names a commit in the repo.
+/// True when `name` names a commit in the repo. A name that `ref_ok` refuses
+/// never reaches git.
 pub fn exists(tree: &Path, name: &str) -> bool {
-    !name.starts_with('-') && ok(tree, &["rev-parse", "--verify", "--quiet", &format!("{name}^{{commit}}")]).is_some()
+    ref_ok(name.as_bytes()) && ok(tree, &["rev-parse", "--verify", "--quiet", &format!("{name}^{{commit}}")]).is_some()
 }
 
 /// The names of the remotes.
@@ -63,23 +65,23 @@ pub fn remotes(tree: &Path) -> Vec<String> {
 
 /// The remote of a remote branch name like `origin/unstable`, and the branch: the
 /// longest remote name that starts it, so `a/b/x` finds the remote `a/b` before `a`.
+/// The branch is not empty. The proved `refs::split_remote` picks the remote (SPEC 24.2).
 pub fn split_remote<'a>(name: &'a str, remotes: &[String]) -> Option<(String, &'a str)> {
-    remotes
-        .iter()
-        .filter(|r| name.len() > r.len() + 1 && name.starts_with(r.as_str()) && name.as_bytes()[r.len()] == b'/')
-        .max_by_key(|r| r.len())
-        .map(|r| (r.clone(), &name[r.len() + 1..]))
+    let list: Vec<Vec<u8>> = remotes.iter().map(|r| r.as_bytes().to_vec()).collect();
+    let at = refs::split_remote(name.as_bytes(), &list)?;
+    // The byte at `at` is `/`, so both ends are char boundaries.
+    Some((name.get(..at)?.to_owned(), name.get(at + 1..)?))
 }
 
-/// `owner/name` of a GitHub remote URL: `git@github.com:o/n.git`,
-/// `https://github.com/o/n`, `ssh://git@github.com/o/n.git`.
+/// `owner/name` of a GitHub remote URL: `https://github.com/o/n`, `http://`,
+/// `git://`, `git@github.com:o/n` or `ssh://git@github.com[:port]/o/n`, each with an
+/// optional `.git` and then `/`. The host must be `github.com` and the path exactly
+/// two parts. The proved `refs::github_repo` finds the parts (SPEC 24.2).
 pub fn github_repo(url: &str) -> Option<String> {
-    if !url.to_lowercase().contains("github.com") {
-        return None;
-    }
-    let path = url.trim_end_matches('/').trim_end_matches(".git").trim_end_matches('/');
-    let tail: Vec<&str> = path.rsplit(['/', ':']).take(2).collect();
-    (tail.len() == 2 && !tail[0].is_empty() && !tail[1].is_empty()).then(|| format!("{}/{}", tail[1], tail[0]))
+    let r = refs::github_repo(url.as_bytes())?;
+    // Each part starts at `/` + 1 or `:` + 1 and ends at `/`, `.git` or the end: all
+    // char boundaries.
+    Some(format!("{}/{}", url.get(r.owner_start..r.owner_end)?, url.get(r.name_start..r.name_end)?))
 }
 
 /// The remote branches that HEAD pushes to and pulls from (`@{push}`, `@{upstream}`),
@@ -232,7 +234,8 @@ pub fn verify(tree: &Path, name: &str) -> Result<String, String> {
     if name.starts_with('-') {
         return Err(format!("{name} is not a ref: a ref never starts with -"));
     }
-    if name.len() > 256 || name.chars().any(|c| c.is_control() || c.is_whitespace()) {
+    // `ref_ok` is proved (SPEC 24.2). The char check adds the Unicode spaces and controls.
+    if !ref_ok(name.as_bytes()) || name.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return Err("A ref has no spaces and no control characters.".into());
     }
     git(tree, &["rev-parse", "--verify", "--quiet", &format!("{name}^{{commit}}")])
@@ -323,6 +326,19 @@ mod tests {
         assert_eq!(github_repo("ssh://git@github.com/a/b.git").as_deref(), Some("a/b"));
         assert_eq!(github_repo("/home/me/up"), None);
         assert_eq!(github_repo("https://gitlab.com/a/b"), None);
+        assert_eq!(github_repo("git://GitHub.com/a/b").as_deref(), Some("a/b"));
+        assert_eq!(github_repo("ssh://git@github.com:22/a/b").as_deref(), Some("a/b"));
+    }
+
+    /// The URLs that the old code read wrong.
+    #[test]
+    fn github_urls_that_are_not_a_repo() {
+        assert_eq!(github_repo("https://github.com.evil.io/sigp/lighthouse"), None);
+        assert_eq!(github_repo("https://evil.io/github.com/a/b"), None);
+        assert_eq!(github_repo("https://github.com/o/n/pulls"), None);
+        assert_eq!(github_repo("https://github.com/o"), None);
+        let v = "evil\thttps://github.com.evil.io/sigp/lighthouse (fetch)\n";
+        assert_eq!(crate::review::remote_for(v, "sigp/lighthouse"), None);
     }
 
     #[test]
@@ -333,6 +349,8 @@ mod tests {
         assert_eq!(split_remote("a/x/y", &r), Some(("a".into(), "x/y")));
         assert_eq!(split_remote("origin", &r), None);
         assert_eq!(split_remote("originx/y", &r), None);
+        assert_eq!(split_remote("origin/", &r), None);
+        assert_eq!(split_remote("é/x", &["é".to_owned()]), Some(("é".into(), "x")));
     }
 
     #[test]

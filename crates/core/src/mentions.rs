@@ -30,7 +30,8 @@ pub struct Mention {
 
 /// A path from the agent, made plain: relative to the repo root, with no `..`, no
 /// empty part and no control character. An absolute path inside `tree` loses the
-/// tree; any other absolute path, or a `~` path, is refused.
+/// tree; any other absolute path, or a `~` path, is refused. What is left must pass
+/// the proved `git_argcheck::rel_ok`, so it stays under the tree (SPEC 24.1, A7 and A8).
 pub fn clean_path(path: &str, tree: &str) -> Result<String, String> {
     let mut p = path.trim();
     if p.is_empty() {
@@ -46,23 +47,18 @@ pub fn clean_path(path: &str, tree: &str) -> Result<String, String> {
             None => return Err(format!("{p} is outside the review")),
         }
     }
-    if p.starts_with('~') {
-        return Err(format!("{p} is outside the review"));
-    }
     while let Some(rest) = p.strip_prefix("./") {
         p = rest;
     }
-    let mut parts = vec![];
-    for part in p.split('/') {
-        if part == ".." {
-            return Err(format!("{path} leaves the review"));
-        }
-        if part.is_empty() || part == "." {
-            return Err(format!("{path} is not a plain path"));
-        }
-        parts.push(part);
+    // Not empty, no leading `/` or `~`, no `..` part and no NUL byte.
+    if !git_argcheck::rel_ok(p.as_bytes()) {
+        return Err(format!("{path} leaves the review"));
     }
-    Ok(parts.join("/"))
+    // Stricter than `rel_ok`: a plain path has no empty and no `.` part.
+    if p.split('/').any(|part| part.is_empty() || part == ".") {
+        return Err(format!("{path} is not a plain path"));
+    }
+    Ok(p.to_owned())
 }
 
 /// The lines of a file on one side.
@@ -429,7 +425,11 @@ mod tests {
     fn clean_path_refuses_what_leaves_the_review() {
         assert_eq!(clean_path("./a/b.rs", TREE).unwrap(), "a/b.rs");
         assert_eq!(clean_path("/c/lighthouse-pr7/a/b.rs", TREE).unwrap(), "a/b.rs");
-        for bad in ["", "/etc/passwd", "/c/lighthouse-pr7x/a.rs", "../a.rs", "a/../../b.rs", "~/a.rs", "a//b.rs", "a\nb.rs", "a\\b.rs", "a/./b.rs"] {
+        // A tree that is a prefix of another folder's name gives nothing of it.
+        assert!(clean_path("/a/bc/x", "/a/b").is_err());
+        assert!(clean_path("/a/b//etc/passwd", "/a/b").is_err());
+        assert_eq!(clean_path("/a/b/x", "/a/b/").unwrap(), "x");
+        for bad in ["", "/etc/passwd", "/c/lighthouse-pr7x/a.rs", "./../a.rs", "/c/lighthouse-pr7/../x", "/c/lighthouse-pr7/~/x","../a.rs", "a/../../b.rs", "~/a.rs", "a//b.rs", "a\nb.rs", "a\\b.rs", "a/./b.rs"] {
             assert!(clean_path(bad, TREE).is_err(), "{bad:?}");
         }
     }
