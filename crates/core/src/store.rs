@@ -436,6 +436,12 @@ impl Store {
         self.review_rows("closed IS NOT NULL AND kind = 'pr' ORDER BY opened", params![])
     }
 
+    /// The closed local reviews (SPEC 11.11). Only the start sweep of snapshot refs
+    /// reads it: a quit during a close can leave their refs. Never cleanup.
+    pub fn closed_local_reviews(&self) -> R<Vec<ReviewRow>> {
+        self.review_rows("closed IS NOT NULL AND kind = 'local' ORDER BY opened", params![])
+    }
+
     /// One review, open or closed.
     pub fn review(&self, id: &str) -> R<Option<ReviewRow>> {
         Ok(self.review_rows("id = ?1", params![id])?.pop())

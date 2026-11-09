@@ -2545,6 +2545,7 @@ impl Hub {
     /// At start: cleans up after reviews that closed before this version, and after
     /// cleanups that a quit cut short. Same rule as a close, with no discard.
     pub(crate) fn sweep_closed(&self) {
+        self.sweep_snap_refs();
         let rows = self.store.lock().unwrap().closed_reviews().unwrap_or_default();
         let mut done = std::collections::HashSet::new();
         // The newest row of a folder decides: rows are oldest first.
@@ -2554,6 +2555,44 @@ impl Hub {
             }
             if let Some(note) = self.clean_after(row, vec![]) {
                 tracing::info!(target: "sb::review", review = %row.id, %note, "sweep");
+            }
+        }
+    }
+
+    /// At start: drops the snapshot refs (SPEC 11.14) of local reviews that closed.
+    /// A close saves to the store first and drops the refs after, so a quit in
+    /// between leaves them. Only refs under `refs/sb/review/<id>/` of a closed
+    /// review go: never a branch, a file or a commit of the agent (SPEC 26.1).
+    fn sweep_snap_refs(&self) {
+        let rows = self.store.lock().unwrap().closed_local_reviews().unwrap_or_default();
+        let mut trees: Vec<&str> = vec![];
+        for row in &rows {
+            if !row.tree.is_empty() && !trees.contains(&row.tree.as_str()) {
+                trees.push(&row.tree);
+            }
+        }
+        for tree in trees {
+            let dir = Path::new(tree);
+            if !dir.exists() {
+                continue;
+            }
+            let Ok(refs) = repos::git(dir, &["for-each-ref", "--format=%(refname)", "refs/sb/review/"]) else {
+                continue;
+            };
+            for r in refs.lines() {
+                let Some(id) = r.strip_prefix("refs/sb/review/").and_then(|x| x.split('/').next()) else {
+                    continue;
+                };
+                // An id is never used again, so a closed review never opens; the
+                // open check is a second guard.
+                let closed = rows.iter().any(|row| row.id == id);
+                let open = self.reviews.lock().unwrap().contains_key(id);
+                if closed && !open {
+                    match repos::git(dir, &["update-ref", "-d", r]) {
+                        Ok(_) => tracing::info!(target: "sb::review", review = id, %r, "sweep: a snapshot ref of a closed review"),
+                        Err(err) => tracing::warn!(target: "sb::review", review = id, %r, %err, "sweep: a snapshot ref stays"),
+                    }
+                }
             }
         }
     }
