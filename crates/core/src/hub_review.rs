@@ -2585,18 +2585,23 @@ impl Hub {
                     None => {
                         let dir = Path::new(&tree);
                         let snapped = repos::git(dir, &["log", "-1", "--format=%s", &head]).unwrap_or_default().starts_with(review::SNAP_SUBJECT);
-                        let h = if snapped { repos::git(dir, &["rev-parse", &format!("{head}^")]).unwrap_or(head) } else { head };
+                        let h = if snapped { repos::git(dir, &["rev-parse", &format!("{head}^")]).unwrap_or_else(|_| head.clone()) } else { head.clone() };
+                        // Only for the snapshot read above: a Refresh that ran since
+                        // set a newer head and its own HEAD (SPEC 26.1).
                         if let Some(r) = self.reviews.lock().unwrap().get_mut(&id) {
-                            r.head_commit = Some(h.clone());
+                            if r.row.head == head && r.head_commit.is_none() {
+                                r.head_commit = Some(h.clone());
+                            }
                         }
                         h
                     }
                 };
                 let changed = {
                     let mut reviews = self.reviews.lock().unwrap();
-                    // Compare with the row as it is now: a Refresh can have run since.
+                    // Only while the row still shows the snapshot read above: after a
+                    // Refresh, `now_head` can be older than the view.
                     match reviews.get_mut(&id) {
-                        Some(r) if r.status == "ready" && r.head_commit.as_deref().unwrap_or(&made_on) != now_head && r.new_head.as_deref() != Some(now_head.as_str()) => {
+                        Some(r) if r.status == "ready" && r.row.head == head && r.head_commit.as_deref().unwrap_or(&made_on) != now_head && r.new_head.as_deref() != Some(now_head.as_str()) => {
                             r.new_head = Some(now_head);
                             true
                         }
