@@ -18,3 +18,4 @@ libc = "0.2"
 base64 = "0.22"
 outq = { path = "../outq" }
 git-argcheck = { path = "../git-argcheck" }
+diffparse = { path = "../diffparse" }
