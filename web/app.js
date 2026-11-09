@@ -573,6 +573,48 @@ const remeasure = (t) => document.fonts?.load('13px "JetBrains Mono"').then(() =
 }).catch(() => {});
 remeasure(term)?.then(() => fitSoon());
 term.attachCustomKeyEventHandler((e) => !isLeader(e));
+// Web links in a terminal open in your browser (`open_url`): a plain http(s) URL
+// in the text, and an OSC 8 link that a program marks. xterm.js would call
+// window.open for an OSC 8 link, and the window drops that.
+const URL_RE = /https?:\/\/[^\s"'<>`]+/g;
+function openWeb(url) {
+  invoke("open_url", { url }).catch((e) => toast(e));
+}
+function webLinks(t) {
+  t.options.linkHandler = { activate: (_e, uri) => { if (/^https?:\/\//.test(uri)) openWeb(uri); }, allowNonHttpProtocols: false };
+  const provider = {
+    provideLinks(y, cb) {
+      const line = t.buffer.active.getLine(y - 1);
+      if (!line) return cb(undefined);
+      // The text of the row, and the column of each of its chars (wide chars take two).
+      let text = "";
+      const cols = [];
+      for (let x = 0; x < line.length; x++) {
+        const c = line.getCell(x);
+        if (!c || c.getWidth() === 0) continue;
+        const ch = c.getChars() || " ";
+        for (let k = 0; k < ch.length; k++) cols.push(x + 1);
+        text += ch;
+      }
+      const links = [];
+      for (const m of text.matchAll(URL_RE)) {
+        // A dot or a bracket at the end is the sentence's, not the URL's.
+        const url = m[0].replace(/[.,;:!?)\]}>]+$/, "");
+        if (url.length < 10) continue;
+        links.push({
+          range: { start: { x: cols[m.index], y }, end: { x: cols[m.index + url.length - 1], y } },
+          text: url,
+          decorations: { underline: true, pointerCursor: true },
+          activate: () => openWeb(url),
+        });
+      }
+      cb(links.length ? links : undefined);
+    },
+  };
+  t.registerLinkProvider(provider);
+  return provider;
+}
+webLinks(term);
 // Keys go in order. While one send is on its way, new keys wait in a buffer,
 // and the next send takes them all at once. So fast typing costs one round trip.
 let pendingKeys = "";
@@ -1471,7 +1513,7 @@ function copyText(text) {
   return ok;
 }
 
-window.SB = { S, LINK, invoke, call, listen, esc, setHTML, toast, setTab, WORK_TITLE, workOf, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, drawTabs, openLauncher, paneName, copyText, LABEL, term, isLeader, bytes, $,
+window.SB = { S, LINK, invoke, call, listen, esc, setHTML, toast, setTab, WORK_TITLE, workOf, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, drawTabs, openLauncher, paneName, copyText, LABEL, term, isLeader, webLinks, bytes, webLinks, $,
   lampIcon, actions, stateAct, stateWord, gb, home, ICON, startRename, remeasure };
 
 (async function start() {

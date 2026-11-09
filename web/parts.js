@@ -33,6 +33,7 @@
     term.open($(`#t${kind}`));
     window.SB.remeasure(term);
     term.attachCustomKeyEventHandler((e) => !window.SB.isLeader(e));
+    window.SB.webLinks(term);
     const t = { term, fit, id: null, drawn: false, held: [], keys: "", sending: false };
     const flush = async () => {
       if (t.sending || !t.keys || !t.id) return;

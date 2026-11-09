@@ -1753,6 +1753,26 @@
     await wait(30);
     check("a link opens in the browser, not in the window", called("open_url").length === opens + 1 && called("open_url").slice(-1)[0][1].url === "https://example.com/new" && location.protocol === "file:");
 
+    // A web link in a terminal opens in the browser, without the dot after it.
+    const box = document.createElement("div");
+    box.style.cssText = "position:absolute;left:-9999px;width:600px;height:100px";
+    document.body.appendChild(box);
+    const wt = new Terminal({ cols: 80, rows: 4 });
+    wt.open(box);
+    const prov = window.SB.webLinks(wt);
+    await new Promise((r) => wt.write("See https://example.com/a?b=1. ok\r\n", r));
+    let wl;
+    prov.provideLinks(1, (x) => (wl = x));
+    const wo = called("open_url").length;
+    wl?.[0]?.activate();
+    await wait(30);
+    check("a web link in a terminal opens in the browser", wl?.length === 1 && wl[0].text === "https://example.com/a?b=1" && wl[0].range.start.x === 5 && called("open_url").length === wo + 1 && called("open_url").slice(-1)[0][1].url === "https://example.com/a?b=1", JSON.stringify(wl?.map((l) => [l.text, l.range])));
+    wt.options.linkHandler.activate(null, "javascript:alert(1)");
+    await wait(30);
+    check("an OSC 8 link that is not http(s) does not open", called("open_url").length === wo + 1);
+    wt.dispose();
+    box.remove();
+
     // Review from a task: two linked panes, so you pick one.
     $('[data-act="review"]').click();
     await wait(30);
