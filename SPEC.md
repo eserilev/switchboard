@@ -1063,6 +1063,7 @@ Where the build differs from the text above:
 - The shell (33): the inspector sits next to the whole screen, its header included, not under the header as in the mockups. It is one panel for every screen, and its own 52 px title row lines up with the header. The toggle is one button that sits over the right end of every header; each header keeps 64 px free for it.
 - The shell (33): the vendored fonts are latin subsets. Other characters come from the next font of the list (system fonts).
 - The shell (33): Tasks keeps its task panel and has no inspector.
+- Codex agents (34): planned, not built. Until then every agent pane is Claude Code, and 8.1 holds.
 - The review screens (33, phase 2): built without Chromium. The window checks were run in a WKWebView (WebKit, macOS) with a small runner, not in headless Chromium: every review check passed there; CI runs them in Chromium. Screenshots of the PR review, a tour, the Finish popover, the inspector and a local review were compared with the C v2 mockups by eye in WebKit only, not in WebKitGTK.
 - The review screens: where they differ from the C v2 mockups. Restart in the inspector is red, as every destructive action of the inspector (33); the mockup has it plain. The list of your comments (with stale drafts, Place again and Delete, and what you sent) is in the inspector, not under the Claude column; "N comments to place" in the header opens it. The step marks `✓` and `!` of Claude's answers are a guess from the first words. The steps list has no place numbers during a tour: they are in the row's tooltip. A review of local work has the footer (Prev, Mark seen & next) too. The local header shows the base and the range as text: its title is the view's own title from the hub ("2 commits on feat"), not the branch alone. A round 1 PR still says "round 1".
 - A diff header `@@ old N · new M @@` gives the number of the next old line and of the next new line, also on a side where the next row has no line. The "No newline at end of file" note follows its line and does not count for the context cut.
@@ -2130,3 +2131,132 @@ The window is one shell around every screen: a rail on the left, one header for 
 - **Less text on screen.** The leader mark shows only while the leader waits. The count of hidden parts is in the tooltip of the Board entry. The meta line of a tile is in the inspector.
 
 Tests: window checks for the wide and narrow rail, its tooltips and badges, the board header and its chips, Next waiting, the inspector (Leader `i`, the toggle, its memory for each screen, the facts of a tile, a sandboxed agent, Close pane, the parts of the live agent, Stop with a buffer that is not saved, the Work and review inspectors, Reset the sizes), the review screens (the header, the columns, the step rows, the lead line, the take line and its colors, the footer, the Finish popover, the tour in the file header, Shift+N, the local inspector), Delete on a focused tile, the gold Allow only on the focused tile, the slim part headers, and the Work header.
+
+## 34. Codex agents
+
+Status: planned. Not built. Draft 2, 2026-11-09, from the code at 9de93ba and the Codex source at `rust-v0.167.0`. Codex is not on the build machine, so Phase 0 (34.8) comes first.
+
+Codex CLI (OpenAI) is a second agent kind next to Claude Code. In v1 a Codex pane gets a tile, the same lamps, Allow and Deny, and Resume. You open one from New pane, `sb open --codex` and the Work tab. Reviews and Tasks stay Claude only.
+
+### 34.1 The model
+
+- **The kind.** `pane.kind` is `claude`, `codex`, `nvim` or `shell`. Old rows stay `claude`.
+- **`is_agent(kind)`.** One helper in Rust and one in JS: true for `claude` and `codex`. The checks of `kind == "claude"` become `is_agent(kind)`, except in the review and Tasks code. `task_resume` and `open()` pass the kind of the pane, not a fixed `"claude"`.
+- **`AgentKind`.** An enum `Claude | Codex` with `parse` and `name()` ("Claude", "Codex"). Each area has one seam, a `match` on the kind: `argv` (called from `Hub::command`; a `Start` field with no flag for that agent is logged and skipped), `hooks`, `state` (hook input to the neutral `StateMsg`; `lamp.rs` and `on_state` do not change), `permit` (the summary), `trust`, `stop` and `env`.
+- **The pane row** keeps whether the pane runs in a sandbox, so a resume keeps it without the Claude settings file. Codex panes have no sandbox in v1 (34.6).
+
+### 34.2 The account
+
+- **One Codex account in v1:** your own `~/.codex` and its login. `CODEX_HOME` is never set. You run `codex login` yourself.
+- **Connections** stay Claude only. `names()`, `names[0]` and `next_free` filter by agent.
+- **Limit.** A Codex Limit tile shows Limit with Resume. It has no Switch.
+- **Never across agents.** No session moves between Claude and Codex.
+
+### 34.3 Start
+
+- **Argv.** `codex --no-daemon --no-alt-screen -c approval_policy="on-request" -c hooks…=… -c hooks.state=… [PROMPT]`.
+- **`--no-daemon`, always.** Without it the TUI may join an app-server daemon. The hooks then run without `SB_PANE`, and every lamp dies.
+- **`--no-alt-screen`.** tmux keeps the scrollback for the expand (6.1).
+- **The first message** is Codex's `[PROMPT]` positional argument. `paste_when_ready` is not used: Codex fires `SessionStart` at the first turn, not at launch, so the wait would hang.
+- **Extra text.** `Start.system` goes in `-c developer_instructions=…`, `Start.dirs` in `--add-dir`.
+- **Why `-c`, not a CODEX_HOME for each pane.** A home of its own would split the login (its tokens rotate), the sessions and the daemon socket.
+
+### 34.4 Hooks, lamps and permit
+
+- **Install.** The hooks go on the command line as `-c hooks.<Event>=[…]`, as Claude gets `--settings`. Your `config.toml` stays the same.
+- **Hook trust.** Codex asks for a review of hooks that are not managed. The app passes the trust with them: `-c 'hooks.state={"<key>"={trusted_hash="sha256:…"}}'`, read from the session flags layer. The hash is Codex's `version_for_toml`: the sha256 of the hook as sorted JSON. The key goes inside an inline table, because `-c` keys split on `.`. A `-c` value that is not valid TOML becomes a string with no error, so a unit test parses each value as TOML, and a test pins the hash against the value Phase 0 records. Never `--dangerously-bypass-hook-trust`: it runs the repo's own hooks unreviewed and outside any sandbox. Never a trust write into `config.toml`.
+- **The review screen.** A repo's own `.codex` hooks still bring up Codex's "Hooks need review" screen at start. The full screen scrape (34.5) finds it. The tile shows Needs you with "Codex wants you to review this repo's hooks", and Open. The app never accepts it for you.
+- **Commands.** Each hook runs `sb state <event> --codex` or `sb permit --codex`. The flag picks the input adapter. Under `--codex`, `sb state turn` skips the Claude transcript parse.
+
+| Codex event | Command | Effect |
+|---|---|---|
+| `SessionStart` | `state session` | keeps the session id and `transcript_path` |
+| `UserPromptSubmit`, `PreToolUse` | `state working` | Working |
+| `PermissionRequest` | `permit`, timeout 600 s | Needs you |
+| `PostToolUse` (`apply_patch`) | `state edited` | files from the `*** Update File:` and `*** Add File:` lines |
+| `Stop` | `state turn` | Your turn |
+| `Interrupt` | `state turn` | Your turn, "Interrupted" |
+| `SessionEnd` and others | none | the pane exit covers the end |
+
+- **Permit is in turn, not at once.** Codex runs the `PermissionRequest` hook before any approval dialog. While `sb permit` waits, the pane shows no dialog. Allow or Deny on the tile prints the same decision JSON as for Claude. A key typed in the pane, `answer_permits(None)`, makes `sb permit` exit with no decision; the request then goes to Codex's own dialog in the pane, and the tile goes back to Needs you from the scrape. A hook timeout does the same. The summary comes from `tool_name` and `tool_input`: `Bash: <command>`, `Patch: <files>`.
+- **The model.** `models/permit.qnt` trusts S2: both dialogs at once. Before the build, it gets a Codex variant where the hook comes first and the pane dialog only after no answer, and `scripts/check-models.sh` checks both.
+- **Questions.** Codex has no `Notification` hook, so a question dialog does not show Needs you in v1.
+
+### 34.5 The rollout file and the scrape
+
+- **Limit and Error come from the rollout file**, `~/.codex/sessions/YYYY/MM/DD/rollout-*-<uuid>.jsonl`. `Stop` does not fire on a turn that ends with an error, and the usage limit is an error. So the hub tails the rollout file of each Codex pane:
+  - a `TokenCount` whose rate limit snapshot has `rate_limit_reached_type`, or an error item about the limit ("usage limit", "out of credits", "spend cap"): Limit;
+  - another error item: Error, with its message as the summary;
+  - `TurnComplete` or `TurnAborted` after an error: the turn ends, so the lamp never stays Working.
+- **Which file.** The `transcript_path` of `SessionStart`, else the newest rollout with the pane's cwd that started after the pane.
+- **No scrape for Limit or Error.** A pane exit with a code that is not 0 still sets Error, as for Claude.
+- **The full scrape.** The tile tail is the last 6 lines (`TAIL_LINES`), too short for a full screen. For the trust screen, the hook review screen and the pane dialog of a permit, the hub reads a full `capture-pane` of the pane.
+
+### 34.6 Trust, resume, stop, sandbox
+
+- **Trust.** The tile asks, as in 6.6. The app does not pre-set `projects.<path>.trust_level`: trust loads the repo's `.codex` config, so you choose it. The scrape looks for "Trust this folder?"; Trust sends `Enter` (option 1 is the default), Exit closes the pane. Codex keeps trust for each repo root, so worktrees of a repo share it.
+- **Resume.** `codex resume <id>` with the same flags. The id comes from `SessionStart`, or from the rollout file found in 34.5.
+- **Idle end** works as for Claude (15).
+- **Stop.** `C-c`, 1 s, `C-c` again: the first ends a turn, the second quits. After 5 s the app kills the tmux pane, as now.
+- **Sandbox.** None in v1. `sandbox.mode` does not cover Codex panes, and they get no sandbox flags, so your Codex config holds.
+
+### 34.7 The window
+
+- **New pane** has an agent choice, Claude or Codex, when `codex` is on PATH. The choice stays for the next open (browser storage). `sb open --codex [repo]` opens a Codex pane.
+- **Work.** A repo with no agent shows **Start Claude** (gold) and **Start Codex** (plain). Both use the title `Work environment`, so the tab finds either.
+- **Names.** Every label takes the name from `AgentKind::name()`: "Start Codex", "Codex pane". A Codex pane never says "Claude". Review screens and Tasks keep "Claude".
+- **The mark.** A Codex tile and the live title end the info line with `codex`. The inspector shows "Agent: Codex". The lamps are the same; Limit keeps its purple.
+
+### 34.8 Phase 0: a spike with a real `codex`
+
+On macOS and Linux, `codex` 0.167.0 or newer, in tmux. Notes go in `spikes/README.md`. It must confirm:
+
+1. `--no-daemon`: the hooks get `SB_PANE` and `SB_SOCK`.
+2. The `hooks.state` trust from `-c` runs the hooks with no review, and the hash it records.
+3. The review screen with a repo `.codex/hooks.json`: its text and keys.
+4. The payload of each event (a hook that saves stdin), and that `PostToolUse` fires for `apply_patch`.
+5. Permit: allow and deny are obeyed; a hook timeout and a "none" answer bring up the pane dialog.
+6. Whether a repo `.codex/config.toml` overrides our `-c approval_policy="on-request"`.
+7. The first message as `[PROMPT]`: it runs, and `SessionStart` comes with it.
+8. The rollout file: `TokenCount` with a limit, the error items, and `TurnComplete` after an error.
+9. Trust: the text and keys.
+10. Resume: the `SessionStart` id works with `codex resume`.
+11. Stop: `C-c` twice ends Codex, and the session resumes after.
+12. `--no-alt-screen` draws well in tmux at tile and live sizes.
+
+### 34.9 Not in v1
+
+- Codex in reviews: the guide, the Ask pane, threads, chat, clone discovery.
+- Codex in Tasks start agent.
+- More than one Codex account: `sb connect add --codex`, a `CODEX_HOME` for each, and Switch at Limit.
+- A session that moves between Claude and Codex.
+- Needs you for Codex question dialogs.
+- Windows.
+
+### 34.10 Later: the sandbox
+
+- `sandbox.mode = "all"` could map to `sandbox_mode="workspace-write"`, `writable_roots` from `sandbox.write`, and `network_access=false`.
+- What does not map: the site list, `sandbox.unsandboxed`, and the closed reads of the key folders.
+- Codex makes `.git` read-only in every writable root, so a commit always asks to leave the sandbox.
+- A spike first: can Codex permission profiles deny writes to the git `hooks` and `config`?
+
+### 34.11 Tests
+
+- A fake `bin/codex` that writes its argv to a file, runs the `-c hooks.*` commands with canned payloads, and writes a rollout file: session, prompt, permit, patch, stop, a limit, an error turn.
+- Unit tests: the argv; every `-c` value parses as TOML, a path with `"` and `'` too; the trust hash, pinned to Phase 0; each event adapter, `turn` with no transcript parse; permit output and no answer; the rollout reader (the limit snapshot, the three limit texts, an error, a turn end after an error); the full scrape; `names()` and `next_free` with a Codex pane.
+- `is_agent` in Rust and JS, and a check that no `kind == "claude"` is left outside the review and Tasks code.
+- Hub tests on real tmux, with `debug_set_kind(…, "codex")` beside the Claude ones: start to Your turn, allow, deny, an answer in the pane, Limit and Error from the rollout, Stop and Resume.
+- Window checks: a `codex` pane in the shim, no "Claude" on it, the mark, the New pane choice, Start Codex.
+- `scripts/check-models.sh` with the Codex variant of `models/permit.qnt`. A live test, ignored by default: a real Codex prompt to Your turn, then a resume.
+
+### 34.12 Build phases
+
+| Phase | What | Size |
+|---|---|---|
+| 0 | The spike (34.8). It may change 34.3 to 34.6. The Codex variant of `models/permit.qnt`. | S |
+| 1 | `AgentKind`, `is_agent`, the seams, the sandbox in the pane row, only Claude behind them. No change in behavior. | M: 500 lines |
+| 2 | The argv, hook trust, the adapter, `sb permit --codex`, the full scrape (trust, hook review), stop, resume. The fake `bin/codex`, hub tests. | M: 900 lines |
+| 3 | The rollout reader: Limit, Error, the end of an error turn. | S: 400 lines |
+| 4 | The window: names, the mark, New pane, `sb open --codex`, Work. Window checks. | S: 400 lines |
+
+Each phase adds its notes to section 23 and passes `cargo nextest run --workspace`, clippy and `web-tests/run.sh`.
