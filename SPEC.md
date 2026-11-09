@@ -1009,6 +1009,7 @@ Where the build differs from the text above:
 - Review runs and the Ask pane use `--setting-sources user` (11.2, 11.5). Before, a PR could ship `.claude/settings.json` with hooks that ran during its review. The PR's `CLAUDE.md` still loads: it is text, like the PR body, and the rules say it never changes them.
 - The guide agent runs git through the `git` tool of `sb mcp`, not Bash (11.4). Before, `Bash(git diff:*)` let `git diff --output=<file>` write a file.
 - The arg check of the `git` tool is the verified crate `git-argcheck` (24.1). It works on bytes, and returns a reason code and the arg index; `review_git` makes the message. The messages and the answers are the same as before.
+- The decoding of quoted paths and the line numbers of GitHub's diff (11.8) are the verified crate `diffparse` (24.2). A `\4xx` escape stays as text, and a hunk header whose end is over `u32::MAX` is refused; the old code overflowed on both.
 - The Ask pane is interactive, so it asks you before each Bash command, as any pane does. It has no `git` tool.
 - Review Markdown (the guide, takes, threads) and task notes use one rule: raw HTML and images show as text, and only `http(s)` links are links. A remote image in the agent's Markdown would load at once, and its URL could carry the code out.
 - The window has a CSP (`crates/app/tauri.conf.json`): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'`. Scripts, styles and fonts all come from `web/`. Styles need `'unsafe-inline'`: the markup has `style` attributes, and xterm.js adds `<style>` elements. `ipc:` and `http://ipc.localhost` are the Tauri IPC; without them Tauri falls back to its slower postMessage path. `dangerousDisableAssetCspModification: ["style-src"]` stops Tauri from adding a nonce to `style-src`: with a nonce there, the browser drops `'unsafe-inline'`. No remote site loads in the window.
@@ -1173,6 +1174,38 @@ The definitions are in `proofs/GitArgCheck/Spec.lean`. They are written from the
 
 - 200,000 random args, and every name of every list with pieces around it, give the same answer as the old check of `review_git.rs` (a plain model in `crates/git-argcheck/src/tests.rs`).
 - `review_git::tests` keeps all its cases, and checks that the messages still name the refused arg.
+
+### 24.2 Verified diff parse kernels
+
+Before a review goes out, `post.rs` reads GitHub's own diff of the PR (11.8). Two byte kernels of that reader are the crate `diffparse`, and `proofs/DiffParse` proves them in Lean with Aeneas:
+
+- `unquote` decodes a path that git wrote in quotes with C escapes, as in `"caf\303\251.rs"`. `post.rs` strips the quotes and decodes UTF-8 (`from_utf8_lossy`, not proved).
+- `header` reads the numbers of a hunk header `@@ -a,b +c,d @@` (a missing count is 1). Its counters start at `a` and `c` and end at `a + b` and `c + d`. `step` gives each row of the hunk its line numbers and moves the counters. `diff::parse` calls `header` on each `@@ ` line and `step` once for each row, in order.
+
+git writes `\ooo` only for a byte, so up to `\377`. A backslash that starts no escape that git writes, as in `\400` or `\q`, stays a plain backslash. (The old code computed `\4xx` in a `u8`: a panic in debug, a wrong byte in release.) A header whose end `a + b` or `c + d` is over `u32::MAX`, or that has another form, is refused. A row past the counts of its hunk is refused too. After a refusal, `diff::parse` skips the rows up to the next `@@ ` line. (The old code counted from any start, so `@@ -1 +4294967295 @@` overflowed at the first row.)
+
+The definitions are in `proofs/DiffParse/Spec.lean`: `quote` is git's C quoting of a path without the outer quotes (`\"`, `\\`, `\a \b \t \n \v \f \r`, a three-digit octal escape for any other byte below 0x20 and for every byte from 0x7f up, every other byte as itself); `headerText a b c d` is the text `-a[,b] +c[,d]` with decimal digits; `run` is one `step` per row. The statements, in `Statements.lean`:
+
+- **D1.** `unquote` never panics, on any bytes, and its result is never longer than its input.
+- **D2.** `unquote` undoes git's quoting: for every byte string `s`, `unquote(quote(s)) == s`.
+- **D3.** A path with no backslash comes out unchanged.
+- **D4.** `header` never panics, on any bytes, and no counter it gives starts after its end.
+- **D5.** On a header `-a[,b] +c[,d]` followed by the end or a space, `header` gives exactly `a`, `a + b`, `c` and `c + d`. It refuses only when `a + b` or `c + d` is over `u32::MAX`. So a header too big to count from is refused, and nothing wraps.
+- **D6.** `step` never panics or overflows, on any counters. A row that shows an old (new) line moves that counter by exactly one, and only when a line is left on that side; else the row is refused. The ends do not change.
+- **D7.** After a header that `header` reads, rows of which exactly `b` show an old line and exactly `d` show a new line all fit, and the counters end at `a + b` and `c + d`.
+
+`diff::context` computes its last line with `saturating_add`, so a range near `u32::MAX` does not overflow.
+
+#### What stays trusted
+
+- The rest of `diff::parse` and `parse_pr_diff`: the split into files and lines, the row kind from the first char, the `\ No newline` note, the path lines, and the call of `step` once per row in order.
+- `from_utf8_lossy` and the strip of the outer quotes.
+- `coverage::parse_hunks` reads the `-U0` headers of the git diff for the verified model with its own code, in `usize`. It is not this kernel.
+
+#### Tests
+
+- `crates/diffparse/src/tests.rs`: every byte and 20,000 random paths round-trip through a plain model of git's quoting, and agree with the old `unquote` on text that git writes; 20,000 random headers match a plain model, and the edge cases near `u32::MAX`.
+- `diff::tests` and `post::tests` keep all their cases, and add `@@ -1 +4294967295 @@`, `"\400"` and `context` at `u32::MAX`.
 
 ## 25. Model check of the permission flow
 
