@@ -32,3 +32,10 @@ import Statements
 #print axioms Statements.check_A6
 #print axioms Statements.check_A7
 #print axioms Statements.check_A8
+#print axioms Statements.check_D1
+#print axioms Statements.check_D2
+#print axioms Statements.check_D3
+#print axioms Statements.check_D4
+#print axioms Statements.check_D5
+#print axioms Statements.check_D6
+#print axioms Statements.check_D7

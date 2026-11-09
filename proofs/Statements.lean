@@ -1,6 +1,7 @@
 import GuideCheck
 import OutQ
 import GitArgCheck
+import DiffParse
 
 /-!
 # The theorems, stated
@@ -324,6 +325,78 @@ def A8_rel_ok_stays_under : Prop :=
 
 end GitArgs
 
+/-! ## The diff parse kernels (SPEC 24.2)
+
+`diffparse` reads GitHub's diff of a PR on bytes. The definitions are in
+`DiffParse/Spec.lean`:
+- `quote`: git's C quoting of the bytes of a path, without the outer quotes: `\"`, `\\`,
+  `\a \b \t \n \v \f \r`, a three-digit octal escape for any other byte below 0x20 and
+  for every byte from 0x7f up, and every other byte as itself.
+- `headerText a b c d`: the hunk header text `-a[,b] +c[,d]` after `@@ `, with the
+  digits `a`, `c` and the optional digits `b`, `d`. `dval` is the value of digits, and
+  `count` is the value of an optional count (1 when it is not there).
+- `run c rows`: one `step` per row, in order. A row says if it shows an old line and if it
+  shows a new line.
+-/
+
+section DiffParseStatements
+
+open DiffParse.Spec
+
+/-- **D1.** `unquote` never panics, on any bytes, and its result is never longer than its input. -/
+def D1_unquote_never_panics : Prop :=
+  ∀ (b : Slice U8), diffparse.unquote b ⦃ r => r.val.length ≤ b.val.length ⦄
+
+/-- **D2.** `unquote` undoes git's quoting: for every byte string `s`, `unquote (quote s) = s`. -/
+def D2_unquote_undoes_quote : Prop :=
+  ∀ (s : List U8) (q : Slice U8), q.val = quote s → diffparse.unquote q ⦃ r => r.val = s ⦄
+
+/-- **D3.** A path with no backslash comes out unchanged. -/
+def D3_plain_path_unchanged : Prop :=
+  ∀ (b : Slice U8), 92#u8 ∉ b.val → diffparse.unquote b ⦃ r => r.val = b.val ⦄
+
+/-- **D4.** `header` never panics, on any bytes, and no counter it gives starts after its end. -/
+def D4_header_never_panics : Prop :=
+  ∀ (h : Slice U8), diffparse.header h ⦃ r => ∀ c, r = some c →
+    c.old.val ≤ c.old_end.val ∧ c.new.val ≤ c.new_end.val ⦄
+
+/-- **D5.** On a header `-a[,b] +c[,d]`, then the end or a space, `header` gives the counters
+`a`, `a + b`, `c` and `c + d`, exactly. It refuses only when `a + b` or `c + d` is over
+`u32::MAX`: a header too big to count from is refused, and nothing wraps. -/
+def D5_header_reads_or_refuses : Prop :=
+  ∀ (h : Slice U8) (a : List U8) (b : Option (List U8)) (c : List U8) (d : Option (List U8))
+    (tail : List U8),
+    h.val = headerText a b c d ++ tail → Digits a → (∀ x, b = some x → Digits x) → Digits c →
+    (∀ x, d = some x → Digits x) → (tail = [] ∨ tail.head? = some 32#u8) →
+    diffparse.header h ⦃ r => match r with
+      | none => U32.max < dval a + count b ∨ U32.max < dval c + count d
+      | some ctr => ctr.old.val = dval a ∧ ctr.old_end.val = dval a + count b ∧
+          ctr.new.val = dval c ∧ ctr.new_end.val = dval c + count d ⦄
+
+/-- **D6.** `step` never panics or overflows, on any counters. A row that shows an old (new)
+line moves that counter by exactly one, and only when a line is left on that side; else the
+row is refused. The ends do not change. -/
+def D6_step_never_overflows : Prop :=
+  ∀ (c : diffparse.Counter) (o n : Bool), diffparse.step c o n ⦃ r => match r with
+    | some c' => c'.old.val = c.old.val + (if o then 1 else 0) ∧
+        c'.new.val = c.new.val + (if n then 1 else 0) ∧
+        c'.old_end = c.old_end ∧ c'.new_end = c.new_end
+    | none => (o = true ∧ c.old_end.val ≤ c.old.val) ∨ (n = true ∧ c.new_end.val ≤ c.new.val) ⦄
+
+/-- **D7.** The counters of a well-formed hunk end at `a + b` and `c + d`: after a header
+`-a[,b] +c[,d]` that `header` reads, rows of which `b` show an old line and `d` show a new
+line all fit, and the counters end at `a + b` and `c + d`. -/
+def D7_well_formed_hunk_ends_at_the_ends : Prop :=
+  ∀ (h : Slice U8) (a : List U8) (b : Option (List U8)) (c : List U8) (d : Option (List U8))
+    (tail : List U8) (rows : List (Bool × Bool)),
+    h.val = headerText a b c d ++ tail → Digits a → (∀ x, b = some x → Digits x) → Digits c →
+    (∀ x, d = some x → Digits x) → (tail = [] ∨ tail.head? = some 32#u8) →
+    (rows.filter (·.1)).length = count b → (rows.filter (·.2)).length = count d →
+    diffparse.header h ⦃ r => ∀ ctr, r = some ctr → run ctr rows ⦃ r' =>
+      ∃ c', r' = some c' ∧ c'.old.val = dval a + count b ∧ c'.new.val = dval c + count d ⦄ ⦄
+
+end DiffParseStatements
+
 theorem check_G1 : G1_check_decides_accept := GuideCheck.Check.check_spec
 
 theorem check_G2 : G2_every_change_is_covered :=
@@ -425,5 +498,42 @@ theorem check_A8 : A8_rel_ok_stays_under := fun tree p =>
     GitArgCheck.Meaning.norm_under tree p.val (hr.mp hr1).2.2.2.1)
 
 end GitArgsProofs
+
+section DiffParseProofs
+
+open DiffParse.Spec
+
+theorem check_D1 : D1_unquote_never_panics := fun b =>
+  WP.spec_mono (DiffParse.Unquote.unquote_spec b) (fun _ hr => by rw [hr]; exact DiffParse.Unquote.dec_length b.val)
+
+theorem check_D2 : D2_unquote_undoes_quote := fun s q hq =>
+  WP.spec_mono (DiffParse.Unquote.unquote_spec q) (fun r hr => by rw [hr, hq, DiffParse.Unquote.dec_quote])
+
+theorem check_D3 : D3_plain_path_unchanged := fun b hb =>
+  WP.spec_mono (DiffParse.Unquote.unquote_spec b) (fun r hr => by rw [hr, DiffParse.Unquote.dec_plain _ hb])
+
+theorem check_D4 : D4_header_never_panics := fun h =>
+  WP.spec_mono (DiffParse.Header.header_spec h) (fun _ hr => hr.1)
+
+theorem check_D5 : D5_header_reads_or_refuses := fun h a b c d tail h1 h2 h3 h4 h5 h6 =>
+  WP.spec_mono (DiffParse.Header.header_spec h) (fun _ hr => hr.2 a b c d tail ⟨h1, h2, h3, h4, h5, h6⟩)
+
+theorem check_D6 : D6_step_never_overflows := fun c o n =>
+  WP.spec_mono (DiffParse.Count.step_spec c o n) (fun r hr => by
+    cases r with
+    | some c' => exact ⟨hr.1, hr.2.1, hr.2.2.1, hr.2.2.2.1⟩
+    | none => exact hr)
+
+theorem check_D7 : D7_well_formed_hunk_ends_at_the_ends :=
+  fun h a b c d tail rows h1 h2 h3 h4 h5 h6 hr1 hr2 =>
+  WP.spec_mono (DiffParse.Header.header_spec h) (fun _ hr ctr hc => by
+    have hv := hr.2 a b c d tail ⟨h1, h2, h3, h4, h5, h6⟩
+    rw [hc] at hv
+    obtain ⟨e1, e2, e3, e4⟩ := hv
+    apply WP.spec_mono (DiffParse.Count.run_spec rows ctr (by omega) (by omega) (by omega) (by omega))
+    rintro r' ⟨c', h7, h8, h9, -, -⟩
+    exact ⟨c', h7, by rw [h8, e2], by rw [h9, e4]⟩)
+
+end DiffParseProofs
 
 end Statements

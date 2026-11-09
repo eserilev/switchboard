@@ -2,3 +2,4 @@
 guide-check GuideCheck
 outq OutQ
 git-argcheck GitArgCheck
+diffparse DiffParse
