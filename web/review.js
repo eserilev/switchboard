@@ -351,7 +351,7 @@
     $("#rstat").title = r.status === "error" ? r.error || "" : note;
     const n = r.drafts.length;
     const next = (r.round || 1) + 1;
-    put($("#racts"), (r.new_head ? `<button type="button" class="btn sm ghost" data-act="newcommits" title="Commits the guide does not cover: Start round ${next} or Update guide">New commits</button>` : "") + place
+    put($("#racts"), (r.new_head ? `<button type="button" class="btn sm ghost" data-act="newcommits" title="${r.new_head === r.empty_round ? "New commits with no file change since this round: Update guide" : `Commits the guide does not cover: Start round ${next} or Update guide`}">New commits</button>` : "") + place
       + `<button type="button" class="btn big${l.finish ? "" : " primary"}" data-act="finish" aria-haspopup="dialog" aria-expanded="${!!l.finish}" title="Send your comments to GitHub as one review">Finish review · ${n}</button>`);
   }
 
@@ -1681,6 +1681,8 @@
     const counts = SEVS.map((v) => [v, live.filter((x) => x.severity === v).length]).filter(([, c]) => c).map(([v, c]) => `${c} ${SEV[v]}`);
     const next = (r.round || 1) + 1;
     const alert = r.status === "error" ? { text: r.error || "The guide failed.", buttons: [{ label: "Retry", act: "retry" }] }
+      : r.new_head && r.new_head === r.empty_round ? { text: `New commits: ${short(r.head)} → ${short(r.new_head)}, but no file changed since this round: the author rebased or merged the base branch.`, buttons: [
+        { label: "Update guide", act: "update", title: "Move this review to the new head" }] }
       : r.new_head ? { text: `New commits: ${short(r.head)} → ${short(r.new_head)}`, buttons: [
         { label: `Start round ${next}`, act: "round", title: `A new review of only the changes since ${short(r.head)}` },
         { label: "Update guide", act: "update", title: "Write this guide again for the new head" }] }

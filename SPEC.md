@@ -500,6 +500,8 @@ After you send a review, the author pushes new commits. A new round reviews only
 - The guide prompt for a round names the scope, the files of the round, and the comments that you sent in the round before. The agent says in each step whether the change addresses a comment, and lists the comments that no change touches.
 - A sent review records its commit, its summary and its line comments, for the next round.
 - Tests: git repos for each case (added commits, base merge, rebase, conflict, a conflict with other merged files), and open Lighthouse PRs (`crates/core/tests/real_rounds.rs`), with a commit in the middle of each PR as the round-1 head. On 22 PRs: 12 plain, 6 with a base merge or rebase, 4 with one conflicted file each. No file from the base branch shows, except the conflicted files. Before the per-file rule, those 4 PRs showed up to 266 files of the base branch.
+- A round with no changed file closes itself: the author only rebased or merged the base branch, so a fetch can never find more. The round before then shows "New commits …, but no file changed since this round" with only **Update guide**, and the window goes back to it. When the round before is already closed, a toast says why. A first round with no changed file stays an error.
+- When you close a round, the window shows the newest open round of the PR before it.
 - The GitHub count check (24) is for a first round only, because GitHub counts the whole PR.
 - **Finish review** in a round works as in 11.8. A comment on the old side goes into the summary, because the old side of a round is the code of the round before, not GitHub's base.
 

@@ -19,6 +19,9 @@ pub(crate) struct ReviewState {
     pub status: String,
     pub error: Option<String>,
     pub new_head: Option<String>,
+    /// The head that a later round found no file change at: the author rebased or
+    /// merged the base branch. That round closed itself. In memory only.
+    pub empty_round: Option<String>,
     pub last_poll: u64,
     /// The PR diff that the verified checker works on. Built after the fetch.
     pub model: Option<std::sync::Arc<coverage::DiffModel>>,
@@ -67,6 +70,7 @@ impl ReviewState {
             status: status.into(),
             error,
             new_head: None,
+            empty_round: None,
             last_poll: now(),
             model: None,
             attempts: 0,
@@ -157,6 +161,8 @@ pub struct ReviewView {
     pub status: String,
     pub error: Option<String>,
     pub new_head: Option<String>,
+    /// A later round at this head had no file change, so it closed (`drop_empty_round`).
+    pub empty_round: Option<String>,
     /// The PR's base branch, once a fetch or a poll has read it. For a local review:
     /// the ref the base came from, for example `upstream/unstable`.
     pub base_ref: Option<String>,
@@ -511,6 +517,7 @@ impl Hub {
             status: r.status.clone(),
             error: r.error.clone(),
             new_head: r.new_head.clone(),
+            empty_round: r.empty_round.clone(),
             base_ref: r.base_ref.clone(),
             base_label: r.base_label.clone(),
             bases: r.bases.clone(),
@@ -1170,10 +1177,60 @@ impl Hub {
         // GitHub's counts are for the whole PR, so only a first round compares them.
         let model = self.load_model(id, (round == 1).then_some(&pr))?;
         if model.files.is_empty() {
-            return Err("No file changed since the round before.".into());
+            // A later round with nothing in it can never load: the same fetch finds
+            // the same nothing. It closes, and the round before says why.
+            if round > 1 {
+                return self.drop_empty_round(id);
+            }
+            return Err("The PR changes no file.".into());
         }
         tracing::info!(target: "sb::review", review = id, ms = ms(), "review: diff model checked");
         self.run_guide(id, &pr, None)
+    }
+
+    /// Closes a later round that has no file change, and marks the round before it.
+    /// The author rebased or merged the base branch, and changed nothing of their own.
+    fn drop_empty_round(&self, id: &str) -> Res<()> {
+        let (repo, number, round, head) = {
+            let r = self.reviews.lock().unwrap();
+            let r = r.get(id).ok_or("gone")?;
+            (r.row.repo.clone(), r.row.number, r.row.round, r.row.head.clone())
+        };
+        let prev = self
+            .reviews
+            .lock()
+            .unwrap()
+            .values()
+            .find(|r| !r.row.is_local() && r.row.repo == repo && r.row.number == number && r.row.round + 1 == round)
+            .map(|r| r.row.id.clone());
+        tracing::info!(target: "sb::review", review = id, ?prev, %head, "review: empty round, closing it");
+        let note = format!(
+            "#{number} round {round}: no file changed since round {}. The author rebased or merged the base branch.",
+            round - 1
+        );
+        // The round before is closed: a toast says why, and the launcher still offers
+        // a full review of the PR.
+        let Some(prev) = prev else {
+            let res = self.review_close(id, false, None)?;
+            if !res.closed {
+                return Err(format!("{note} Close this round."));
+            }
+            self.sink.emit("review_cleanup", json!({ "review": id, "note": format!("{note} Open the PR again for a full review.") }));
+            return Ok(());
+        };
+        if let Some(r) = self.reviews.lock().unwrap().get_mut(&prev) {
+            // After a start the poll has not run yet: the round before shows the head too.
+            if r.row.head != head {
+                r.new_head = Some(head.clone());
+            }
+            r.empty_round = Some(head);
+        }
+        self.emit_review(&prev);
+        let res = self.review_close(id, false, None)?;
+        if !res.closed {
+            return Err(format!("{note} Close this round to go back."));
+        }
+        Ok(())
     }
 
     /// The local clone of `owner/name`, and the remote that points at it.

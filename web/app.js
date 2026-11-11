@@ -1494,9 +1494,14 @@ listen("review", (e) => {
 });
 listen("review_cleanup", (e) => toast(e.payload.note));
 listen("review_closed", (e) => {
+  const gone = S.reviews.get(e.payload);
   S.reviews.delete(e.payload);
-  if (S.tab === e.payload) setTab("board");
-  else drawTabs();
+  if (S.tab !== e.payload) return drawTabs();
+  // A closed round goes back to the newest open round of the same PR.
+  const back = gone && gone.round > 1 && [...S.reviews.values()]
+    .filter((r) => r.repo === gone.repo && r.number === gone.number && r.round < gone.round)
+    .sort((a, b) => b.round - a.round)[0];
+  setTab(back ? back.id : "board");
 });
 
 // Copies with a hidden text field, and gives the focus back. True when it worked.
