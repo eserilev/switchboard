@@ -1055,7 +1055,7 @@
     const nAgent = p.inline.filter((c) => agent.has(c.draft)).length;
     box.innerHTML = `<dl class="fplan">
         <dt>As</dt><dd class="mono">@${esc(f.preview.login)}</dd>
-        <dt>On commit</dt><dd class="mono">${esc(short(p.head))}</dd>
+        <dt>On commit</dt><dd><span class="mono">${esc(short(p.head))}</span>${f.preview.newer ? `, the one you reviewed. GitHub has newer commits (<span class="mono">${esc(short(f.preview.newer))}</span>): a comment on a line that they changed shows as outdated.` : ""}</dd>
         <dt>On lines</dt><dd>${plural(p.inline.length, "comment")}${nAgent ? `, ${plural(nAgent, "agent draft")}` : ""}${p.inline.length ? ' <span class="ok">✓ same text as GitHub\'s diff</span>' : ""}</dd>
         ${p.outside.length ? `<dt>In the summary</dt><dd>${plural(p.outside.length, "comment")}, outside GitHub's diff</dd>` : ""}
       </dl>

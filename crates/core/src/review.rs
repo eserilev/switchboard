@@ -152,6 +152,33 @@ pub fn gh_pr_diff(repo: &str, number: u64) -> Result<String, String> {
     String::from_utf8(out).map_err(|e| format!("GitHub's diff is not UTF-8: {e}"))
 }
 
+/// The repo that the PR's commits come from, `owner/name`: a fork, or the repo itself.
+/// None when GitHub has no such repo any more (a deleted fork).
+pub fn gh_head_repo(url: &str) -> Option<String> {
+    let out = Command::new("gh")
+        .args(["pr", "view", url, "--json", "headRepository,headRepositoryOwner"])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    let v: Value = serde_json::from_slice(&out.stdout).ok()?;
+    let owner = v["headRepositoryOwner"]["login"].as_str()?;
+    let name = v["headRepository"]["name"].as_str()?;
+    Some(format!("{owner}/{name}"))
+}
+
+/// GitHub's diff of the PR at commit `head`, as the PR showed it then: the base
+/// branch `base` of `repo`, diffed from its merge base with `head` (`base...head`).
+/// A fork's commit is found only in the fork, so the compare runs there.
+pub fn gh_compare_diff(repo: &str, head_repo: Option<&str>, base: &str, head: &str) -> Result<String, String> {
+    let owner = repo.split('/').next().unwrap_or(repo);
+    let path = match head_repo {
+        Some(h) => format!("repos/{h}/compare/{owner}:{base}...{head}"),
+        None => format!("repos/{repo}/compare/{base}...{head}"),
+    };
+    let out = gh_api(&["-H", "Accept: application/vnd.github.diff", &path], None)?;
+    String::from_utf8(out).map_err(|e| format!("GitHub's diff is not UTF-8: {e}"))
+}
+
 /// The GitHub login that `gh` posts as.
 pub fn gh_login() -> Result<String, String> {
     let out = gh_api(&["user", "--jq", ".login"], None)?;

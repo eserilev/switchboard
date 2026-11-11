@@ -468,7 +468,7 @@ Cost: each fork sends the guide context again. The prompt cache lasts a few minu
 
 1. **Finish review · N** in the header opens a popover under it. You pick the type (Comment, Approve or Request changes, Comment first) and write a summary. The summary is saved as you type and when the popover closes (Cancel, ×, Escape). While it is open, **Submit review** is the one gold button.
 2. The app checks the plan (`post.rs`):
-   - The PR head on GitHub must equal the reviewed head. Otherwise the app asks you to update the guide first.
+   - The review goes on the reviewed head. When the PR has newer commits, it still goes there, as GitHub allows: the lines are checked against GitHub's diff at that commit (`compare base...head`, in the fork for a fork's PR), and the preview says that GitHub has newer commits. A comment on a line that they changed shows as outdated on GitHub. You never have to update the guide to send.
    - The app gets GitHub's own diff of the PR (`gh api`, diff media type).
    - For each draft, every line of its range must be in the same hunk of GitHub's diff, on the same side.
    - The text of each line must be the same in GitHub's diff and in the verified diff model. A difference stops the whole send.

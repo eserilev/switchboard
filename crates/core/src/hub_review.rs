@@ -212,6 +212,9 @@ pub struct PostPreview {
     pub login: String,
     pub plan: crate::post::Plan,
     pub token: String,
+    /// The PR head on GitHub when it is newer than the reviewed head. The review then
+    /// goes on the reviewed commit.
+    pub newer: Option<String>,
 }
 
 /// One commit of a local review, for the list in the inspector.
@@ -2341,9 +2344,10 @@ impl Hub {
         Ok(())
     }
 
-    /// Builds the plan for a send. The PR head on GitHub must still be the head
-    /// that you reviewed, and every line must match GitHub's diff.
-    fn post_plan(&self, id: &str) -> Res<(ReviewRow, crate::post::Plan)> {
+    /// Builds the plan for a send, on the head that you reviewed. Every line must
+    /// match GitHub's diff at that commit. When the PR has newer commits, the review
+    /// still goes on the reviewed commit, as GitHub allows, and the plan says so.
+    fn post_plan(&self, id: &str) -> Res<(ReviewRow, crate::post::Plan, Option<String>)> {
         self.pr_only(id)?;
         let row = self
             .reviews
@@ -2357,13 +2361,14 @@ impl Hub {
             return Err("The diff is not at the reviewed head. Reopen the review.".into());
         }
         let pr = review::gh_view(&row.url)?;
-        if pr.head_ref_oid != row.head {
-            return Err(format!(
-                "The PR has new commits ({} on GitHub). Update the guide, then send the review.",
-                &pr.head_ref_oid[..pr.head_ref_oid.len().min(9)]
-            ));
-        }
-        let gh = crate::post::parse_pr_diff(&review::gh_pr_diff(&row.repo, row.number)?);
+        let newer = (pr.head_ref_oid != row.head).then(|| pr.head_ref_oid.clone());
+        let diff = match &newer {
+            None => review::gh_pr_diff(&row.repo, row.number)?,
+            Some(_) => review::gh_compare_diff(&row.repo, review::gh_head_repo(&row.url).as_deref(), &pr.base_ref_name, &row.head).map_err(|err| {
+                format!("The PR has new commits, and GitHub's diff at the reviewed commit did not load ({err}). Use Update guide: your comments move with their code.")
+            })?,
+        };
+        let gh = crate::post::parse_pr_diff(&diff);
         // A draft added while a new model loaded can still be at the old head: move
         // the drafts once more before the plan.
         if self.move_drafts(id, &model)? {
@@ -2371,15 +2376,16 @@ impl Hub {
         }
         let drafts = self.store.lock().unwrap().drafts(id).map_err(e)?;
         // In a later round the old side is the code of the round before, not GitHub's base.
-        Ok((row.clone(), crate::post::plan(&model, &gh, &drafts, row.round == 1)))
+        Ok((row.clone(), crate::post::plan(&model, &gh, &drafts, row.round == 1), newer))
     }
 
     pub fn review_post_preview(&self, id: &str) -> Res<PostPreview> {
-        let (_, plan) = self.post_plan(id)?;
+        let (_, plan, newer) = self.post_plan(id)?;
         Ok(PostPreview {
             login: review::gh_login()?,
             token: plan.token(),
             plan,
+            newer,
         })
     }
 
@@ -2388,7 +2394,7 @@ impl Hub {
     pub fn review_post(&self, id: &str, event: &str, summary: &str, token: &str) -> Res<String> {
         // One send of a review at a time: a second send waits for nothing and stops.
         let _sending = Sending::take(id)?;
-        let (row, plan) = self.post_plan(id)?;
+        let (row, plan, _) = self.post_plan(id)?;
         if plan.token() != token {
             return Err("The review changed after the preview. Check it again.".into());
         }
