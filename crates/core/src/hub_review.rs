@@ -61,6 +61,8 @@ pub(crate) struct ReviewState {
     /// A local review: an agent's turn ended while the commits loaded, so one more
     /// snapshot runs when the load ends (`turn_snapshot`).
     pub pending_turn: bool,
+    /// The pending review on GitHub (SPEC 11.8.1). In memory only.
+    pub sync: crate::hub_sync::SyncRun,
 }
 
 impl ReviewState {
@@ -91,6 +93,7 @@ impl ReviewState {
             mentions: vec![],
             show: None,
             pending_turn: false,
+            sync: Default::default(),
         }
     }
 }
@@ -203,6 +206,8 @@ pub struct ReviewView {
     pub mentions: Vec<crate::mentions::Mention>,
     /// The places of the last `review_show` call.
     pub show: Option<crate::hub_show::Show>,
+    /// A PR review: its drafts on GitHub, as a pending review (SPEC 11.8.1).
+    pub sync: Option<crate::hub_sync::SyncView>,
 }
 
 /// What the window shows before a send: the GitHub account, the head, and where
@@ -423,6 +428,20 @@ impl Hub {
             st.base_pick = pick;
             reviews.insert(st.row.id.clone(), st);
         }
+        drop(reviews);
+        // Once at start: a PR review with drafts or a pending review syncs, so the
+        // comments that you wrote before this build go to GitHub too (SPEC 11.8.1).
+        let due: Vec<String> = self
+            .reviews
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|r| !r.row.is_local() && r.status == "ready")
+            .map(|r| r.row.id.clone())
+            .collect();
+        for id in due {
+            self.kick_sync_if_drafts(&id);
+        }
     }
 
     /// At start, after `load_reviews`, for each open local review (SPEC 26.1):
@@ -547,6 +566,11 @@ impl Hub {
             commits: r.commits.clone(),
             mentions: r.mentions.clone(),
             show: r.show.clone(),
+            sync: if r.row.is_local() || !self.sync_on() {
+                None
+            } else {
+                Some(crate::hub_sync::view(&r.sync, &store.draft_sync(id).map_err(e)?))
+            },
         })
     }
 
@@ -566,6 +590,10 @@ impl Hub {
             r.error = error;
         }
         self.emit_review(id);
+        // A sync waits while the review loads: it runs when the review is ready.
+        if status == "ready" {
+            self.kick_sync_if_drafts(id);
+        }
     }
 
     /// The check that no run is going and the switch to `status` in one lock: a
@@ -1312,6 +1340,8 @@ impl Hub {
         if moved {
             self.emit_review(id);
         }
+        // The drafts can be at a new head: the pending review follows.
+        self.kick_sync_if_drafts(id);
         Ok(model)
     }
 
@@ -2235,6 +2265,7 @@ impl Hub {
         };
         self.store.lock().unwrap().add_draft(id, &d).map_err(e)?;
         self.emit_review(id);
+        self.kick_sync(id);
         Ok(())
     }
 
@@ -2261,6 +2292,7 @@ impl Hub {
             .map_err(e)?;
         }
         self.emit_review(id);
+        self.kick_sync(id);
         Ok(())
     }
 
@@ -2332,6 +2364,7 @@ impl Hub {
         };
         self.store.lock().unwrap().add_draft(id, &d).map_err(e)?;
         self.emit_review(id);
+        self.kick_sync(id);
         Ok(())
     }
 
@@ -2360,11 +2393,12 @@ impl Hub {
         if model.head != row.head {
             return Err("The diff is not at the reviewed head. Reopen the review.".into());
         }
-        let pr = review::gh_view(&row.url)?;
+        let gh = self.gh();
+        let pr = gh.view(&row.url)?;
         let newer = (pr.head_ref_oid != row.head).then(|| pr.head_ref_oid.clone());
         let diff = match &newer {
-            None => review::gh_pr_diff(&row.repo, row.number)?,
-            Some(_) => review::gh_compare_diff(&row.repo, review::gh_head_repo(&row.url).as_deref(), &pr.base_ref_name, &row.head).map_err(|err| {
+            None => gh.pr_diff(&row.repo, row.number)?,
+            Some(_) => gh.diff_at(&row.repo, &row.url, &pr.base_ref_name, &row.head).map_err(|err| {
                 format!("The PR has new commits, and GitHub's diff at the reviewed commit did not load ({err}). Use Update guide: your comments move with their code.")
             })?,
         };
@@ -2382,7 +2416,7 @@ impl Hub {
     pub fn review_post_preview(&self, id: &str) -> Res<PostPreview> {
         let (_, plan, newer) = self.post_plan(id)?;
         Ok(PostPreview {
-            login: review::gh_login()?,
+            login: self.gh().login()?,
             token: plan.token(),
             plan,
             newer,
@@ -2408,7 +2442,7 @@ impl Hub {
             }
             None => {
                 tracing::info!(target: "sb::review", review = id, event, comments = plan.inline.len(), "review: send to GitHub");
-                review::gh_submit_review(&row.repo, row.number, &payload)?
+                self.send_now(id, &row, &plan, event, &payload, token)?
             }
         };
         let posted = crate::store::PostedRow {
@@ -2426,22 +2460,79 @@ impl Hub {
                     .join("\n"),
             ),
         };
-        self.store
-            .lock()
-            .unwrap()
-            .record_posted(id, &posted, &plan.drafts())
-            .map_err(e)?;
+        {
+            let store = self.store.lock().unwrap();
+            store.record_posted(id, &posted, &plan.drafts()).map_err(e)?;
+            // The pending review is sent: it is not pending any more.
+            store.set_gh_pending(id, None).map_err(e)?;
+        }
+        if let Some(r) = self.reviews.lock().unwrap().get_mut(id) {
+            r.sync.has_pending = false;
+        }
         self.emit_review(id);
         Ok(url)
+    }
+
+    /// Sends the plan (SPEC 11.8.1): a sync first, then the pending review goes out.
+    /// With no comment on a line and no pending review, one REST call sends it.
+    fn send_now(&self, id: &str, row: &ReviewRow, plan: &crate::post::Plan, event: &str, payload: &Value, token: &str) -> Res<String> {
+        let gh = self.gh();
+        let body = payload["body"].as_str().unwrap_or("").to_owned();
+        if !self.sync_on() {
+            return gh.submit_rest(&row.repo, row.number, payload);
+        }
+        self.claim_sync(id)?;
+        let res = (|| {
+            if let Err(err) = self.sync_held(id) {
+                // GitHub took no pending review from the app: the send works as before
+                // the sync, in one REST call. With a pending review that has only some
+                // of the comments, nothing is sent.
+                let (pending, _) = self.store.lock().unwrap().gh_pending(id).map_err(e)?;
+                if pending.is_some() {
+                    return Err(err);
+                }
+                tracing::warn!(target: "sb::review", review = id, error = %err, "review: no pending review on GitHub; send in one call");
+                return gh.submit_rest(&row.repo, row.number, payload);
+            }
+            // A sync can bring in comments from the website: then the plan changed.
+            let (_, now_plan, _) = self.post_plan(id)?;
+            if now_plan.token() != token {
+                return Err("The review changed after the preview: GitHub had comments that are drafts now. Check it again.".into());
+            }
+            let blocked = self.reviews.lock().unwrap().get(id).and_then(|r| r.sync.blocked.clone());
+            if blocked.is_some() {
+                // A pending review from the website on another commit: the app sends
+                // this review in one call, as before the sync.
+                return gh.submit_rest(&row.repo, row.number, payload);
+            }
+            let (pending, at) = self.store.lock().unwrap().gh_pending(id).map_err(e)?;
+            let sync = self.store.lock().unwrap().draft_sync(id).map_err(e)?;
+            for c in &plan.inline {
+                let s = sync.iter().find(|s| s.id == c.draft);
+                if s.and_then(|s| s.gh_id.as_ref()).is_none() || s.and_then(|s| s.gh_sig.clone()) != Some(crate::post::sig(c)) {
+                    let why = s.and_then(|s| s.gh_error.clone()).unwrap_or_else(|| "not on GitHub yet".into());
+                    return Err(format!("{}:{}: {why}. Nothing is sent. Try again.", c.path, c.line));
+                }
+            }
+            match pending {
+                Some(p) if at.as_deref() == Some(plan.head.as_str()) => gh.submit(&p, event, &body),
+                Some(_) => Err("The pending review on GitHub is on another commit. Try again.".into()),
+                None if plan.inline.is_empty() => gh.submit_rest(&row.repo, row.number, payload),
+                None => Err("The comments are not on GitHub yet. Try again.".into()),
+            }
+        })();
+        self.release_sync(id);
+        res
     }
 
     /// The link of a review on GitHub that is this send: same login, commit, type,
     /// summary and line comments. Reads only.
     fn already_sent(&self, row: &ReviewRow, payload: &Value) -> Res<Option<String>> {
-        let login = review::gh_login()?;
-        let reviews = review::gh_reviews(&row.repo, row.number)?;
+        let gh = self.gh();
+        let login = gh.login()?;
+        let reviews = gh.reviews(&row.repo, row.number)?;
         for (rid, url) in crate::post::sent_candidates(&reviews, &login, payload) {
-            let comments = review::gh_review_comments(&row.repo, row.number, rid)?;
+            let comments = gh.review_comments(&row.repo, row.number, rid)?;
             if crate::post::same_comments(&comments, payload) {
                 return Ok(Some(url));
             }
@@ -2702,6 +2793,8 @@ impl Hub {
         if !n.is_multiple_of(30) {
             return;
         }
+        // The pending reviews on GitHub: retries, and a check every 2 minutes.
+        self.sync_tick();
         // A local review: a new HEAD in its tree is a new head (SPEC 11.11). One
         // `rev-parse` for each local review every 30 s.
         let locals: Vec<(String, String, String)> = self

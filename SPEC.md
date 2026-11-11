@@ -464,7 +464,7 @@ Cost: each fork sends the guide context again. The prompt cache lasts a few minu
 
 ### 11.8 Send the review
 
-**Finish review** sends all pending drafts to GitHub as one review, like "Start a review" on GitHub. Plain code does every step. No agent takes part: the guide session and the forks have no `gh` tool (11.2), and no MCP tool sends anything.
+**Finish review** sends all pending drafts to GitHub as one review, like "Start a review" on GitHub. The comments on lines are on GitHub already, as your pending review (11.8.1); Finish review submits it. Plain code does every step. No agent takes part: the guide session and the forks have no `gh` tool (11.2), and no MCP tool sends anything.
 
 1. **Finish review · N** in the header opens a popover under it. You pick the type (Comment, Approve or Request changes, Comment first) and write a summary. The summary is saved as you type and when the popover closes (Cancel, ×, Escape). While it is open, **Submit review** is the one gold button.
 2. The app checks the plan (`post.rs`):
@@ -477,13 +477,37 @@ Cost: each fork sends the guide context again. The prompt cache lasts a few minu
    - A draft that is stale, that belongs to another head, that has no stored text, or whose stored text is not the text at its lines in the model, stops the send. Without this, a draft from before an update goes on the old line number, which is another line of the new code.
 3. The popover shows the plan: as whom (the GitHub login), on which commit, the comments on lines and how many are agent drafts, the comments that go into the summary because GitHub's diff has no such line, and why; then the list of each. Nothing is sent before your click on **Submit review**. The confirmations after it (Review sent, Close review) are dialogs as before.
 4. The send uses the plan that you saw. The app builds the plan again and compares a fingerprint of it. If the plan changed, the app sends nothing and asks you to check again.
-5. One `POST /repos/{repo}/pulls/{n}/reviews` call sends the review: `commit_id` is the reviewed head, each comment has `path`, `side` (`RIGHT` or `LEFT`), `line`, and for a range `start_line` and `start_side`. GitHub accepts all comments or none.
+5. One `submitPullRequestReview` call sends the pending review (11.8.1). With no comment on a line, one `POST /repos/{repo}/pulls/{n}/reviews` call sends the review instead: `commit_id` is the reviewed head, each comment has `path`, `side` (`RIGHT` or `LEFT`), `line`, and for a range `start_line` and `start_side`. GitHub accepts all comments or none.
 6. After GitHub accepts, one store transaction records the review link and removes the sent drafts. The list shows "Sent" with the link.
 
 Limits:
 - GitHub refuses an approval of your own PR. The window shows GitHub's reason.
 - One send of a review runs at a time.
 - If the app stops between GitHub's answer and the store write, the drafts stay. Before the next send, the app reads your reviews on the PR. A review at the same commit, with the same type, summary and line comments, counts as this send: the app records it and does not send again. After new commits the commit differs, so this check does not find it.
+
+### 11.8.1 Pending review on GitHub
+
+Your comments on a PR also go to GitHub as you write them, as a pending review: the comments that GitHub keeps for you alone until you submit them, like "Start a review" on the website. So they are on GitHub, not only in this app.
+
+- The pending review is on the reviewed head. Its comments are the drafts that the plan (11.8, step 2) puts on a line. A draft that goes into the summary, or that the plan refuses (stale, changed code), stays in the app only; a comment of it that was on GitHub goes away there.
+- **When the sync runs.** After each draft that you add, edit, delete or place again; after each model load (update, retry, restart), because the drafts move then, and when the review is ready again after a load (a sync waits while the review fetches or updates); once when a review with drafts opens at start; and every 2 minutes while a review has a pending review, so a send or a delete on the website shows here. One sync of a review runs at a time. A change during a sync makes one more sync after it, never a second at the same time.
+- **A sync** (`hub_sync.rs`, plain code; GitHub's GraphQL API through `gh api graphql`):
+  1. It reads your pending review on the PR, if any, with its comments, and GitHub's diff at the reviewed head (`compare base...head`, as in 11.8).
+  2. Your pending review is "ours" when the app made it or took it over (`review.gh_pending`).
+     - Ours, at the reviewed head: the sync goes on with it.
+     - Ours, at another commit (after Update guide): its comments that no draft has become drafts first, stale, since they are on the old commit (a reply becomes a draft that starts "(A reply on GitHub)"); then the app deletes it and makes a new one at the reviewed head. GitHub ties a pending review to one commit.
+     - Not ours (you started it on the website), at the reviewed head: the app takes it over, and its comments become drafts.
+     - Not ours, at another commit: the app does not touch it, and nothing syncs. The inspector says: submit or delete that pending review on GitHub first.
+     - Ours, gone from GitHub: you sent it on the website (the app records it as sent, with its link, and removes the drafts that were in it), or you deleted it (the drafts stay, and go up again).
+  3. The planner (`post::sync_ops`, pure) compares the drafts with the comments: a draft with no comment adds one; a draft whose text changed edits it; a draft that moved to other lines deletes its comment and adds a new one (GitHub cannot move a comment); a comment of a draft that left the plan is deleted. When you edit a comment on the website and its draft did not change since the last sync, the draft takes the website's text.
+  4. A comment on GitHub that no draft has: if the app deleted its draft (the app keeps the comment id when you delete a synced draft, in `gh_gone`), the sync deletes it. Else you wrote it on the website, and it becomes a draft: on its line when the model has that text, else a stale draft (11.7). A reply to a thread stays on GitHub as it is.
+  5. Each draft keeps its comment id, the place and text that went up (`gh_sig`), and the last error.
+- **Errors.** A refused comment keeps its error on the draft, and the other comments still go. A failed sync tries again after 15 s, then 30 s, and so on up to 10 minutes. No error deletes a draft: the app is the copy you can trust.
+- **The window.** Each draft in the list shows a small state: on GitHub, sending, here only (with the reason), or the error. The inspector shows "Pending on GitHub: N comments".
+- **Finish review** (11.8) runs a sync first and waits for it. Every comment of the plan must then be on GitHub, on its place, with its text; the plan must be the plan you saw. Then one `submitPullRequestReview` call sends the pending review, with the type and the summary (with the comments that are not on a line), and any replies you wrote in it on the website. With no comment on a line and no pending review, or while a pending review from the website on another commit blocks the sync, or when the sync fails before GitHub has any pending review of the app's, the send is the REST call of 11.8. A sync that fails with a pending review that has only some of the comments sends nothing. When the sync brought in comments from the website, the plan changed: the app asks you to check it again. The check for a send that GitHub has already (11.8, Limits) runs first, as before.
+- Closing a review in the app leaves its pending review on GitHub. You can still send it there.
+- A review of local commits (11.11) never syncs.
+- Tests: the planner with random drafts and comments; the hub with a fake GitHub (`Hub::debug_set_gh`): coalescing, an error and its retry, a take-over, a rebuild at a new head, a send on the website, and Finish review. Tests never write to GitHub; with `SB_HOME` set, the sync is off unless a test gives a fake. `crates/core/tests/live_pending.rs` (ignored) makes, edits, deletes and deletes a pending review on a PR you name.
 
 ### 11.9 Review rounds
 
@@ -881,6 +905,8 @@ CREATE TABLE pin (id TEXT PRIMARY KEY, review TEXT NOT NULL, step TEXT NOT NULL,
 CREATE TABLE draft (id TEXT PRIMARY KEY, review TEXT NOT NULL, path TEXT, side TEXT, line INTEGER, text TEXT NOT NULL);
 ```
 
+Version 13 (11.8.1): `draft.gh_id`, `draft.gh_sig` and `draft.gh_error` (the GitHub comment of a draft, what went up, the last error); `review.gh_pending` and `review.gh_pending_head` (the pending review that the app made or took over, and its commit); and `gh_gone (review, gh_id)`, the comments of drafts that you deleted, for the next sync to delete.
+
 At start:
 
 1. Read the store.
@@ -1010,6 +1036,7 @@ Where the build differs from the text above:
 - A thread fork and the pin and draft summaries use the active connection.
 - A review run stops at once when Claude reports that the `sb` MCP server failed, and before the start when the `sb` binary is missing. A missing `sb` once made the agent run on without its guide tools.
 - Review runs get each spec clone with `--add-dir`.
+- The pending review sync (11.8.1): the GraphQL queries passed GitHub's checks (the read on a real PR, and each mutation with an unknown id, which changes nothing), but the test that writes (`live_pending.rs`, `writes_…`) has not run yet. Not known yet: whether GitHub takes a pending review on a commit older than the PR head, and puts its comments on the lines of that commit. If it refuses the pending review, Finish review sends in one REST call as before.
 - Review runs and the Ask pane use `--setting-sources user` (11.2, 11.5). Before, a PR could ship `.claude/settings.json` with hooks that ran during its review. The PR's `CLAUDE.md` still loads: it is text, like the PR body, and the rules say it never changes them.
 - The guide agent runs git through the `git` tool of `sb mcp`, not Bash (11.4). Before, `Bash(git diff:*)` let `git diff --output=<file>` write a file.
 - The arg check of the `git` tool is the verified crate `git-argcheck` (24.1). It works on bytes, and returns a reason code and the arg index; `review_git` makes the message. The messages and the answers are the same as before.

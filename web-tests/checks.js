@@ -605,6 +605,27 @@
     check("Copy all comments copies the drafts", called("review_drafts_text")[0]?.[1].id === "r1");
     window.SBInsp.close();
   }
+  // The pending review on GitHub (SPEC 11.8.1): each comment says where it is, and
+  // the inspector counts the comments on GitHub.
+  {
+    const r = structuredClone(window.__data.reviews[0]);
+    const d = r.drafts[0];
+    r.sync = { running: false, error: null, blocked: null, pending: 1, drafts: [{ id: d.id, state: "synced", note: null }] };
+    window.__emit("review", r);
+    await wait(100);
+    window.SBInsp.open();
+    window.SBInsp.refresh(true);
+    const tag = () => $(`#insp #rdrafts .draft[data-d="${d.id}"] .dsync`);
+    check("a comment on GitHub says so, and the inspector counts it", tag()?.textContent === "on GitHub" && $("#insp .ifacts")?.textContent.includes("Pending on GitHub1 comment"), `${tag()?.textContent} | ${$("#insp .ifacts")?.textContent}`);
+    r.sync = { running: false, error: "GitHub: something went wrong", blocked: "You have a pending review on GitHub at commit abc, from the website.", pending: 0, drafts: [{ id: d.id, state: "error", note: "GitHub: something went wrong" }] };
+    window.__emit("review", r);
+    await wait(100);
+    window.SBInsp.refresh(true);
+    check("a comment that is not on GitHub shows why, and a blocked sync shows in the alert", tag()?.classList.contains("error") && tag()?.title.includes("went wrong") && $("#insp .ialert")?.textContent.includes("from the website"), `${tag()?.className} | ${$("#insp .ialert")?.textContent}`);
+    window.SBInsp.close();
+    window.__emit("review", window.__data.reviews[0]);
+    await wait(100);
+  }
   // Diff colors come from the row kind, and the step bar does not hide them.
   {
     const bg = (sel) => { const el = $(sel); return el ? getComputedStyle(el).backgroundColor : "none"; };

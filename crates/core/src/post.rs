@@ -105,6 +105,15 @@ pub struct Plan {
     pub outside: Vec<Outside>,
     /// Problems that stop the send.
     pub errors: Vec<String>,
+    /// The drafts of `errors`, each with its problem. They stay off GitHub.
+    #[serde(skip)]
+    pub stuck: Vec<(i64, String)>,
+}
+
+/// A problem of one draft: it stops the send, and the draft stays off GitHub.
+fn fail(p: &mut Plan, draft: i64, msg: String) {
+    p.stuck.push((draft, msg.clone()));
+    p.errors.push(msg);
 }
 
 impl Plan {
@@ -248,11 +257,12 @@ pub fn plan(m: &DiffModel, gh: &[GhFile], drafts: &[DraftRow], old_on_github: bo
         inline: vec![],
         outside: vec![],
         errors: vec![],
+        stuck: vec![],
     };
     for d in drafts {
         let text = d.text.trim().to_owned();
         if text.is_empty() {
-            p.errors.push(format!("Draft {} is empty.", d.id));
+            fail(&mut p, d.id, format!("Draft {} is empty.", d.id));
             continue;
         }
         let (path, line) = match (&d.path, d.line) {
@@ -275,27 +285,27 @@ pub fn plan(m: &DiffModel, gh: &[GhFile], drafts: &[DraftRow], old_on_github: bo
             format!("{path}:{line}")
         };
         if d.stale {
-            p.errors.push(format!(
+            fail(&mut p, d.id, format!(
                 "{at}: the code of this comment changed after you wrote it. Place it again or delete it."
             ));
             continue;
         }
         let Some(f) = model_file(m, path, old) else {
-            p.errors.push(format!("{at}: the PR does not change this file."));
+            fail(&mut p, d.id, format!("{at}: the PR does not change this file."));
             continue;
         };
         if start == 0 || start > line {
-            p.errors.push(format!("{at}: the line range is not valid."));
+            fail(&mut p, d.id, format!("{at}: the line range is not valid."));
             continue;
         }
         let ours: Option<Vec<String>> = (start..=line).map(|n| line_text(f, old, n)).collect();
         let Some(ours) = ours else {
-            p.errors.push(format!("{at}: the file has no such line at the reviewed head."));
+            fail(&mut p, d.id, format!("{at}: the file has no such line at the reviewed head."));
             continue;
         };
         // The draft must belong to this head: a draft from an older head has an old number.
         if d.head.as_deref() != Some(m.head.as_str()) {
-            p.errors.push(format!(
+            fail(&mut p, d.id, format!(
                 "{at}: this comment belongs to an older commit. Place it again or delete it."
             ));
             continue;
@@ -303,7 +313,7 @@ pub fn plan(m: &DiffModel, gh: &[GhFile], drafts: &[DraftRow], old_on_github: bo
         // The comment was written on some text. That text must still be at its lines.
         // A draft with no text is from before the app kept it: it cannot be checked.
         if d.line_text.as_deref() != Some(ours.join("\n").as_str()) {
-            p.errors.push(format!(
+            fail(&mut p, d.id, format!(
                 "{at}: the code of this comment changed after you wrote it. Place it again or delete it."
             ));
             continue;
@@ -340,7 +350,7 @@ pub fn plan(m: &DiffModel, gh: &[GhFile], drafts: &[DraftRow], old_on_github: bo
             .zip(start..)
             .find(|((&k, t), _)| g.rows[k].text.trim_end_matches('\r') != t.as_str());
         if let Some((_, n)) = differ {
-            p.errors.push(format!(
+            fail(&mut p, d.id, format!(
                 "{path}:{n}: GitHub shows other text on this line. Nothing is sent."
             ));
             continue;
@@ -458,6 +468,117 @@ pub fn same_comments(comments: &Value, payload: &Value) -> bool {
     got.sort();
     want.sort();
     got == want
+}
+
+// ---------- the pending review on GitHub (SPEC 11.8.1) ----------
+
+/// A comment of the pending review on GitHub.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GhComment {
+    pub id: String,
+    pub body: String,
+    /// A reply to a thread. It stays on GitHub as it is.
+    pub reply: bool,
+}
+
+/// One change that a sync makes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SyncOp {
+    /// The draft has no comment on GitHub: add one.
+    Add { draft: i64, c: Inline },
+    /// The text of the draft changed: edit its comment.
+    Edit { draft: i64, gh_id: String, c: Inline },
+    /// The draft moved to other lines: delete its comment and add a new one.
+    Move { draft: i64, gh_id: String, c: Inline },
+    /// You edited the comment on the website, and the draft did not change since
+    /// the last sync: the draft takes the new text.
+    Pull { draft: i64, body: String, c: Inline },
+    /// Delete a comment: its draft left the plan (`draft`), or you deleted the draft.
+    Drop { draft: Option<i64>, gh_id: String },
+    /// The draft's comment is gone from GitHub: forget its id.
+    Forget { draft: i64 },
+    /// A deleted draft's comment is gone from GitHub already.
+    Unmark { gh_id: String },
+    /// A comment that no draft has, written on the website: it becomes a draft.
+    Import { gh_id: String },
+}
+
+/// The place of a comment, as it went up: path, side, first and last line.
+fn place(c: &Inline) -> String {
+    format!("{}|{}|{}|{}", c.path, c.side, c.start_line.unwrap_or(c.line), c.line)
+}
+
+/// What went up for a comment: its place, then its text.
+pub fn sig(c: &Inline) -> String {
+    format!("{}\n{}", place(c), c.text)
+}
+
+/// The text of a comment as GitHub keeps it, to compare: GitHub can turn line ends
+/// into CRLF and keeps no spaces at the ends.
+fn norm(body: &str) -> String {
+    body.replace("\r\n", "\n").trim().to_owned()
+}
+
+/// The changes that make the pending review match the plan. `sync` is the GitHub side
+/// of each draft, `comments` the pending review on GitHub, `gone` the comments of
+/// deleted drafts. Pure: the hub runs the changes in this order.
+pub fn sync_ops(p: &Plan, sync: &[crate::store::DraftSync], comments: &[GhComment], gone: &[String]) -> Vec<SyncOp> {
+    use std::collections::{HashMap, HashSet};
+    let live: HashMap<&str, &str> = comments
+        .iter()
+        .filter(|c| !c.reply)
+        .map(|c| (c.id.as_str(), c.body.as_str()))
+        .collect();
+    let inline: HashMap<i64, &Inline> = p.inline.iter().map(|c| (c.draft, c)).collect();
+    let (mut drops, mut moves, mut edits, mut adds, mut rest) = (vec![], vec![], vec![], vec![], vec![]);
+    let mut claimed: HashSet<&str> = HashSet::new();
+    for d in sync {
+        // Two drafts with one comment id cannot be: the second has none.
+        let gh = d.gh_id.as_deref().filter(|g| claimed.insert(g));
+        let on = gh.filter(|g| live.contains_key(g));
+        match (inline.get(&d.id), on) {
+            (Some(c), Some(g)) => {
+                let (was_place, was_text) = d.gh_sig.as_deref().and_then(|x| x.split_once('\n')).unwrap_or(("", ""));
+                let body = live[g];
+                if was_place != place(c) {
+                    moves.push(SyncOp::Move { draft: d.id, gh_id: g.to_owned(), c: (*c).clone() });
+                } else if norm(body) == norm(&c.text) {
+                    if d.gh_sig.as_deref() != Some(sig(c).as_str()) {
+                        // The same text, and an old record of it: only the record changes.
+                        edits.push(SyncOp::Pull { draft: d.id, body: c.text.clone(), c: (*c).clone() });
+                    }
+                } else if norm(was_text) == norm(&c.text) {
+                    edits.push(SyncOp::Pull { draft: d.id, body: norm(body), c: (*c).clone() });
+                } else {
+                    edits.push(SyncOp::Edit { draft: d.id, gh_id: g.to_owned(), c: (*c).clone() });
+                }
+            }
+            (Some(c), None) => adds.push(SyncOp::Add { draft: d.id, c: (*c).clone() }),
+            (None, Some(g)) => drops.push(SyncOp::Drop { draft: Some(d.id), gh_id: g.to_owned() }),
+            (None, None) => {
+                if d.gh_id.is_some() {
+                    rest.push(SyncOp::Forget { draft: d.id });
+                }
+            }
+        }
+    }
+    let gone: HashSet<&str> = gone.iter().map(String::as_str).collect();
+    for c in comments.iter().filter(|c| !c.reply && !claimed.contains(c.id.as_str())) {
+        if gone.contains(c.id.as_str()) {
+            drops.push(SyncOp::Drop { draft: None, gh_id: c.id.clone() });
+        } else {
+            rest.push(SyncOp::Import { gh_id: c.id.clone() });
+        }
+    }
+    for g in gone.iter().filter(|g| !live.contains_key(*g)) {
+        rest.push(SyncOp::Unmark { gh_id: (*g).to_owned() });
+    }
+    let mut ops = drops;
+    ops.extend(moves);
+    ops.extend(edits);
+    ops.extend(adds);
+    ops.extend(rest);
+    ops
 }
 
 #[cfg(test)]
@@ -829,5 +950,295 @@ Binary files /dev/null and b/img.png differ
         let b = plan(&model(), &gh, &[d], true);
         assert_eq!(a.token(), a.clone().token());
         assert_ne!(a.token(), b.token());
+    }
+
+    // ---------- the sync planner ----------
+
+    use crate::store::DraftSync;
+    use std::collections::BTreeMap;
+
+    fn inl(draft: i64, path: &str, line: u32, text: &str) -> Inline {
+        Inline { draft, path: path.into(), side: "RIGHT".into(), line, start_line: None, text: text.into() }
+    }
+
+    fn plan_of(inline: Vec<Inline>) -> Plan {
+        Plan { head: "h".into(), inline, outside: vec![], errors: vec![], stuck: vec![] }
+    }
+
+    fn ds(id: i64, gh: Option<&str>, sig: Option<String>) -> DraftSync {
+        DraftSync { id, gh_id: gh.map(str::to_owned), gh_sig: sig, gh_error: None }
+    }
+
+    fn com(id: &str, body: &str) -> GhComment {
+        GhComment { id: id.into(), body: body.into(), reply: false }
+    }
+
+    #[test]
+    fn a_new_draft_adds_a_comment_and_a_synced_one_does_nothing() {
+        let a = inl(1, "a.rs", 3, "nit");
+        let b = inl(2, "a.rs", 9, "why?");
+        let p = plan_of(vec![a.clone(), b.clone()]);
+        let ops = sync_ops(&p, &[ds(1, Some("C1"), Some(sig(&a))), ds(2, None, None)], &[com("C1", "nit")], &[]);
+        assert_eq!(ops, vec![SyncOp::Add { draft: 2, c: b }]);
+    }
+
+    #[test]
+    fn an_edit_a_move_and_a_draft_that_left_the_plan() {
+        let a = inl(1, "a.rs", 3, "nit: new text");
+        let b = inl(2, "a.rs", 12, "moved");
+        let p = plan_of(vec![a.clone(), b.clone()]);
+        let sync = [
+            ds(1, Some("C1"), Some(sig(&inl(1, "a.rs", 3, "nit")))),
+            ds(2, Some("C2"), Some(sig(&inl(2, "a.rs", 9, "moved")))),
+            ds(3, Some("C3"), Some("x\ny".into())),
+        ];
+        let ops = sync_ops(&p, &sync, &[com("C1", "nit"), com("C2", "moved"), com("C3", "stale one")], &[]);
+        assert_eq!(
+            ops,
+            vec![
+                SyncOp::Drop { draft: Some(3), gh_id: "C3".into() },
+                SyncOp::Move { draft: 2, gh_id: "C2".into(), c: b },
+                SyncOp::Edit { draft: 1, gh_id: "C1".into(), c: a },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_website_edit_comes_back_and_a_website_comment_becomes_a_draft() {
+        let a = inl(1, "a.rs", 3, "nit");
+        let p = plan_of(vec![a.clone()]);
+        let sync = [ds(1, Some("C1"), Some(sig(&a)))];
+        let comments = [com("C1", "nit, and more\r\n"), com("C9", "from the site"), GhComment { reply: true, ..com("C8", "a reply") }];
+        let ops = sync_ops(&p, &sync, &comments, &["C7".into()]);
+        assert_eq!(
+            ops,
+            vec![
+                SyncOp::Pull { draft: 1, body: "nit, and more".into(), c: a },
+                SyncOp::Import { gh_id: "C9".into() },
+                SyncOp::Unmark { gh_id: "C7".into() },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_deleted_draft_deletes_its_comment_and_a_lost_comment_goes_up_again() {
+        let a = inl(1, "a.rs", 3, "nit");
+        let p = plan_of(vec![a.clone()]);
+        let ops = sync_ops(&p, &[ds(1, Some("C1"), Some(sig(&a))), ds(2, Some("C5"), None)], &[com("C2", "deleted draft")], &["C2".into()]);
+        assert_eq!(
+            ops,
+            vec![
+                SyncOp::Drop { draft: None, gh_id: "C2".into() },
+                SyncOp::Add { draft: 1, c: a },
+                SyncOp::Forget { draft: 2 },
+            ]
+        );
+    }
+
+    /// A small random number source, the same for each seed.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+    }
+
+    /// GitHub in the random test: a comment's body, its place, and whether it replies.
+    #[derive(Clone)]
+    struct Gh {
+        body: String,
+        at: Inline,
+        reply: bool,
+    }
+
+    #[derive(Clone)]
+    struct Local {
+        id: i64,
+        /// The place when the plan puts it on a line.
+        at: Option<Inline>,
+        text: String,
+        gh: Option<String>,
+        sig: Option<String>,
+    }
+
+    struct World {
+        drafts: Vec<Local>,
+        gh: BTreeMap<String, Gh>,
+        gone: Vec<String>,
+        next: u64,
+    }
+
+    impl World {
+        fn add(&mut self, c: &Inline) -> String {
+            self.next += 1;
+            let id = format!("N{}", self.next);
+            self.gh.insert(id.clone(), Gh { body: c.text.clone(), at: c.clone(), reply: false });
+            id
+        }
+
+        fn draft(&mut self, id: i64) -> &mut Local {
+            self.drafts.iter_mut().find(|d| d.id == id).unwrap()
+        }
+
+        /// Runs the changes as the hub does.
+        fn run(&mut self, ops: &[SyncOp]) {
+            for op in ops {
+                match op {
+                    SyncOp::Add { draft, c } => {
+                        let id = self.add(c);
+                        let d = self.draft(*draft);
+                        (d.gh, d.sig) = (Some(id), Some(sig(c)));
+                    }
+                    SyncOp::Edit { draft, gh_id, c } => {
+                        self.gh.get_mut(gh_id).unwrap().body = c.text.clone();
+                        self.draft(*draft).sig = Some(sig(c));
+                    }
+                    SyncOp::Move { draft, gh_id, c } => {
+                        assert!(!self.gh.remove(gh_id).unwrap().reply);
+                        let id = self.add(c);
+                        let d = self.draft(*draft);
+                        (d.gh, d.sig) = (Some(id), Some(sig(c)));
+                    }
+                    SyncOp::Pull { draft, body, c } => {
+                        let d = self.draft(*draft);
+                        d.text = body.clone();
+                        d.sig = Some(sig(&Inline { text: body.clone(), ..c.clone() }));
+                    }
+                    SyncOp::Drop { draft, gh_id } => {
+                        assert!(!self.gh.remove(gh_id).unwrap().reply, "a reply was deleted");
+                        match draft {
+                            Some(id) => {
+                                let d = self.draft(*id);
+                                assert!(d.at.is_none(), "a comment of the plan was deleted");
+                                (d.gh, d.sig) = (None, None);
+                            }
+                            None => {
+                                assert!(self.gone.contains(gh_id), "a comment from the website was deleted");
+                                self.gone.retain(|g| g != gh_id);
+                            }
+                        }
+                    }
+                    SyncOp::Forget { draft } => {
+                        let d = self.draft(*draft);
+                        (d.gh, d.sig) = (None, None);
+                    }
+                    SyncOp::Unmark { gh_id } => self.gone.retain(|g| g != gh_id),
+                    SyncOp::Import { gh_id } => {
+                        let g = self.gh[gh_id].clone();
+                        let id = self.drafts.iter().map(|d| d.id).max().unwrap_or(0) + 1;
+                        let at = Inline { draft: id, text: norm(&g.body), ..g.at };
+                        self.drafts.push(Local { id, sig: Some(sig(&at)), text: at.text.clone(), at: Some(at), gh: Some(gh_id.clone()) });
+                    }
+                }
+            }
+        }
+
+        fn state(&self) -> (Plan, Vec<DraftSync>, Vec<GhComment>) {
+            let p = plan_of(
+                self.drafts
+                    .iter()
+                    .filter_map(|d| d.at.clone().map(|a| Inline { draft: d.id, text: d.text.trim().to_owned(), ..a }))
+                    .collect(),
+            );
+            let sync = self.drafts.iter().map(|d| DraftSync { id: d.id, gh_id: d.gh.clone(), gh_sig: d.sig.clone(), gh_error: None }).collect();
+            let comments = self.gh.iter().map(|(id, g)| GhComment { id: id.clone(), body: g.body.clone(), reply: g.reply }).collect();
+            (p, sync, comments)
+        }
+
+        fn ops(&self) -> Vec<SyncOp> {
+            let (p, sync, comments) = self.state();
+            sync_ops(&p, &sync, &comments, &self.gone)
+        }
+    }
+
+    fn place_at(r: &mut Rng, id: i64, text: &str) -> Inline {
+        let line = 1 + r.below(6) as u32;
+        let range = r.below(3) == 0 && line > 1;
+        Inline {
+            draft: id,
+            path: ["a.rs", "b.rs"][r.below(2) as usize].into(),
+            side: ["RIGHT", "LEFT"][r.below(2) as usize].into(),
+            line,
+            start_line: range.then(|| line - 1),
+            text: text.into(),
+        }
+    }
+
+    /// Random drafts, comments and deleted drafts. One sync makes GitHub match the plan
+    /// and loses nothing: a second sync has nothing to do, every draft of the plan has
+    /// its comment with its text and place, no reply and no comment from the website
+    /// is deleted, and the text of each draft is kept (or is the website's edit).
+    #[test]
+    fn random_syncs_match_the_plan_and_lose_nothing() {
+        let texts = ["nit", "why?", "use safe_sub", "ok", " spaced "];
+        for seed in 1..3000u64 {
+            let mut r = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+            let mut w = World { drafts: vec![], gh: BTreeMap::new(), gone: vec![], next: 0 };
+            for id in 1..=(r.below(6) as i64) {
+                let text = texts[r.below(texts.len() as u64) as usize].to_owned();
+                let at = (r.below(4) != 0).then(|| place_at(&mut r, id, &text));
+                let mut d = Local { id, at: at.clone(), text: text.clone(), gh: None, sig: None };
+                match r.below(4) {
+                    // On GitHub as it went up, or with an older text or place there.
+                    0 | 1 => {
+                        let k = r.below(5) as usize;
+                        let was = match (r.below(3), &at) {
+                            (0, _) | (_, None) => place_at(&mut r, id, texts[k]),
+                            (_, Some(a)) => a.clone(),
+                        };
+                        let gid = format!("C{id}");
+                        let body = if r.below(4) == 0 { "edited on the site".to_owned() } else { was.text.clone() };
+                        w.gh.insert(gid.clone(), Gh { body, at: was.clone(), reply: false });
+                        (d.gh, d.sig) = (Some(gid), Some(sig(&was)));
+                    }
+                    // A comment id that GitHub lost.
+                    2 => (d.gh, d.sig) = (Some(format!("L{id}")), Some("x\ny".into())),
+                    _ => {}
+                }
+                w.drafts.push(d);
+            }
+            for k in 0..r.below(3) {
+                let at = place_at(&mut r, 0, "site");
+                let reply = r.below(2) == 0;
+                w.gh.insert(format!("W{k}"), Gh { body: "from the site".into(), at, reply });
+            }
+            for k in 0..r.below(3) {
+                let id = format!("G{k}");
+                if r.below(2) == 0 {
+                    let at = place_at(&mut r, 0, "gone");
+                    w.gh.insert(id.clone(), Gh { body: "deleted draft".into(), at, reply: false });
+                }
+                w.gone.push(id);
+            }
+            let kept: Vec<String> = w.gh.keys().filter(|k| k.starts_with('W')).cloned().collect();
+            let before: Vec<(i64, String, Option<String>)> = w
+                .drafts
+                .iter()
+                .map(|d| (d.id, d.text.clone(), d.gh.as_ref().and_then(|g| w.gh.get(g)).map(|g| norm(&g.body))))
+                .collect();
+            let ops = w.ops();
+            w.run(&ops);
+            assert_eq!(w.ops(), vec![], "seed {seed}: a second sync has work");
+            let (p, _, _) = w.state();
+            for c in &p.inline {
+                let d = w.drafts.iter().find(|d| d.id == c.draft).unwrap();
+                let g = &w.gh[d.gh.as_ref().unwrap()];
+                assert_eq!((norm(&g.body), place(&g.at)), (norm(&c.text), place(c)), "seed {seed}");
+            }
+            for k in &kept {
+                assert!(w.gh.contains_key(k), "seed {seed}: {k} was deleted");
+            }
+            for (id, text, body) in before {
+                let d = w.drafts.iter().find(|d| d.id == id).unwrap();
+                assert!(d.text == text || Some(&d.text) == body.as_ref(), "seed {seed}: the text of draft {id} was lost");
+            }
+            assert!(w.gone.is_empty(), "seed {seed}");
+        }
     }
 }

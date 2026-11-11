@@ -211,6 +211,11 @@ pub struct Hub {
     /// True while the nvim poll runs, so two never overlap.
     nvim_polling: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) me: Weak<Hub>,
+    /// GitHub for a send and for the pending review (SPEC 11.8.1). A test swaps it.
+    pub(crate) gh: RwLock<Arc<dyn crate::gh::Gh>>,
+    /// The pending review sync runs. Off with `SB_HOME` set (tests), until a test
+    /// gives a fake GitHub: a test never writes to GitHub.
+    pub(crate) gh_sync: std::sync::atomic::AtomicBool,
     /// The lock on `hub.lock`. It lives as long as the hub.
     _lock: std::fs::File,
 }
@@ -325,6 +330,8 @@ impl Hub {
             polling: std::sync::atomic::AtomicBool::new(false),
             nvim_polling: Arc::default(),
             me: me.clone(),
+            gh: RwLock::new(Arc::new(crate::gh::RealGh)),
+            gh_sync: std::sync::atomic::AtomicBool::new(std::env::var_os("SB_HOME").is_none()),
             _lock: lock,
         });
         hub.keep_session()?;

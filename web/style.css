@@ -547,6 +547,8 @@ tr.gap .hidden { color: var(--muted); font-size: 11px; }
 .drafts { display: grid; gap: 6px; }
 .draft { font: 12px/1.45 var(--body); padding: 6px 8px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); display: grid; gap: 3px; }
 .draft .dloc { font: 600 11px/1.3 var(--mono); color: var(--soft); overflow-wrap: anywhere; }
+.draft .dsync { font-weight: 400; font-size: 10px; color: var(--soft); margin-left: 4px; }
+.draft .dsync.error { color: var(--error); }
 .draft .dedit { outline: none; white-space: pre-wrap; }
 .draft.long { box-shadow: inset 3px 0 0 var(--needs); }
 .draft i { font-style: normal; color: var(--claude-fg); font-weight: 500; }

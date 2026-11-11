@@ -93,6 +93,16 @@ const SCHEMA: &[&str] = &[
     // Version 12: the base you chose for a local review (SPEC 11.11). The choice for
     // a whole repo is a setting, `review.base:<repo root>`.
     "ALTER TABLE review ADD COLUMN base_pick TEXT;",
+    // Version 13: drafts go to GitHub as a pending review as you write them (SPEC
+    // 11.8.1). A draft keeps its GitHub comment, what went up and the last error. A
+    // review keeps the pending review the app made or took over, and its commit.
+    // `gh_gone` keeps the comments of the drafts you deleted, for the next sync.
+    "ALTER TABLE draft ADD COLUMN gh_id TEXT;
+     ALTER TABLE draft ADD COLUMN gh_sig TEXT;
+     ALTER TABLE draft ADD COLUMN gh_error TEXT;
+     ALTER TABLE review ADD COLUMN gh_pending TEXT;
+     ALTER TABLE review ADD COLUMN gh_pending_head TEXT;
+     CREATE TABLE gh_gone (review TEXT NOT NULL, gh_id TEXT NOT NULL, PRIMARY KEY (review, gh_id));",
 ];
 
 pub struct Store {
@@ -225,6 +235,18 @@ pub struct DraftRow {
     pub before: Option<String>,
     #[serde(default)]
     pub after: Option<String>,
+}
+
+/// The GitHub side of a draft (SPEC 11.8.1).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct DraftSync {
+    pub id: i64,
+    /// The node id of its comment in the pending review.
+    pub gh_id: Option<String>,
+    /// The place and text that went up: `post::sig`.
+    pub gh_sig: Option<String>,
+    /// Why the last try to put it on GitHub failed.
+    pub gh_error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -647,8 +669,91 @@ impl Store {
         Ok(())
     }
 
+    /// Deletes a draft. A draft with a comment on GitHub leaves its id in `gh_gone`,
+    /// so the next sync deletes the comment too.
     pub fn delete_draft(&self, id: i64) -> R<()> {
-        self.db.execute("DELETE FROM draft WHERE id = ?1", [id])?;
+        let tx = self.db.unchecked_transaction()?;
+        tx.execute(
+            "INSERT OR IGNORE INTO gh_gone (review, gh_id) SELECT review, gh_id FROM draft WHERE id = ?1 AND gh_id IS NOT NULL",
+            [id],
+        )?;
+        tx.execute("DELETE FROM draft WHERE id = ?1", [id])?;
+        tx.commit()
+    }
+
+    // ---- the pending review on GitHub (SPEC 11.8.1) ----
+
+    pub fn draft_exists(&self, id: i64) -> R<bool> {
+        Ok(self.db.query_row("SELECT 1 FROM draft WHERE id = ?1", [id], |_| Ok(())).optional()?.is_some())
+    }
+
+    pub fn draft_sync(&self, review: &str) -> R<Vec<DraftSync>> {
+        let mut s = self
+            .db
+            .prepare("SELECT id, gh_id, gh_sig, gh_error FROM draft WHERE review = ?1 ORDER BY id")?;
+        let rows = s.query_map([review], |r| {
+            Ok(DraftSync {
+                id: r.get(0)?,
+                gh_id: r.get(1)?,
+                gh_sig: r.get(2)?,
+                gh_error: r.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// The comment of a draft on GitHub and what went up, or none. Clears the error.
+    pub fn set_draft_gh(&self, id: i64, gh_id: Option<&str>, sig: Option<&str>) -> R<()> {
+        self.db.execute(
+            "UPDATE draft SET gh_id = ?2, gh_sig = ?3, gh_error = NULL WHERE id = ?1",
+            params![id, gh_id, sig],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_draft_error(&self, id: i64, err: Option<&str>) -> R<()> {
+        self.db.execute("UPDATE draft SET gh_error = ?2 WHERE id = ?1", params![id, err])?;
+        Ok(())
+    }
+
+    /// The pending review that the app made or took over, and its commit.
+    pub fn gh_pending(&self, review: &str) -> R<(Option<String>, Option<String>)> {
+        Ok(self
+            .db
+            .query_row(
+                "SELECT gh_pending, gh_pending_head FROM review WHERE id = ?1",
+                [review],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+            .unwrap_or((None, None)))
+    }
+
+    /// Sets the pending review. With none, every draft of the review loses its
+    /// comment id and `gh_gone` empties: the comments went with the review.
+    pub fn set_gh_pending(&self, review: &str, pending: Option<(&str, &str)>) -> R<()> {
+        let tx = self.db.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE review SET gh_pending = ?2, gh_pending_head = ?3 WHERE id = ?1",
+            params![review, pending.map(|p| p.0), pending.map(|p| p.1)],
+        )?;
+        if pending.is_none() {
+            tx.execute("UPDATE draft SET gh_id = NULL, gh_sig = NULL WHERE review = ?1", [review])?;
+            tx.execute("DELETE FROM gh_gone WHERE review = ?1", [review])?;
+        }
+        tx.commit()
+    }
+
+    /// The comments of deleted drafts that are still on GitHub.
+    pub fn gh_gone(&self, review: &str) -> R<Vec<String>> {
+        let mut s = self.db.prepare("SELECT gh_id FROM gh_gone WHERE review = ?1 ORDER BY gh_id")?;
+        let rows = s.query_map([review], |r| r.get(0))?;
+        rows.collect()
+    }
+
+    pub fn drop_gh_gone(&self, review: &str, gh_id: &str) -> R<()> {
+        self.db
+            .execute("DELETE FROM gh_gone WHERE review = ?1 AND gh_id = ?2", params![review, gh_id])?;
         Ok(())
     }
 
@@ -1032,7 +1137,7 @@ mod tests {
         db.execute_batch(&format!("{}; PRAGMA user_version = 11;", SCHEMA[..11].join(";"))).unwrap();
         db.execute("INSERT INTO review (id, url, repo, number, title, head, base, tree, opened, kind, local_range) VALUES ('r1', '', 'lighthouse', 0, 't', 'h', 'b', '/w', 1, 'local', 'all')", []).unwrap();
         let s = Store::init(db).unwrap();
-        assert_eq!(s.version().unwrap(), 12);
+        assert_eq!(s.version().unwrap(), SCHEMA.len());
         assert_eq!(s.review_base("r1").unwrap(), None);
         assert_eq!(s.review_range("r1").unwrap().as_deref(), Some("all"));
         s.set_review_base("r1", Some("upstream/unstable")).unwrap();
@@ -1046,6 +1151,56 @@ mod tests {
         assert_eq!(s.repo_base("/c/other").unwrap(), None);
         s.set_repo_base("/c/lighthouse", None).unwrap();
         assert_eq!(s.repo_base("/c/lighthouse").unwrap(), None);
+    }
+
+    #[test]
+    fn version_12_drafts_get_no_github_comment() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(&format!("{}; PRAGMA user_version = 12;", SCHEMA[..12].join(";"))).unwrap();
+        db.execute("INSERT INTO review (id, url, repo, number, title, head, base, tree, opened) VALUES ('r1', 'u', 'o/r', 1, 't', 'h', 'b', '/w', 1)", []).unwrap();
+        db.execute("INSERT INTO draft (review, path, side, line, text, head) VALUES ('r1', 'a.rs', 'new', 3, 'nit', 'h')", []).unwrap();
+        let s = Store::init(db).unwrap();
+        assert_eq!(s.version().unwrap(), 13);
+        let d = &s.draft_sync("r1").unwrap()[0];
+        assert_eq!((d.gh_id.as_deref(), d.gh_sig.as_deref(), d.gh_error.as_deref()), (None, None, None));
+        assert_eq!(s.gh_pending("r1").unwrap(), (None, None));
+        assert!(s.gh_gone("r1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_deleted_synced_draft_leaves_its_comment_for_the_sync() {
+        let s = Store::memory().unwrap();
+        let draft = DraftRow {
+            id: 0,
+            path: Some("a.rs".into()),
+            side: Some("new".into()),
+            line: Some(1),
+            start_line: None,
+            text: "nit".into(),
+            agent: false,
+            head: Some("h".into()),
+            line_text: Some("x".into()),
+            stale: false,
+            before: None,
+            after: None,
+        };
+        s.db.execute("INSERT INTO review (id, url, repo, number, title, head, base, tree, opened) VALUES ('r1', 'u', 'o/r', 1, 't', 'h', 'b', '/w', 1)", []).unwrap();
+        let synced = s.add_draft("r1", &draft).unwrap();
+        let local = s.add_draft("r1", &draft).unwrap();
+        s.set_draft_gh(synced, Some("C1"), Some("sig")).unwrap();
+        s.set_draft_error(local, Some("refused")).unwrap();
+        s.delete_draft(synced).unwrap();
+        s.delete_draft(local).unwrap();
+        assert_eq!(s.gh_gone("r1").unwrap(), ["C1"]);
+        s.drop_gh_gone("r1", "C1").unwrap();
+        assert!(s.gh_gone("r1").unwrap().is_empty());
+        // A new pending review: the old ids go.
+        let d = s.add_draft("r1", &draft).unwrap();
+        s.set_draft_gh(d, Some("C2"), Some("sig")).unwrap();
+        s.set_gh_pending("r1", Some(("PR1", "h"))).unwrap();
+        assert_eq!(s.gh_pending("r1").unwrap(), (Some("PR1".into()), Some("h".into())));
+        s.set_gh_pending("r1", None).unwrap();
+        assert_eq!(s.draft_sync("r1").unwrap()[0].gh_id, None);
     }
 
     #[test]

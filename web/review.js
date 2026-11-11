@@ -942,12 +942,19 @@
     const sent = (r.posted || []).map((p) => p.event === "AGENT"
       ? `<div class="sent">Sent to the agent: ${plural(p.comments, "comment")} on ${esc(short(p.head))}</div>`
       : `<div class="sent">Sent: ${esc(EVENT_NAME[p.event] || p.event)}, ${plural(p.comments, "line comment")} <a href="${esc(p.url)}">open on GitHub</a></div>`).join("");
+    // Where each comment is on GitHub (SPEC 11.8.1): a small word after its place.
+    const sync = new Map((r.sync?.drafts || []).map((x) => [x.id, x]));
+    const SYNC = { synced: "on GitHub", sending: "sending", local: "here only", error: "not on GitHub" };
+    const syncTag = (d) => {
+      const x = sync.get(d.id);
+      return x ? ` <span class="dsync ${x.state}"${x.note ? ` title="${esc(x.note)}"` : ""}>${SYNC[x.state] || x.state}</span>` : "";
+    };
     const rows = r.drafts.map((d) => {
       const lines = d.start_line ? `${d.start_line}-${d.line}` : d.line;
       const loc = d.path ? `${d.path}${d.line ? ":" + lines : ""}${d.side === "old" ? " (old)" : ""}` : "";
       const long = d.text.split("\n").length > 2 || d.text.length > 240;
       const stale = d.stale ? `<em class="stalenote">The code changed after you wrote this. Place it again or delete it.</em><span class="stalebtns"><button type="button" class="btn sm" data-place="${d.id}">Place again</button><button type="button" class="btn sm ghost" data-drop="${d.id}">Delete</button></span>` : "";
-      return `<div class="draft${long ? " long" : ""}${d.agent ? " agent" : ""}${d.stale ? " stale" : ""}" data-d="${d.id}"><span class="dloc">${esc(loc)}${d.agent ? ' <i>agent</i>' : ""}</span>${stale}<span class="dedit" contenteditable="true" data-dedit="${d.id}">${esc(d.text)}</span></div>`;
+      return `<div class="draft${long ? " long" : ""}${d.agent ? " agent" : ""}${d.stale ? " stale" : ""}" data-d="${d.id}"><span class="dloc">${esc(loc)}${d.agent ? ' <i>agent</i>' : ""}${syncTag(d)}</span>${stale}<span class="dedit" contenteditable="true" data-dedit="${d.id}">${esc(d.text)}</span></div>`;
     }).join("");
     return `<div class="isec"><div class="isech">Comments · ${n}</div><div class="drafts" id="rdrafts">${sent}${rows || (sent ? "" : '<p class="inone">No comments yet. Hover a line and click +.</p>')}</div></div>`;
   }
@@ -1681,6 +1688,7 @@
     const counts = SEVS.map((v) => [v, live.filter((x) => x.severity === v).length]).filter(([, c]) => c).map(([v, c]) => `${c} ${SEV[v]}`);
     const next = (r.round || 1) + 1;
     const alert = r.status === "error" ? { text: r.error || "The guide failed.", buttons: [{ label: "Retry", act: "retry" }] }
+      : r.sync?.blocked ? { text: r.sync.blocked, buttons: [] }
       : r.new_head && r.new_head === r.empty_round ? { text: `New commits: ${short(r.head)} → ${short(r.new_head)}, but no file changed since this round: the author rebased or merged the base branch.`, buttons: [
         { label: "Update guide", act: "update", title: "Move this review to the new head" }] }
       : r.new_head ? { text: `New commits: ${short(r.head)} → ${short(r.new_head)}`, buttons: [
@@ -1700,6 +1708,7 @@
         ["Coverage", coverageText(r)],
         ["Claude", t ? [VERDICT[t.verdict] || t.verdict, ...counts].join(" · ") : null],
         ["Comments", n ? `${n} pending${stale ? ` · ${stale} to place` : ""}` : "none yet"],
+        ["Pending on GitHub", r.sync && (r.sync.pending || n) ? `${plural(r.sync.pending, "comment")}${r.sync.running ? " · sending" : ""}` : null],
         ["Not fetched", r.status === "ready" ? r.error : null],
         ["State", busy ? r.status : null],
         ["Folder", window.SB.home(r.tree), { mono: true }],
