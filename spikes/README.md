@@ -435,3 +435,15 @@ Of the 1,200 threads that L4r at 40 shows over 30 PRs, 24 are a match (2%).
 Line lookups fail; text lookup works, barely. No lookup keyed on lines finds most repeat concerns: at best 19 of 40 (L2s or L3, 45 threads). Per hunk, nothing reaches most of them under 3,000 words. BM25 per changed file over all past threads of the repo (L4r), 40 threads per PR round robin, finds 25 of 40 (63%) in about 2,900 words: 2.5 times the fixed block at a similar size. That meets the bar, just.
 
 The ceiling stays low: 25 found targets are 17% of all 143. If a targeted test runs, use L4r per file with 40 threads, and score only on the 40 repeat targets, A against B, 3 runs each. If B does not catch clearly more of those, the idea is dead for this repo.
+
+## Repo knowledge, habits test (`knowledge/habits.py`)
+
+Question: does a short per-repo list of maintainer review habits make Claude's review of a new PR better? The repeat concerns of the lookup test are habits ("don't panic here", "no needless clone") raised in other places and other words, so a list of habits might carry them where a list of threads did not.
+
+### The bar (written before any result)
+
+C is the A review plus the habits list. C passes only if all of these hold:
+- head-to-head: C's wins exceed its losses, with a two-sided sign test p < 0.05;
+- useful notes per run go up;
+- wrong notes per run do not go up;
+- recall by concern (all 143 targets) does not go down.
