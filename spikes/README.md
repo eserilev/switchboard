@@ -159,3 +159,127 @@ Claude runs: 35 of the cap of 60. 5 for labels (10 threads each), 24 reviews, 6 
 ### Verdict
 
 Not yet clear. B was never worse and got one more concern hit, but that is within noise on 12 PRs and 34 targets. Before the bigger plan, a second phase 0 round should: score against weighted threads that raise a problem (or let the review give all kinds of notes), use the PR's last commit before the first review instead of its first commit, widen place matching, run each case twice, and use 30 or more PRs. acted_on needs a better signal than a line window before it gets 3 times the weight.
+
+## Repo knowledge, phase 0 round 2 (`knowledge/`)
+
+Round 1 was too small and its test too strict. Round 2 fixes the test, not the idea. Run on 2026-11-16, from commit cf0e61b, on sigp/lighthouse. Data is in `~/.cache/sb-know-spike/`, not in git.
+
+New scripts: `mine.py backfill 3` (3 years, resumable), `actedon2.py` (a second `acted_on` rule), `replay2.py` (pick, classify, run, judge, score, check, leaks).
+
+### Counts
+
+- 3 years of merges (2023-11-17 to 2026-11-16): 79 slices of 14 days, 245 search pages, 2,090 merged PRs.
+- 941 PRs with at least 1 thread (45%), 5,229 threads (5,196 line, 33 file), 9,428 comments.
+- Mining took 275 s, 3 slices at a time. Fetching PR heads and 100 missing commits: about 4 min, none lost. Old `acted_on` and weights: 3 min. New rule: 22 min.
+- Weight 0: 451 by the PR's author, 7 bot, 3 trivial, 1 hidden. 4,767 weighted (91%).
+- 17 threads (14 in 2026) start with "🤖": review text made by an AI tool, posted from a person's account. None is a target.
+
+### acted_on
+
+Against the 50 labels of round 1. These labels were made by sonnet, not by a person, so this is agreement, not accuracy. 31 of the 50 labels are "yes", so always saying yes agrees 62%.
+
+| rule | yes/yes | yes/no | no/yes | no/no | agree |
+|---|---|---|---|---|---|
+| old: ±3 lines, net diff to the PR head | 25 | 10 | 6 | 9 | 68% |
+| ±3 lines, only plain PR commits after the comment | 25 | 10 | 6 | 9 | 68% |
+| ±15 lines, same | 28 | 11 | 3 | 8 | 72% |
+| the thread's function, same | 28 | 12 | 3 | 7 | 70% |
+| new: function, or the author said "done"/"fixed"/..., or a suggestion landed | 28 | 13 | 3 | 6 | 68% |
+| only "done" words or a suggestion | 6 | 4 | 25 | 15 | 42% |
+
+- Leaving out merges from the base and commits from before the comment changed nothing: base merges were not the error.
+- A wider window finds more true yes, and as many false yes. The new rule says yes on 83% of all threads, so it barely sorts anything.
+- `knowledge/labels_round2.csv`: 20 new threads for a hand label (18 of 20 are "yes" by the new rule). The "human" column is empty.
+
+### Replay setup
+
+- 30 newest PRs with at least 2 weighted target threads. 3 skipped for a diff over 120 KB (#10418, #9729, #10036).
+- The snapshot is the PR at its first review: the last commit with a commit time before the first review comment by someone other than the author. GitHub's `pushedDate` is null, so the commit time stands in. When a force push came after the review (3 PRs), the newest commit before the review in the history of that push's `beforeCommit`. Fallback to the first commit: 0 of 30. The snapshot is the first review comment's own commit in 28 of 30.
+- Targets: weighted human line threads (RIGHT side) whose range maps to the snapshot with the line tracker: 143. By original commit: 85 the snapshot itself, 3 before it, 55 later but on lines that were already there.
+- Sonnet marked 121 of 143 as "raises a problem or asks for a change"; the rest are praise, thanks or pure questions.
+- The review writes every kind of note, tagged bug, question, nit, docs or test. Default model, a temporary clone with only the base and the snapshot, tools Read, Grep and Glob, no web, no Bash, `--strict-mcp-config`, no settings.
+- B adds the top 30 past threads, fenced and marked as data: same file first, then same folder, then same crate; then weight; then the newest. Only PRs merged before this PR was created, and each comment before that too. The age in the weight is the age at that time.
+- B2 is B plus one line per thread: did the author change the code after it (the new rule). Run once on 13 PRs only, for budget.
+- Concern: one sonnet judge run per PR. It sees each target thread (up to 3 comments), its hunk, and every note on the same file from all runs of the PR, shuffled, with no run or condition name. It says which notes raise the same concern. Place: a note within 3 lines.
+
+### Replay result
+
+| measure | targets | A | B | B − A | 95% interval |
+|---|---|---|---|---|---|
+| concern, all | 143 | 32.9% | 36.4% | +3.5 | −2.8 to +11.0 |
+| place, all | 143 | 40.9% | 46.9% | +5.9 | +0.7 to +11.6 |
+| concern, problem only | 121 | 34.7% | 37.6% | +2.9 | −4.1 to +11.1 |
+| place, problem only | 121 | 40.1% | 45.9% | +5.8 | −1.1 to +13.2 |
+
+Recall is the mean of the 2 runs. The interval is a paired bootstrap over PRs (10,000 draws) of pooled recall.
+
+- B2 (one run, 13 PRs, 51 targets), by concern: A 31.4%, B 36.3%, B2 39.2%. Too small to read anything into.
+- Noise floor, the same condition run twice: A 35.7% and 30.1%; B 37.1% and 35.7%. Two runs of A differ by 5.6 points, more than B − A.
+- By PR: B better on 9, worse on 4, the same on 17.
+- The two biggest PRs (#9934 with 22 targets, #10015 with 14) swing it. Without them: A 33.6%, B 40.2%, interval −0.5 to +13.5.
+- The knowledge block was full in all 30 PRs: 30 past threads, all from the same file in 26 of them. 3 years is enough history for lighthouse.
+
+### Per PR and noise
+
+| PR | targets (problem) | past threads (file/dir/crate) | A place | A concern | B place | B concern | B2 concern | notes A | notes B |
+|---|---|---|---|---|---|---|---|---|---|
+| #10071 | 2 (2) | 30/0/0 | 0/0 | 1/2 | 1/0 | 2/1 | 2 | 9/14 | 12/9 |
+| #10396 | 2 (2) | 30/0/0 | 2/1 | 0/1 | 2/2 | 1/0 | 1 | 10/9 | 8/8 |
+| #10082 | 5 (5) | 30/0/0 | 3/1 | 2/0 | 3/2 | 2/2 | 2 | 9/11 | 11/11 |
+| #10038 | 11 (9) | 30/0/0 | 6/6 | 2/2 | 4/5 | 2/2 | 2 | 17/15 | 9/8 |
+| #9171 | 2 (1) | 30/0/0 | 2/2 | 2/2 | 2/2 | 2/2 | 2 | 14/14 | 15/14 |
+| #10407 | 2 (2) | 8/22/0 | 2/2 | 2/2 | 2/2 | 2/2 | 2 | 4/4 | 3/2 |
+| #10385 | 5 (5) | 30/0/0 | 1/0 | 0/0 | 1/0 | 0/0 | 0 | 11/8 | 7/11 |
+| #10352 | 2 (2) | 9/21/0 | 1/1 | 1/0 | 1/1 | 0/0 | 0 | 10/8 | 6/8 |
+| #10268 | 3 (1) | 30/0/0 | 2/2 | 1/1 | 2/2 | 1/1 | 1 | 12/10 | 12/10 |
+| #10162 | 7 (6) | 30/0/0 | 0/3 | 0/1 | 1/4 | 3/3 | 3 | 20/20 | 15/20 |
+| #10256 | 2 (2) | 30/0/0 | 0/0 | 1/1 | 0/1 | 1/1 | 1 | 14/13 | 14/15 |
+| #10122 | 3 (3) | 30/0/0 | 3/3 | 3/3 | 3/3 | 3/3 | 3 | 14/15 | 11/17 |
+| #10182 | 5 (5) | 30/0/0 | 1/1 | 1/1 | 1/1 | 1/0 | 1 | 12/10 | 16/15 |
+| #10198 | 4 (2) | 30/0/0 | 2/2 | 2/2 | 2/2 | 2/2 | | 14/20 | 17/17 |
+| #10236 | 2 (2) | 30/0/0 | 1/1 | 0/1 | 1/1 | 0/1 | | 15/17 | 11/13 |
+| #10207 | 3 (3) | 28/2/0 | 3/2 | 3/1 | 3/3 | 2/2 | | 16/12 | 12/13 |
+| #10183 | 2 (2) | 6/24/0 | 2/1 | 0/0 | 2/2 | 0/0 | | 16/14 | 14/12 |
+| #9799 | 7 (7) | 30/0/0 | 6/4 | 4/2 | 5/4 | 5/5 | | 16/12 | 16/13 |
+| #10160 | 3 (1) | 30/0/0 | 1/1 | 1/0 | 2/2 | 2/1 | | 17/15 | 14/15 |
+| #9846 | 3 (3) | 30/0/0 | 3/3 | 2/2 | 3/3 | 2/2 | | 9/10 | 8/11 |
+| #10165 | 2 (1) | 30/0/0 | 1/1 | 1/1 | 2/2 | 1/1 | | 11/12 | 13/14 |
+| #10015 | 14 (13) | 30/0/0 | 4/4 | 6/6 | 5/9 | 6/7 | | 20/20 | 19/19 |
+| #9934 | 22 (19) | 30/0/0 | 3/2 | 7/3 | 3/3 | 3/2 | | 23/22 | 18/19 |
+| #10106 | 3 (1) | 30/0/0 | 0/0 | 1/1 | 0/0 | 1/2 | | 14/13 | 13/15 |
+| #9675 | 5 (5) | 30/0/0 | 0/0 | 0/1 | 2/0 | 1/0 | | 14/13 | 14/8 |
+| #9959 | 2 (2) | 30/0/0 | 2/2 | 1/1 | 2/2 | 1/2 | | 8/8 | 9/9 |
+| #10130 | 5 (3) | 30/0/0 | 3/3 | 2/3 | 3/2 | 1/1 | | 12/14 | 11/10 |
+| #9878 | 5 (4) | 30/0/0 | 5/4 | 2/0 | 4/5 | 1/2 | | 19/20 | 13/18 |
+| #10100 | 7 (5) | 30/0/0 | 1/1 | 1/1 | 2/2 | 3/2 | | 11/11 | 15/17 |
+| #10114 | 3 (3) | 30/0/0 | 2/2 | 2/2 | 1/2 | 2/2 | | 18/12 | 15/13 |
+
+A cell with a slash is run 1/run 2.
+
+- Notes per run: A 13.4, B 12.6. B writes a few fewer questions (158 vs 178) and docs notes (107 vs 121); about as many bugs (105 vs 101) and nits (260 vs 255).
+- Notes that match no target: A 712 of 805 (88%), B 655 of 755 (87%). Most notes are not what the human reviewers said. Noise did not go up with B. The spec's "not useful" rating of these notes was not run (budget).
+- Leaks: 753 tool calls checked. 10 named a path outside the run's own clone. All 10 were the run's own temp folder typed wrong (`-T-sb-know…` for `-T/sb-know…`), and all 10 were refused. No read of the data, of later code, or of the web. The PR's title and body are the final ones and may mention later changes: a small leak we did not remove.
+- `knowledge/judge_check.csv`: 20 judge answers (10 "same", 10 "not same", the "not same" ones picked near the thread) for a hand check. The "human" column is empty, so the judge's agreement is not known yet.
+
+### Claude runs
+
+167 of the cap of 170, round 2 only (round 1 used 35): 4 classifier runs (sonnet), 120 reviews (A and B twice on 30 PRs), 13 B2 reviews, 30 judge runs (sonnet). No labeling runs: the 20 new `acted_on` threads are for a person.
+
+### What surprised me
+
+- With all kinds of notes and matching anywhere in the file, recall went from about 10% to about 35%. Round 1's low numbers were the test, not the review.
+- Running the same thing twice moves recall by 5.6 points, more than the effect of the knowledge. Two runs each on 30 PRs cannot see a 3-point change.
+- B never made the review noisier, and wrote a bit fewer notes. B helped most where reviewers repeat themselves in a file (#10162, #10100, #9799), and lost on #9934, the largest PR.
+- 3 years of history filled the block for every PR. Ranking by place is no longer the limit: what goes in the 30 slots is.
+- Line edits do not tell `acted_on` in this repo: authors change code near almost every comment. Every variant agrees with the labels 66% to 72%, close to always saying yes (62%), and the labels are from a model.
+- Lighthouse has few PRs for its age: about 700 merged a year, under half with a review thread.
+
+### Verdict
+
+The signal is weak but points one way. B beats A by 3.5 points by concern (interval −2.8 to +11.0), and by 5.9 by place (+0.7 to +11.6). It does not meet the bar of 35.13 (5 points by concern, interval above 0). The B2 hint is one run on 13 PRs and means nothing yet.
+
+Change the approach before phase 1; do not stop:
+- Do not build `acted_on` as specified. It is barely better than always yes. Drop its 3 times weight, or wait for the hand labels in `labels_round2.csv`.
+- A fixed block of 30 threads gives a few points at most. The next test is phase 1's tools (`know_threads` asked for the lines in question), not more ranking.
+- Fill in the two hand-check files first. If the judge often disagrees with a person, these numbers move.
+- A next replay needs about 3 runs per condition or 60 PRs to see a 3-point change: about 300 Claude runs.

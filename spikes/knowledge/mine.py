@@ -5,16 +5,23 @@ Walks merge-date slices newest first, keeps PRs with at least one review
 thread, and stops at the target count. One JSON file per PR under
 ~/.cache/sb-know-spike/prs. Field names were checked by schema introspection.
 GitHub has no merge method field on PullRequest: actedon.py infers it from git.
+
+`mine.py backfill 3` walks 3 years instead. It is resumable: a slice goes into
+slices_done.json only after all its PRs are written, and PRs on disk are kept.
 """
 import collections
+import concurrent.futures
 import datetime
 import json
 import os
 import sys
+import threading
+import time
 
 from common import PRS, REPO, gql, load_prs
 
-TARGET = int(sys.argv[1]) if len(sys.argv) > 1 else 200
+TARGET = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 200
+SLICES = os.path.join(os.path.dirname(PRS), "slices_done.json")
 SLICE_DAYS = 14
 PAGE = 10
 
@@ -128,6 +135,77 @@ def flatten(pr):
     }
 
 
+def backfill(years):
+    os.makedirs(PRS, exist_ok=True)
+    done = set()
+    if os.path.exists(SLICES):
+        with open(SLICES) as f:
+            done = set(json.load(f))
+    today = datetime.date(2026, 11, 17)
+    stop = today - datetime.timedelta(days=int(365.25 * years))
+    slices = []
+    end = today
+    while end > stop:
+        start = max(stop, end - datetime.timedelta(days=SLICE_DAYS))
+        slices.append((start, end))
+        end = start
+    todo = [s for s in slices if "%s..%s" % s not in done]
+    print("slices %d, done %d, to do %d" % (len(slices), len(slices) - len(todo), len(todo)), flush=True)
+    t0 = time.time()
+    lock = threading.Lock()
+    stats = {"queries": 0, "merged": 0, "kept": 0}
+
+    def one(sl):
+        start, end = sl
+        # merged:A..B includes both days, so end the slice the day before the next one starts.
+        q = "repo:%s is:pr is:merged merged:%s..%s" % (
+            REPO, start.isoformat(), (end - datetime.timedelta(days=1)).isoformat())
+        after = None
+        found = []
+        nq = 0
+        while True:
+            v = {"q": q, "n": PAGE}
+            if after:
+                v["after"] = after
+            d = gql(SEARCH, v)
+            nq += 1
+            s = d["search"]
+            if s["issueCount"] >= 1000:
+                print("WARNING: slice over 1000 results:", q, flush=True)
+            found += [n for n in s["nodes"] if n]
+            if not s["pageInfo"]["hasNextPage"]:
+                break
+            after = s["pageInfo"]["endCursor"]
+        kept = 0
+        for pr in found:
+            if pr["reviewThreads"]["totalCount"] < 1:
+                continue
+            kept += 1
+            path = os.path.join(PRS, "%d.json" % pr["number"])
+            if os.path.exists(path):
+                continue
+            fill(pr)
+            with open(path + ".tmp", "w") as f:
+                json.dump(flatten(pr), f)
+            os.replace(path + ".tmp", path)
+        with lock:
+            done.add("%s..%s" % sl)
+            with open(SLICES + ".tmp", "w") as f:
+                json.dump(sorted(done), f)
+            os.replace(SLICES + ".tmp", SLICES)
+            stats["queries"] += nq
+            stats["merged"] += len(found)
+            stats["kept"] += kept
+            print("slice %s..%s: %d merged, %d with threads, %.0f s" % (
+                start, end, len(found), kept, time.time() - t0), flush=True)
+
+    with concurrent.futures.ThreadPoolExecutor(3) as ex:
+        list(ex.map(one, todo))
+    print("backfill: %d slices, %d search pages, %d merged, %d with threads, %.0f s" % (
+        len(todo), stats["queries"], stats["merged"], stats["kept"], time.time() - t0))
+    report()
+
+
 def main():
     os.makedirs(PRS, exist_ok=True)
     have = len([n for n in os.listdir(PRS) if n.endswith(".json")])
@@ -185,5 +263,7 @@ def report():
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "report":
         report()
+    elif len(sys.argv) > 1 and sys.argv[1] == "backfill":
+        backfill(float(sys.argv[2]) if len(sys.argv) > 2 else 3)
     else:
         main()
