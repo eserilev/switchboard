@@ -2326,7 +2326,7 @@ It is not a second reviewer that speaks on its own, and it never sends anything 
 
 ### 35.3 The clone
 
-- **Always a private bare clone,** `~/.switchboard/knowledge/<owner>-<name>.git`. It never adds refs to your own clone. When the app knows your clone, the bare clone borrows its objects (`git clone --bare --reference`), so it costs little disk.
+- **Always a private bare clone,** `clone.git` in the repo's knowledge folder (35.18). It never adds refs to your own clone. When the app knows your clone, the bare clone borrows its objects (`git clone --bare --reference`), so it costs little disk.
 - **PR commits:** `refs/pull/<n>/head` into `refs/sb-know/pull/<n>`, 200 refspecs in one `git fetch`. A commit that GitHub dropped after a force-push is fetched by its id when GitHub still has it; else its threads fall back to GitHub's `outdated` flag.
 - **No partial clone:** blame on a partial clone fetches blobs one at a time.
 - **Blame** uses the repo's `.git-blame-ignore-revs` when it has one, so a format commit does not hide the real history. Diffs use `--diff-algorithm=histogram`, `-M50%`, and never `-w`.
@@ -2335,7 +2335,7 @@ It is not a second reviewer that speaks on its own, and it never sends anything 
 
 ### 35.4 The store
 
-One SQLite file for each repo, `~/.switchboard/knowledge/<owner>-<name>.db`, on the hub machine (in remote mode, on the server), in WAL mode as `store.db` is, so a review that reads does not wait for the miner. It is not in `store.db`: it is large, it can be deleted and built again, and a broken build never touches your reviews. `PRAGMA user_version` holds its schema version, with migrations as in 16.
+One SQLite file for each repo, `index.db` in the repo's knowledge folder (35.18), on the hub machine (in remote mode, on the server), in WAL mode as `store.db` is, so a review that reads does not wait for the miner. It is not in `store.db`: it is large, it can be deleted and built again, and a broken build never touches your reviews. `PRAGMA user_version` holds its schema version, with migrations as in 16.
 
 - `pr` (number, title, body, author, created, merged, merge method, base, merge commit, ingest id), `pr_commit`, `pr_file`.
 - `thread` (id, pr, kind, path, side, start, line, original start, original line, original commit, hunk, resolved, outdated, acted_on, still_here, weight), `comment` (id, thread, author, role, time, hidden, body).
@@ -2348,11 +2348,11 @@ One SQLite file for each repo, `~/.switchboard/knowledge/<owner>-<name>.db`, on 
 
 Ids are GitHub's database ids (numbers), not node ids.
 
-Private repo text is kept as plain files under `~/.switchboard`, as reviews are.
+Private repo text is kept as plain files in the knowledge folder, readable only by you (mode 700), as reviews are.
 
 ### 35.5 Mining and updates
 
-- **One writer.** The hub owns the file. `sb know` goes through the hub socket. At most one run for each repo at a time: Build, Update, Go further back, the poller and the second pass queue behind the one that runs. Delete stops the run first, then deletes.
+- **One writer.** At most one run for each repo at a time, across every program on the computer: the run holds the folder's lock (35.18). In Switchboard, Build, Update, Go further back, the poller and the second pass queue behind the one that runs, and `sb know` goes through the hub. Another program's run makes Switchboard wait, and its status shows "updated by <program>". Delete takes the lock, so it waits for the run to stop.
 - **The backfill** walks date slices newest first (35.2), pages of 10 to 25 PRs. A PR whose threads, comments, files or commits need more pages gets follow-up queries. Page sizes: threads 50, comments 20, files 100, commits 100, inside GitHub's limit of 500,000 nodes for one query. GitHub gives at most 250 commits and 3,000 files for one PR; a PR over that is marked partial.
 - **One transaction for each PR**: its rows, all of them from this one ingest, and the cursor (the slice and the search `endCursor`) commit together. A crash loses at most the PR in flight, and a restart goes on from the cursor. A PR that is in the store already is replaced as a whole, never added to.
 - **The poller.** Every 30 min while the hub runs, and at each start: search `merged:>=<poll cursor − 1 day>`, by merge time, so a PR opened long ago but merged now is not missed. The poll cursor is the newest merge time it stored. The first build sets it to the time the build started, so a PR that merges during the backfill is the poller's. It also reads again the PRs merged in the last 7 days, for late comments.
@@ -2470,7 +2470,7 @@ Two kernels are proved with Aeneas and Lean, as `guide-check`, `git-argcheck`, `
 - K1. The rows of a PR (threads, comments, files, commits) all come from one ingest.
 - K2. The backfill cursor never passes a PR whose rows did not commit.
 - K3. When no run is active and the poller has run once after the last merge, every PR merged in the range is in the store (as `NoSilentLeak` in 26).
-- K4. At most one run for each repo at a time.
+- K4. At most one run for each repo at a time, across programs: the lock, with a crash that leaves it held by a dead process.
 - K5. The second pass never writes `acted_on` to a PR from an ingest older than its rows.
 - K6. A crash at any step leaves a store a restart goes on from.
 
@@ -2535,8 +2535,35 @@ Each phase adds its notes to section 23 and passes `cargo nextest run --workspac
 - D2. Merged PRs, and closed PRs that landed through a commit. Not PRs closed without landing.
 - D3. Maintainers (owner, member, collaborator on GitHub) weigh 3 times a contributor and 6 times a first-time or outside commenter. `knowledge.reviewers` weighs some people more.
 - D4. Embeddings: an API or a local model. Open until phase 3.
-- D5. One SQLite file and one bare clone for each repo, on the hub machine. Not shared with a team in v1.
+- D5. One SQLite file and one bare clone for each repo, in a folder any program on the computer can use (35.18). Not shared with a team or between computers in v1.
 - D6. A build starts only on a click or a command.
 - D7. What Claude learns reaches you only as cited notes and tool answers. It never posts to GitHub.
 - D8. Any GitHub repo, any language. A call graph only where a SCIP indexer is installed. Not GitLab or others in v1.
 - D9. The path glob is tested, not proved.
+- D10. The index is a library, a CLI and an MCP server of its own, so other tools use the same data with no second mining (35.18).
+
+### 35.18 Sharing with other tools
+
+The index is not Switchboard's alone. A repo made an expert in Switchboard is an expert for every tool on the computer that reads it, such as Gnomish Relay, with no second mining, and their updates help each other.
+
+- **The folder.** `$XDG_DATA_HOME/repo-knowledge/github.com/<owner>/<name>/` (`~/.local/share/...` when unset, on macOS too): `index.db`, `clone.git`, `lock`, and `about.json` (the repo, the range, the schema version, the program and version of the last writer, the last update). Any program finds an index by the repo's name. `REPO_KNOWLEDGE_HOME` moves the root.
+- **The format is a contract.** `docs/repo-knowledge-format.md` documents each table and column. The version is `PRAGMA user_version`:
+  - A reader refuses a newer major version with "made by a newer tool: update <program>", never reads it silently.
+  - A writer migrates an older one, in one transaction, under the lock.
+  - Columns are only added within a major version, so an older reader keeps working.
+- **State for readers.** `about.json` has `state`: `none`, `building` (with the step and the PRs done of all) or `ready`, written at each step, so a reader can say "not built yet" or "building, 40%" plainly. The library has `status(repo)` for it.
+- **One writer, many readers.** The writer holds an `flock` on `lock` for its whole run, and writes its pid and program name in it. A second writer waits or says who holds it. The lock goes when the process dies, so a crash never blocks. SQLite in WAL mode lets readers read while it writes; a reader opens the file read only (`mode=ro`) and never takes the lock or waits for the writer.
+- **The library.** `crates/repo-knowledge`: the miner, the poller step, the store, the queries of the tools, and the second pass. It has no dependency on the hub, tmux or Tauri. It uses the proved crates (`linetrack`, `citecheck`) and the glob.
+  - A plain blocking API, no async runtime: a caller with tokio runs it in `spawn_blocking`.
+  - `#![forbid(unsafe_code)]`; its dependencies pass `cargo deny` and `cargo audit`; it states its oldest supported Rust version.
+  - Reading needs no network and no `gh`: only building does.
+  - GitHub access goes through its own trait (`KnowGh`). The default runs `gh` with the environment the caller gives it, and never reads or prints a token itself, so a caller that strips `GH_TOKEN` keeps it stripped. Switchboard's hub runs it in a thread; the poller's timer stays in the hub, and other tools run their own.
+- **Ready-made context.** `context(repo, diff)` returns the knowledge for one change as one block of text: the rules and dossier lines of the touched modules, and the weighted threads on and near the changed lines, each with its source link, within a word limit. A tool whose review agent has no tools (Relay's has none, on purpose) pastes it into the prompt. Every piece of remote text in it is fenced and marked as data. Switchboard's guide prompt uses the same call.
+- **Untrusted text is marked.** The format doc marks each column that holds raw text from GitHub (PR bodies, comments, issues, commit messages) and each one that Claude wrote. A tool must escape or fence them before a prompt.
+- **The CLI.** `repo-knowledge` (also `sb know`): `add`, `build`, `update`, `status`, `context`, `why`, `threads`, `history`, `similar`, `rules`, `dossier`, `reach`, `delete`, each with `--json`. One binary, for tools in any language.
+- **The MCP server.** `repo-knowledge mcp --repo <owner/name>`: the `know_*` tools of 35.11, over stdio. It opens the index read only, makes no network call, writes nothing and runs no program, so a tool can allow it in a locked-down agent after its own review. Any agent tool can attach it. Switchboard's review uses the same tools through `sb mcp`.
+- **Claude use is the caller's.** The dossier writer runs `claude -p` with `review::WRITING`. A tool that builds dossiers uses its own Claude login, and `about.json` records which program wrote each generation.
+- **The review itself** (the guide prompt, the take, the checks, sending to GitHub, the pending sync) is not in this library. Moving it to a `review-core` crate is a later step of its own.
+- **Gnomish Relay** (confirmed with its session, 2026-11-16): a Rust desktop app with no Tauri. It would link the library, mostly read, and paste `context` into its guide prompt, because its guide has no MCP server and no network. It would not build an index during a game session. Its data stays in its own folder.
+- **Tests:** two processes that build the same repo (one waits); a reader during a write; a crash with the lock held; a reader of an older and of a newer version; the CLI's JSON for each command; the MCP server's tools on a fixed store.
+
