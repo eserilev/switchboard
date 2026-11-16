@@ -1093,7 +1093,7 @@ Where the build differs from the text above:
 - The shell (33): the vendored fonts are latin subsets. Other characters come from the next font of the list (system fonts).
 - The shell (33): Tasks keeps its task panel and has no inspector.
 - Codex agents (34): planned, not built. Until then every agent pane is Claude Code, and 8.1 holds.
-- Repo knowledge (35): planned, not built. Reviews use no index yet.
+- Repo knowledge (35): on hold after phase 0, not built. Reviews use no index.
 - The review screens (33, phase 2): built without Chromium. The window checks were run in a WKWebView (WebKit, macOS) with a small runner, not in headless Chromium: every review check passed there; CI runs them in Chromium. Screenshots of the PR review, a tour, the Finish popover, the inspector and a local review were compared with the C v2 mockups by eye in WebKit only, not in WebKitGTK.
 - The review screens: where they differ from the C v2 mockups. Restart in the inspector is red, as every destructive action of the inspector (33); the mockup has it plain. The list of your comments (with stale drafts, Place again and Delete, and what you sent) is in the inspector, not under the Claude column; "N comments to place" in the header opens it. The step marks `✓` and `!` of Claude's answers are a guess from the first words. The steps list has no place numbers during a tour: they are in the row's tooltip. A review of local work has the footer (Prev, Mark seen & next) too. The local header shows the base and the range as text: its title is the view's own title from the hub ("2 commits on feat"), not the branch alone. A round 1 PR still says "round 1".
 - A diff header `@@ old N · new M @@` gives the number of the next old line and of the next new line, also on a side where the next row has no line. The "No newline at end of file" note follows its line and does not count for the context cut.
@@ -2293,7 +2293,7 @@ Each phase adds its notes to section 23 and passes `cargo nextest run --workspac
 
 ## 35. Repo knowledge
 
-Status: planned. Not built. Draft 2, 2026-11-16, from the code at bcace53, after one review.
+Status: on hold. Not built. Draft 2, 2026-11-16, from the code at bcace53, after one review. Phase 0 (spikes/README.md, three rounds on lighthouse) found no gain from a fixed block of 30 past threads: a blind judge picked the review with them 23 times and the one without them 22 times. About 28% of reviewer concerns repeat an older one, but the block found the right old thread for only a quarter of those. Phases 1 to 5 wait until a test of lookup by the lines under review shows a clear gain.
 
 The review agent reads the code, but it does not know the repo's past: why a line is like it is, what went wrong in a module before, and what the maintainers of this repo care about. Repo knowledge is an index of a repo's PRs, review threads, commits and code structure, built once and kept current. The guide agent and the Ask pane query it with tools, and every claim they make from it cites its source.
 
