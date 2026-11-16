@@ -88,3 +88,74 @@ Spec change: tiles are paused and read with `capture-pane`. Only the live pane s
 ## S7: local endpoint
 
 Needs a local server that speaks the Anthropic Messages API, for example llama.cpp server or Ollama. None is installed.
+
+## Repo knowledge, phase 0 (`knowledge/`)
+
+Question (SPEC 35.16, phase 0): do past review threads of a repo make Claude's review of a new PR catch more of what real reviewers raised?
+
+Run on 2026-11-16, from commit 14db719, on sigp/lighthouse. Python 3, `gh`, `git` and `claude -p` only. Data is in `~/.cache/sb-know-spike/`, not in git.
+
+- `mine.py`: GraphQL search in 14-day merge slices, newest first, pages of 10, follow-ups for threads, comments and commits.
+- `actedon.py`: fetch PR heads into a private bare clone, `acted_on`, weights, model-made labels.
+- `track.py`: the line tracker on `git diff -U0 --diff-algorithm=histogram -M50%`. `test_track.py` checks it against 400 random git diffs: 0 bad.
+- `replay.py`: the replay of SPEC 35.13, small.
+
+### Counts
+
+- 200 merged PRs with at least 1 review thread, merged 2026-04-28 to 2026-11-16. About half of all merged PRs had a thread.
+- 1,072 threads (1,067 line, 5 file), 1,927 comments.
+- First comment's role: MEMBER 1,043, CONTRIBUTOR 19, NONE 10. In lighthouse almost every reviewer is a member, so the role weight barely sorts anything.
+- GitHub has no merge method field. Inferred from git: 199 squash, 1 merge commit.
+- All 2,940 commits needed were fetched: 36 by id after the PR heads, none lost.
+
+### acted_on and weights
+
+- acted_on: 768 yes, 257 no, 47 unknown (42 LEFT side, 5 file threads). 36 by a landed suggestion, 12 by a deleted file.
+- Weight 0: 64 threads by the PR's author, 1 "lgtm". No bot threads. 1,007 of 1,072 (94%) have weight above 0.
+- Heuristic against 50 labels made by Claude (sonnet), not by a person. The 50 are in `knowledge/labels.csv` for a hand check.
+
+| | label yes | label no |
+|---|---|---|
+| heuristic yes | 25 | 10 |
+| heuristic no | 6 | 9 |
+
+Accuracy 68%. The heuristic says yes when the code near the line changed for another reason, or the comment was a question. It says no when the fix landed away from the line.
+
+### Replay
+
+12 newest PRs with at least 2 weighted target threads (one more was skipped for a diff over 120 KB). A target is a human thread whose line maps to the PR's first commit: 122 of 243 weighted threads in the newest 60 PRs map. Each review ran once per condition in a temporary clone with only the base and first commit, tools Read, Grep and Glob. The tool calls were checked: no read of the data or of later code (one read of `~/.cargo/registry`, one of a wrong temp path).
+
+B adds up to 25 past threads on the same files, from PRs merged before the PR was opened, each comment older than that. Place: a note within 3 lines. Concern: the judge (sonnet) on notes within 10 lines. Far: notes with no target within 10 lines.
+
+| PR | targets | past threads in B | A place | A concern | A notes | A far | B place | B concern | B notes | B far |
+|---|---|---|---|---|---|---|---|---|---|---|
+| #10071 | 2 | 25 | 1 | 1 | 1 | 0 | 0 | 1 | 1 | 0 |
+| #10396 | 2 | 25 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| #10082 | 3 | 25 | 0 | 0 | 3 | 2 | 0 | 0 | 2 | 2 |
+| #10407 | 2 | 2 | 2 | 2 | 2 | 0 | 2 | 2 | 2 | 0 |
+| #10385 | 2 | 11 | 0 | 0 | 2 | 2 | 0 | 0 | 3 | 3 |
+| #10352 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
+| #10268 | 3 | 25 | 0 | 0 | 0 | 0 | 1 | 1 | 1 | 0 |
+| #10162 | 6 | 25 | 0 | 0 | 2 | 2 | 0 | 0 | 3 | 3 |
+| #10182 | 5 | 25 | 1 | 0 | 3 | 1 | 1 | 0 | 2 | 1 |
+| #9729 | 2 | 0 | 0 | 0 | 1 | 1 | 0 | 0 | 1 | 1 |
+| #10207 | 3 | 5 | 0 | 0 | 1 | 1 | 0 | 0 | 1 | 1 |
+| #10183 | 2 | 1 | 0 | 0 | 2 | 1 | 0 | 0 | 1 | 0 |
+| total | 34 | | 4 | 3 | 17 | 10 | 4 | 4 | 18 | 12 |
+
+Recall by place: A 12%, B 12%. Recall by concern: A 9% (3 of 34), B 12% (4 of 34). The gap is one thread. 12 PRs, one run each, is far too small to tell this from chance.
+
+Claude runs: 35 of the cap of 60. 5 for labels (10 threads each), 24 reviews, 6 judge runs.
+
+### What surprised me
+
+- Most target threads are not bugs: questions, nits, naming, docs, "why did you change this", even praise. A review told to report "real problems only" gives 1.4 notes per PR and cannot hit them. Recall near 10% says more about what the target is than about the knowledge.
+- The first commit is often a small part of the PR. Several notes say "the diff does not do what the description says": true for the first commit, noise for the score.
+- Place scoring misses real hits. In #10162 the B note on the ban filter running after the top bid is picked is the same concern as a target thread, but 49 lines away.
+- The notes were good and specific. Most far notes look like real issues the reviewers did not raise.
+- 5 of 12 PRs had few or no past threads on their files (0 to 5): with 6 months of history, same-path matching is thin.
+- acted_on at 68% is weak. A rebase or merge from base does not seem to be the main error: nearby edits for other reasons are.
+
+### Verdict
+
+Not yet clear. B was never worse and got one more concern hit, but that is within noise on 12 PRs and 34 targets. Before the bigger plan, a second phase 0 round should: score against weighted threads that raise a problem (or let the review give all kinds of notes), use the PR's last commit before the first review instead of its first commit, widen place matching, run each case twice, and use 30 or more PRs. acted_on needs a better signal than a line window before it gets 3 times the weight.
