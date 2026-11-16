@@ -338,7 +338,7 @@ For each of the 143 target threads: past weighted threads on the PR's files, fol
 
 6 sonnet runs, batched by PR. For each item the judge saw B's block, A's notes on the same files and the item, and named the past thread it comes from, if any. Ids not in B's block were not counted: 9 answers named such ids (often the PR's own target thread).
 
-- Targets B caught and A missed in both runs: 15 (A caught 13 that B missed). As 20 B notes, 1 clearly traces to a past thread (#10182, moving IGNORE/REJECT docs to the error enum, as asked in #9805).
+- Targets a B run caught and no A run caught: 15 (the other way: 13). As 20 B notes, 1 clearly traces to a past thread (#10182, moving IGNORE/REJECT docs to the error enum, as asked in #9805).
 - B notes marked useful in both orders: 338. A had something like 297 of them. Of the 41 left, 2 trace to a past thread.
 - Of B's 61 extra catches, 3 (5%) trace to history; the rest look like run-to-run variance. With lenient ids it is 4 (7%).
 - The 4 PRs where B scored worse by concern (#10352, #10182, #9934, #10130): the judge found no sign the block distracted B. Its notes were about the PR's own code; it missed different threads than A.
@@ -350,7 +350,7 @@ For each of the 143 target threads: past weighted threads on the PR's files, fol
 ### Limits
 
 - One judge model. No human check of its verdicts. The judge is not blind to which notes humans also raised.
-- 30 PRs, 2 runs each. The PRs are recent and in Claude's training data maybe.
+- 30 PRs, 2 runs each. The PRs are public and may be in Claude's training data.
 - The later-bug check had 2 cases.
 - The ceiling and attribution rest on sonnet's sense of "same concern".
 
