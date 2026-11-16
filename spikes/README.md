@@ -404,6 +404,7 @@ Round robin over the units' lists until n threads are taken. Found when a match 
 | unit | method | 30 threads | 40 threads | 45 threads |
 |---|---|---|---|---|
 | file | L1 (close to the old block) | 8 (1,830 words) | | 12 (2,712) |
+| file | L2s | 16 (973) | | 19 (1,081) |
 | file | L3 | 15 (1,334) | | 18 (1,634) |
 | file | L4f | 21 (1,847) | 24 (2,448) | 24 (2,722) |
 | file | L4r | 20 (2,166) | 25 (2,883) | 26 (3,232) |
