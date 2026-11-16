@@ -283,3 +283,77 @@ Change the approach before phase 1; do not stop:
 - A fixed block of 30 threads gives a few points at most. The next test is phase 1's tools (`know_threads` asked for the lines in question), not more ranking.
 - Fill in the two hand-check files first. If the judge often disagrees with a person, these numbers move.
 - A next replay needs about 3 runs per condition or 60 PRs to see a 3-point change: about 300 Claude runs.
+
+## Repo knowledge, phase 0 deep dive (`knowledge/deep.py`)
+
+Question: do past review threads make Claude's review better, not just closer to what humans said? Fully automated, no hand judging. Run on 2026-11-16, from commit 2fbcec6, on the round 2 data. The A and B reviews of round 2 were reused, none rerun. Raw data is in `~/.cache/sb-know-spike/deep/`.
+
+`deep.py h2h`, `later`, `ceiling`, `attrib`, `report`. `H2H_LIMIT=n` runs only n judges; `DRY=1` builds the sonnet batches without running them.
+
+### 1. Blind head-to-head (main result)
+
+An opus judge per run pair (A1 vs B1, A2 vs B2) on all 30 PRs, each pair judged twice with X and Y swapped: 120 runs. The judge sees the title, body, diff, the human threads (labeled as one view, not the truth), the two note sets, and the snapshot code with Read, Grep and Glob only, in the same leak-free temp clone as round 2. A win counts only when both orders agree.
+
+| | count |
+|---|---|
+| B wins | 23 |
+| ties (or the orders disagree) | 15 |
+| B losses | 22 |
+| sign test, two-sided | p = 1.0 |
+| by PR (wins minus losses over both pairs) | B better 11, A better 11, even 8 |
+
+| per run | A | B |
+|---|---|---|
+| notes | 13.4 | 12.6 |
+| useful | 6.53 | 6.54 |
+| useful in both orders | 5.58 | 5.63 |
+| wrong | 0.25 | 0.26 |
+| noise | 6.6 | 5.8 |
+| a real problem | 6.5 | 6.5 |
+| share of notes useful | 48.7% | 52.0% |
+| share of notes wrong | 1.9% | 2.1% |
+
+- Pair 1: B 13, A 11, tie 6. Pair 2: A 11, B 10, tie 9.
+- Position bias: in 8 of 60 pairs (13%) the judge picked the same slot in both orders. Of 113 non-tie picks, 65 were Y (58%). The two orders disagreed in 15 of 60 pairs. Per-note verdicts agreed between the orders 84% of the time.
+- The judge made 289 tool calls (184 Grep, 105 Read). 3 named a path outside the clone, all the run's own temp folder typed wrong; they fail.
+
+### 2. Real bugs from later history
+
+For each PR: commits on `unstable` after the merge, up to 6 months, whose subject says fix, bug, revert, regression or panic, or whose message names the PR. Each changed line is blamed at the fix's parent. Lines from the PR's own commits are mapped back to the snapshot with `track.py`. A note within 5 lines in the same file "predicts" it.
+
+- The window is short: all 30 PRs merged 16 to 52 days ago (mean 38). 6 months of later history does not exist yet.
+- No reverts. 2 of 30 PRs had a later fix touching their lines, both in test files: #10160 (14 lines, the fix of nightly tests on phase0 and altair, #10200) and #10165 (2 lines, changed by #10160).
+- Notes near those lines: A 1 and 1, B 0 and 2. None of them is about the fixed problem.
+- Too few cases to mean anything. Run again in 6 months.
+
+### 3. The ceiling
+
+For each of the 143 target threads: past weighted threads on the PR's files, folders or crates whose first comment is older than the PR (median pool 1,342). Pre-filter: the top 20 per target by shared words (same file first), plus the 30 B threads. 7 sonnet runs judged which past threads raise essentially the same concern.
+
+- 40 of 143 targets (28%) repeat a past concern. That is about the most history can add here.
+- Only 10 of those 40 had the matching thread in B's block. The block's selection missed 30 of 40 (75%).
+- The judge is lenient on "same concern" (a rename nit matched a different rename nit), and the word pre-filter can miss matches. Take 28% as rough.
+
+### 4. Attribution
+
+6 sonnet runs, batched by PR. For each item the judge saw B's block, A's notes on the same files and the item, and named the past thread it comes from, if any. Ids not in B's block were not counted: 9 answers named such ids (often the PR's own target thread).
+
+- Targets B caught and A missed in both runs: 15 (A caught 13 that B missed). As 20 B notes, 1 clearly traces to a past thread (#10182, moving IGNORE/REJECT docs to the error enum, as asked in #9805).
+- B notes marked useful in both orders: 338. A had something like 297 of them. Of the 41 left, 2 trace to a past thread.
+- Of B's 61 extra catches, 3 (5%) trace to history; the rest look like run-to-run variance. With lenient ids it is 4 (7%).
+- The 4 PRs where B scored worse by concern (#10352, #10182, #9934, #10130): the judge found no sign the block distracted B. Its notes were about the PR's own code; it missed different threads than A.
+
+### Claude runs
+
+133 of the cap of 150: 120 head-to-head judges (opus), 7 ceiling runs and 6 attribution runs (sonnet). Both run pairs were judged, nothing cut.
+
+### Limits
+
+- One judge model. No human check of its verdicts. The judge is not blind to which notes humans also raised.
+- 30 PRs, 2 runs each. The PRs are recent and in Claude's training data maybe.
+- The later-bug check had 2 cases.
+- The ceiling and attribution rest on sonnet's sense of "same concern".
+
+### Verdict
+
+No. A block of 30 past threads does not make the review better on this data. B wins as often as it loses (23 to 22, p = 1.0), writes as many useful notes (6.5 per run each) and as many wrong ones (0.25). Its notes are a bit less noisy (5.8 vs 6.6 per run). Its extra catches almost never trace to a past thread (about 5%): they are luck. History could in theory help with about a quarter of what reviewers raise, but the fixed block picked the right thread for only a quarter of those. If knowledge has value, it is in finding the right past thread for the lines at hand (phase 1's tools), not in a fixed block. Do not build more on the fixed block.
