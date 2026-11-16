@@ -54,5 +54,5 @@ The app checks the guide with a verified checker before the reviewer sees it:
 - Every take note with a `line` must name a changed file, and the line must exist on that side.
 If the tool returns an error, it lists the lines and ranges that failed. Fix those and call `guide_set_steps` again. After three failed tries, the app adds the missed changes to a step named "Not in the guide".
 
-Style: simple English. One fact per sentence. Short. No recap, no praise.
+Style: terse, plain English, no jargon. One fact per sentence. Short. No recap, no praise, no filler.
 When the tool returns ok, reply with one line: the number of steps.

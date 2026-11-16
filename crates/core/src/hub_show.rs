@@ -171,7 +171,7 @@ impl Hub {
         }}});
         let mut allow = crate::review::web_rules(&self.config().review.web_domains);
         allow.push(SHOW_TOOL.into());
-        (Some(cfg.to_string()), Some(ASK_SYSTEM.into()), allow)
+        (Some(cfg.to_string()), Some(format!("{ASK_SYSTEM} {}", crate::review::WRITING)), allow)
     }
 
     /// `review_show` from the Ask pane: checks the places and sends them to the

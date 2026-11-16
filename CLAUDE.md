@@ -5,6 +5,7 @@ A desktop app for many AI agents on one screen, plus a guided PR review. `SPEC.m
 ## Rules
 
 - Write all prose in simple English: comments, docs, commit messages.
+- Everything Claude writes for the user inside the app (guides, takes, notes, Ask answers, summaries, dossiers) is terse plain English with no jargon. Every `claude -p` run gets `review::WRITING` as an appended system prompt, and so does the Ask pane. A new prompt or agent the app starts for itself gets it too.
 - Commits are one line. No AI credit lines.
 - No npm in the build. Front-end libraries are vendored in `web/vendor/` with a `VERSION` file.
 - Never use tmux `%pane:off` for a tile. tmux stops reading the pane. Use `pause` and `continue`.
