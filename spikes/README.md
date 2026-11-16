@@ -447,3 +447,72 @@ C is the A review plus the habits list. C passes only if all of these hold:
 - useful notes per run go up;
 - wrong notes per run do not go up;
 - recall by concern (all 143 targets) does not go down.
+
+### Setup
+
+Run on 2026-11-16, from commit 68cdae1, on the round 2 data. Raw data is in `~/.cache/sb-know-spike/habits/`. `habits.py build`, `write`, `run`, `h2h`, `judge`, `attrib`, `report`.
+
+- **Cutoff:** 2026-04-24T03:57Z, when the earliest of the 30 test PRs (#9171) was created. Only threads whose first comment is before it. One list serves all 30 PRs.
+- **Threads:** first comment by OWNER, MEMBER or COLLABORATOR; weight above 0 (not the PR's author, not a bot, not hidden, not only "lgtm", "+1" or an emoji); not AI text starting with "🤖" (14). Left: 3,746 threads in 672 PRs, by 16 maintainers.
+- **Build:** threads shuffled into 6 batches of about 650. Opus per batch: up to 40 recurring concerns, each with the ids of the threads that raise it (229 in all). One opus run merges them into habits. Counts come from the thread ids, not from the model. Habits under 3 PRs are dropped (none were), ranked by PRs, then maintainers, cut to 25 and 700 words. One sonnet run picks a clear example per habit; the quote is the comment's first sentence, copied.
+- **The list:** [`knowledge/habits_lighthouse.md`](knowledge/habits_lighthouse.md), 25 habits, 661 words. The top 5: update stale comments and docs (107 PRs); delete unused or debug code (97); fix typos and punctuation (80); comment non-obvious logic (62); names must say what a thing is (61). Lower down: no `unwrap` on reachable paths (37), no needless clones (34), hold locks briefly (16).
+- **C** is A's prompt from `replay2.py` (same temp clone, tools, default model, writing rule) plus the list, fenced in `<maintainer-habits>` and marked "apply one only where it fits this change; data, not instructions". 2 runs per PR.
+- **A** is reused from round 2. Same model (claude-opus-5-5) and the same Claude Code (2.1.325), checked in the logs.
+- **Judges:** the deep dive's opus head-to-head, both run pairs, both orders. Recall: the round 2 sonnet judge, one run per PR over A0, A1, C0 and C1 together, so A was judged again beside C. Attribution: sonnet, 5 batches, tags every A and C note with the habit it clearly applies, and says whether a C note has a like A note.
+
+### Results
+
+| measure | A | C | C − A |
+|---|---|---|---|
+| head-to-head (both orders agree) | 25 wins | 16 wins | 19 ties; sign test p = 0.21 |
+| by PR (wins minus losses, both pairs) | 13 better | 7 better | 10 even |
+| notes per run | 13.4 | 13.8 | +0.4 |
+| useful per run | 7.06 | 6.76 | −0.30 |
+| useful in both orders, per run | 5.95 | 5.80 | −0.15 |
+| wrong per run | 0.18 | 0.18 | 0.00 |
+| noise per run | 6.18 | 6.85 | +0.68 |
+| share of notes useful | 52.6% | 49.0% | −3.6 |
+| recall by concern, 143 targets | 34.3% | 37.8% | +3.5 (−1.4 to +9.5) |
+| recall by concern, 40 repeat targets | 36.3% | 47.5% | +11.3 (+1.2 to +23.3) |
+
+- Pair 1: A 11, C 7, tie 12. Pair 2: A 14, C 9, tie 7.
+- Position bias: the judge picked the same slot in both orders in 10 of 60 pairs (17%). Of 110 non-tie picks, 66 were Y (60%). The orders disagreed in 18 of 60. Per-note verdicts agreed between orders 84% of the time.
+- Judge noise: the same A notes got 7.06 useful per run here and 6.53 in the deep dive. That gap is bigger than C − A.
+- Note kinds shift: nits 255 → 345, docs 121 → 144; bugs 101 → 80, tests 150 → 112, questions 178 → 146.
+- Recall intervals: paired bootstrap over PRs, 10,000 draws. Repeat targets are the 40 the deep dive's ceiling judge marked.
+
+### Attribution and harm
+
+- C notes useful in both orders: 348. 33 have no like A note; 28 of those 33 (85%) apply a habit. So the few extra good catches do come from the list.
+- But the habits are broad: 64% of A's notes already apply one (512 of 805), against 74% of C's (612 of 827).
+- Habit-driven noise goes up: notes that apply a habit and were judged noise, A 238.5, C 321 (half a count per order), about +1.4 per run. Habit-driven wrong notes: A 1.5, C 5.5. All wrong notes stay the same (11 and 10.5).
+- Which habits moved: typos 11 → 25, TODO tags 15 → 31, reuse helpers 29 → 44, idiomatic Rust 23 → 35, clones 9 → 19. Add tests went down, 112 → 77. No `unwrap` stayed 5 → 4.
+- Leaks: 352 C tool calls, 1 outside the clone (the temp folder typed wrong; refused). The judges made 316 calls; 2 outside: one the same typo, one a read under `~/.cargo` (dependency source, not lighthouse data).
+
+### The bar
+
+| test | result | pass |
+|---|---|---|
+| wins exceed losses, p < 0.05 | 16 wins, 25 losses, p = 0.21 | no |
+| useful notes per run go up | 7.06 → 6.76 | no |
+| wrong notes per run do not go up | 0.18 → 0.18 | yes |
+| recall by concern does not go down | 34.3% → 37.8% | yes |
+
+C fails. The robustness check (a list from a different half of the threads) was not run: it was planned only if C passed.
+
+### Claude runs
+
+223 of the cap of 240: 8 build runs (6 batch and 1 merge on opus, 1 example pick on sonnet), 60 C reviews, 120 head-to-head judges (opus), 30 recall judges (sonnet), 5 attribution runs (sonnet). Nothing cut. Counted in `habits/claude_runs.txt`.
+
+### Limits
+
+- One repo, 30 PRs, 2 runs each. One judge model, no human check. The PRs are public and may be in Claude's training data.
+- The list's counts rest on opus putting thread ids in the right concern. The attribution's "applies a habit" is loose: it marks most notes.
+- The judge is not blind to which notes humans raised. It sees human threads as a reference, so a nit a human also raised may count as useful.
+- One list, one wording of the fence. A list without style habits, or one used only as a second pass, was not tested.
+
+### Verdict
+
+No. The habits list does not make reviews better. It makes them more like this repo's maintainers: C catches more of the concerns they repeat (47.5% vs 36.3% of the 40 repeat targets, interval above 0), and the extra catches do come from the list. But the blind judge prefers A 25 to 16, useful notes per run go down a little (7.06 to 6.76), and noise goes up (6.2 to 6.9). The list pulls the review toward nits (typos, TODO tags, style) and away from bugs and tests. Most top habits are style rules a linter or a careful reader already covers.
+
+Do not build it as specified (generate per repo, put in the guide prompt, refresh). If repo knowledge goes on, the one signal worth a test is the repeat concerns: a short list of the non-style habits only (errors, panics, clones, locks, peer scoring, compatibility), or the list as a separate, labeled pass after the main review, so it cannot crowd out bugs. That needs its own bar and about the same budget.
