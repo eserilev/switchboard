@@ -1093,6 +1093,7 @@ Where the build differs from the text above:
 - The shell (33): the vendored fonts are latin subsets. Other characters come from the next font of the list (system fonts).
 - The shell (33): Tasks keeps its task panel and has no inspector.
 - Codex agents (34): planned, not built. Until then every agent pane is Claude Code, and 8.1 holds.
+- Repo knowledge (35): planned, not built. Reviews use no index yet.
 - The review screens (33, phase 2): built without Chromium. The window checks were run in a WKWebView (WebKit, macOS) with a small runner, not in headless Chromium: every review check passed there; CI runs them in Chromium. Screenshots of the PR review, a tour, the Finish popover, the inspector and a local review were compared with the C v2 mockups by eye in WebKit only, not in WebKitGTK.
 - The review screens: where they differ from the C v2 mockups. Restart in the inspector is red, as every destructive action of the inspector (33); the mockup has it plain. The list of your comments (with stale drafts, Place again and Delete, and what you sent) is in the inspector, not under the Claude column; "N comments to place" in the header opens it. The step marks `✓` and `!` of Claude's answers are a guess from the first words. The steps list has no place numbers during a tour: they are in the row's tooltip. A review of local work has the footer (Prev, Mark seen & next) too. The local header shows the base and the range as text: its title is the view's own title from the hub ("2 commits on feat"), not the branch alone. A round 1 PR still says "round 1".
 - A diff header `@@ old N · new M @@` gives the number of the next old line and of the next new line, also on a side where the next row has no line. The "No newline at end of file" note follows its line and does not count for the context cut.
@@ -2289,3 +2290,253 @@ On macOS and Linux, `codex` 0.167.0 or newer, in tmux. Notes go in `spikes/READM
 | 4 | The window: names, the mark, New pane, `sb open --codex`, Work. Window checks. | S: 400 lines |
 
 Each phase adds its notes to section 23 and passes `cargo nextest run --workspace`, clippy and `web-tests/run.sh`.
+
+## 35. Repo knowledge
+
+Status: planned. Not built. Draft 2, 2026-11-16, from the code at bcace53, after one review.
+
+The review agent reads the code, but it does not know the repo's past: why a line is like it is, what went wrong in a module before, and what the maintainers of this repo care about. Repo knowledge is an index of a repo's PRs, review threads, commits and code structure, built once and kept current. The guide agent and the Ask pane query it with tools, and every claim they make from it cites its source.
+
+It works for any GitHub repo, in any language. Nothing in it knows one repo: lighthouse is only an example. You plug in a repo, choose how far back to go, and press **Make it an expert** (35.10).
+
+It is not a second reviewer that speaks on its own, and it never sends anything to GitHub.
+
+### 35.1 What it answers
+
+- **Why.** This line exists because of commit X in PR #N, and this was the discussion.
+- **History.** The PRs, bugs, reverts and fix-ups that touched this file or function.
+- **Concerns.** What reviewers of this repo, maintainers first, flagged on code like this, and whether the author changed the code after.
+- **Reach.** Who calls this function, and which files usually change with this one.
+- **Module notes.** For each module: what it does, the rules it keeps, its past bugs, and what its reviewers look for. Claude writes them from the index, with a cited source on each claim (35.8).
+
+### 35.2 What goes in
+
+- **The range: newest first, back as far as you chose** when you made the index: 6 months, 1, 3 or 5 years, all of history, or a date. The default is 3 years. You can go further back later; the backfill goes on from its cursor.
+- **Which PRs.** Merged PRs, by merge time. Also closed PRs whose number shows as `(#N)` in a commit on the default branch: some repos land PRs with a bot or by hand, and GitHub then marks them closed, not merged.
+- **How they are found.** GitHub's search, in GraphQL (`search(type: ISSUE, query: "repo:o/n is:pr is:merged merged:A..B")`), in date slices that each hold fewer than 1,000 results, newest slice first. `repository.pullRequests` cannot filter by date, and search stops at 1,000 results for one query, so slices are needed. The count for the estimate (35.10) is the search's `issueCount`, which has no cap.
+- **For each PR:** the title, the body, the author, the times (created, merged), the base, the merge commit and the merge method, the commits (id, message), the files, and the review threads.
+- **For each thread:** the thread's path, side (`diffSide`), line range (`startLine`, `line`), original range (`originalStartLine`, `originalLine`), kind (`subjectType`: line or file), resolved and outdated flags. For each comment: the body, the author, the author's role (`authorAssociation`), the time, whether it is hidden (`isMinimized`), the original commit, and the diff hunk. The hunk is stored once for each thread. Replies stay with their thread.
+- **Older than the range, when needed:**
+  - A PR that `why` reaches through blame comes in when asked, whatever its age.
+  - Reverts (`Revert "…"`) and fix commits ("fix #N") come from all of history. There are few, and they mark real mistakes. A "fix #N" names an issue or a PR; the link from an issue to the PR it fixed goes through the issue's closing PR, and is best effort.
+- **Linked issues:** the issues a PR closes, title and body only.
+- **Which PR a commit belongs to.** Squash merge: the merge commit is the PR. Merge commit: the PR's commits are reachable from it. Rebase merge: the PR's commits are copies, so the PR owns the range `mergeCommit~k..mergeCommit`, with k its commit count. Otherwise, a `(#N)` in the message, and last `Commit.associatedPullRequests`.
+- **Code structure (phase 4):** a SCIP index of the default branch: definitions, references and calls. SCIP is one format with an indexer for each language: `rust-analyzer scip`, `scip-typescript`, `scip-python`, `scip-go`, `scip-java` and others. The app finds the repo's languages by file count and runs the indexers that are installed; Settings says which are missing and how to install them. A language with no indexer gets no call graph; everything else still works.
+- **Not in v1:** PRs closed without landing, issue comments, discussions, CI logs.
+
+### 35.3 The clone
+
+- **Always a private bare clone,** `~/.switchboard/knowledge/<owner>-<name>.git`. It never adds refs to your own clone. When the app knows your clone, the bare clone borrows its objects (`git clone --bare --reference`), so it costs little disk.
+- **PR commits:** `refs/pull/<n>/head` into `refs/sb-know/pull/<n>`, 200 refspecs in one `git fetch`. A commit that GitHub dropped after a force-push is fetched by its id when GitHub still has it; else its threads fall back to GitHub's `outdated` flag.
+- **No partial clone:** blame on a partial clone fetches blobs one at a time.
+- **Blame** uses the repo's `.git-blame-ignore-revs` when it has one, so a format commit does not hide the real history. Diffs use `--diff-algorithm=histogram`, `-M50%`, and never `-w`.
+- **A huge repo** (millions of commits) takes long and many GB to clone: the estimate says so first.
+- **Delete** removes the bare clone with the index.
+
+### 35.4 The store
+
+One SQLite file for each repo, `~/.switchboard/knowledge/<owner>-<name>.db`, on the hub machine (in remote mode, on the server), in WAL mode as `store.db` is, so a review that reads does not wait for the miner. It is not in `store.db`: it is large, it can be deleted and built again, and a broken build never touches your reviews. `PRAGMA user_version` holds its schema version, with migrations as in 16.
+
+- `pr` (number, title, body, author, created, merged, merge method, base, merge commit, ingest id), `pr_commit`, `pr_file`.
+- `thread` (id, pr, kind, path, side, start, line, original start, original line, original commit, hunk, resolved, outdated, acted_on, still_here, weight), `comment` (id, thread, author, role, time, hidden, body).
+- `commit` (id, time, message, pr), `fix` (commit, kind: revert or fix, the PR or issue it fixes).
+- `issue` (number, title, body), `pr_issue`.
+- `symbol`, `ref`, `call` (phase 4), `cochange` (file a, file b, count, last).
+- `vector` (kind, id, model, dims, data) (phase 3).
+- `doc` (module, kind: dossier or rule, text, generation, built), `doc_cite` (doc, claim, source kind, source id, quote).
+- `cursor` (name, value), `run` (id, kind, start, end, result, GitHub queries, Claude use).
+
+Ids are GitHub's database ids (numbers), not node ids.
+
+Private repo text is kept as plain files under `~/.switchboard`, as reviews are.
+
+### 35.5 Mining and updates
+
+- **One writer.** The hub owns the file. `sb know` goes through the hub socket. At most one run for each repo at a time: Build, Update, Go further back, the poller and the second pass queue behind the one that runs. Delete stops the run first, then deletes.
+- **The backfill** walks date slices newest first (35.2), pages of 10 to 25 PRs. A PR whose threads, comments, files or commits need more pages gets follow-up queries. Page sizes: threads 50, comments 20, files 100, commits 100, inside GitHub's limit of 500,000 nodes for one query. GitHub gives at most 250 commits and 3,000 files for one PR; a PR over that is marked partial.
+- **One transaction for each PR**: its rows, all of them from this one ingest, and the cursor (the slice and the search `endCursor`) commit together. A crash loses at most the PR in flight, and a restart goes on from the cursor. A PR that is in the store already is replaced as a whole, never added to.
+- **The poller.** Every 30 min while the hub runs, and at each start: search `merged:>=<poll cursor − 1 day>`, by merge time, so a PR opened long ago but merged now is not missed. The poll cursor is the newest merge time it stored. The first build sets it to the time the build started, so a PR that merges during the backfill is the poller's. It also reads again the PRs merged in the last 7 days, for late comments.
+- **Limits.** The miner reads `rateLimit { remaining resetAt }` on each query and waits for `resetAt` below 200 points. A 403 or 429 with `retry-after` (GitHub's second limit) waits that long. A 502 or a timeout halves the page size and retries, 3 times, then the run stops with its cursor kept. How long a query takes, not its points, sets the speed, and the estimate uses that.
+- **The second pass** works out `acted_on`, `still_here` and the weights (35.6) for the PRs of the last ingest. It runs after the PR rows commit, can run again at any time, and skips a PR whose ingest id changed under it. `still_here` for all threads runs once a day, in batches by merge commit and path.
+- **Stop** waits for the PR in flight. `sb know status` shows the cursors, the counts, the last run, the rate limit and the Claude use.
+
+`models/knowledge_mine.qnt` (35.12) checks this.
+
+### 35.6 What counts
+
+- **`acted_on`** (a thread with a line). The line tracker (35.12) maps the thread's original range, plus 3 lines on each side, from its original commit to the PR's last commit. When a line of that window maps to none, or a line was added inside it, the code changed: acted on. No time test: the original commit always comes before the comment. A ```suggestion``` block that the PR's code now holds counts as acted on, and strongly. A thread on removed code (side LEFT) is acted on when the PR's last commit brings that code back or changes the lines around it. A file thread is unknown.
+- **Not a sure thing.** A rebase onto a new base also changes lines. Before `acted_on` gets weight, phase 0 labels 50 threads by hand and writes down how often it is right.
+- **`still_here`.** The line tracker maps the thread's range from the original commit to the PR head, then to the merge commit, then to the default branch now, step by step. Lines that map to none at any step: not here. A rename that git does not find over a long chain also gives none; this is a known limit.
+- **Weight of a thread:** `w = (acted_on ? 3 : 1) × (still_here ? 2 : 1) × 0.5^max(0, age in years − 1) × role`.
+- **Role,** from the first comment's `authorAssociation`, so it works for any repo with no list:
+  - `OWNER`, `MEMBER`, `COLLABORATOR` (the maintainers): 3.
+  - `CONTRIBUTOR`: 1.
+  - `FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE`: 0.5.
+  - `knowledge.reviewers` can name people to weigh 2 times more, for a repo whose maintainers are not members on GitHub.
+- **Weight 0:** the PR's own author, bots (a `Bot` account, a login that ends in `[bot]`, or `knowledge.bots`), hidden comments, and threads that are only "lgtm", "+1" or an emoji. Nits keep their weight: they teach the style rules.
+
+### 35.7 Vectors (phase 3)
+
+- **What is embedded:** each thread (its first comment, its hunk, and the fix when there is one), each PR title and body, each issue, and each rule. Not raw code: the code is in the clone, and Claude reads it.
+- **Search:** cosine over all rows of a kind, in Rust. 100k vectors of 1,024 numbers are 400 MB on disk; in memory they are mapped, not loaded, or kept as int8 when the replay shows no loss. No vector server.
+- **The model** is a decision (D4): an embeddings API (best quality; hunks and comments leave your computer) or a local model (private; weaker). The row keeps the model name, so a change of model builds them again.
+
+### 35.8 Reach (phase 4)
+
+- **Calls and references** from the SCIP index of the default branch. It is built at most once a day, when the computer is idle, one repo at a time, and not for a repo over a size limit (`knowledge.scip_max_files`). rust-analyzer alone takes 1 to 4 GB.
+- **Co-change:** two files that changed in the same PR, counted, with the last time. A PR with more than 50 files does not count (a format, a rename, a big upgrade).
+- **What a change can break:** the callers of the changed functions, and the files that usually change with the changed files but are not in the PR. Code that exists only in the PR has no callers in the index.
+
+### 35.9 Module notes and rules (phase 5)
+
+- **A module** is a package of the repo's build (a Cargo crate, an npm package, a Go module, a Python package, a Maven or Gradle module), found from the files at each folder's root; a package inside another is its own module. In a repo with none, a folder with more than 20 files. Vendored, generated and fixture folders (`vendor/`, `third_party/`, `node_modules/`, `testdata/`, and `knowledge.skip`) are left out.
+- **A dossier for each module** with at least 10 weighted threads, at most `knowledge.max_dossiers` (default 60) in one build, the most active first: its job, the rules it keeps, its past bugs and reverts, what its maintainers flag, and its usual reviewers. `claude -p` writes it from the module's rows: the threads with the most weight, the fixes, the reverts and the PR titles. At most 800 words.
+- **Rules:** short lines, each with paths (globs, 35.12) and threads from at least 2 PRs behind it, with at least one maintainer thread or three from others. For example: "`store/**`: no lock across a database write on the block import path. Maintainers flagged it in #9812, #10031, #10107."
+- **How Claude writes them:** the writing rule of the app (`review::WRITING`: terse, plain English, no jargon), plus: every claim lists its sources and at least one exact quote, copied byte for byte, with no ellipsis and no changed quote marks.
+- **Every claim is checked** by the citation checker (35.12): each source must be one of the rows the writer was given, and each quote must be in its source. A claim that fails goes back to the writer with the reason, as a guide does (11.2). After 3 tries the claims that fail are dropped and the rest stay. Phase 5 counts how many quotes fail.
+- **Generations.** A rebuild writes a new generation and switches to it in one transaction.
+- **When:** after the first build, then for a module when 5 new weighted threads touch it. Each dossier shows its date.
+
+### 35.10 The window
+
+- **Make it an expert.** In Settings, Repo knowledge, **Add a repo** takes a GitHub URL or `owner/name`, or a pick from the repos the app knows (your clones and your reviews). A fork offers its parent, where the PRs are. Then one form:
+  - **How far back:** 6 months, 1 year, 3 years (the default), 5 years, all, or a date.
+  - **The estimate,** from one search query: the number of PRs in that range, the time it will take, the size of the clone, and a range of Claude use. A change of range updates it at once.
+  - **Make it an expert** (gold) starts the build. Above it: "Reads 3,412 PRs from GitHub. Writes notes with Claude. Runs in the background; you can close the window."
+- **The list:** each repo with an index: the range, the PR count, the last update, the size on disk, the languages with a call graph, and Update, Go further back, Stop and Delete. While a run works: the step (reading PRs, tracking lines, code graph, writing notes), the PRs done of all, the rate limit, and the time left.
+- **When it is done,** a toast: "lighthouse is now an expert: 3,412 PRs, 41 module notes." Reviews of that repo use it from then on.
+- **Before phase 5** the same form exists with no notes: it builds what the phases so far have.
+- **Remote mode.** The gh login and the clone are on the server. Progress events are news events, not in `dispatch::ORDERED`, and go through the writer thread (29).
+- **`sb know`** `add <repo> [--since <date> | --years <n>]`, `build`, `update`, `stop`, `status`, `delete`, `why <path>:<line>`, `replay` (35.13). `add` is the command form of Make it an expert.
+- **No build starts on its own.** The first build takes hours and uses Claude. After it, the poller keeps the index current.
+
+### 35.11 In a review
+
+- **MCP tools** for the guide agent and the Ask pane, in `sb mcp`, read only:
+
+| Tool | Answer |
+|---|---|
+| `know_why(path, line)` | the line mapped from the PR head to the base (the line tracker), blamed at the base: the commit, its PR, and the threads on that line, at most 5 |
+| `know_history(path or symbol)` | the PRs, fixes and reverts that touched it, newest first, at most 20 |
+| `know_threads(path, from, to)` | past threads on these lines or near them, with weight, role and `acted_on` |
+| `know_similar(hunk)` | the threads and PRs nearest by vector (phase 3) |
+| `know_dossier(module)` | the module's notes (phase 5) |
+| `know_rules(paths)` | the rules whose globs match (phase 5) |
+| `know_reach(symbols, files)` | callers, references, and the usual co-changes not in the PR (phase 4) |
+
+- **What changes elsewhere:**
+  - 11.2: the guide's `--allowedTools` lists the `mcp__sb__know_*` tools.
+  - 11.5: the Ask pane gets the `know_*` tools next to `review_show`. The test `ask_mode_has_only_review_show` becomes "only `review_show` and the `know_*` tools".
+  - 11.12: a take note gets `kind` (`code` today, or `history`) and `sources` [{kind, id, quote}]. A `history` note is a `should` or a `nit`, never a `must`: the past is a hint, not a bug. The take check and the citation check share the 3 tries; `strip_bad` drops a `history` note that fails.
+- **The guide prompt** gets the dossiers and rules of the modules the PR touches, up to 3,000 words, the modules with the most changed lines first. They go into every guide run and every Ask fork (11.5 forks the guide session), so they stay short. The agent uses the tools for more.
+- **Data, not instructions.** PR bodies, comments, issues and dossiers are text from strangers. The prompt marks all knowledge text as data, as 11.3 does for fetched pages: it never changes the rules.
+- **In the window,** a source is a link to the PR, the comment or the commit on GitHub. A `history` note shows its source count.
+- **The review inspector** has a fact: "Knowledge: 3,412 PRs, updated 2 h ago", or "none" with Make it an expert.
+- **No index, no change.** A repo without an index reviews as today. The tools answer "no index for this repo".
+
+### 35.12 Formal verification
+
+Two kernels are proved with Aeneas and Lean, as `guide-check`, `git-argcheck`, `diffparse` and `outq` are (24). Each lives in a crate of its own, in the Aeneas subset (CLAUDE.md), with its statements in `proofs/Statements.lean`, its code in `proofs/<Crate>/Code`, and its hash checked in CI. The mining protocol is a Quint model, as in 25, 26 and 29. What Claude writes cannot be proved: the replay (35.13) measures it.
+
+**`crates/linetrack`: the line tracker.** It maps a line of a file at one commit to the same line at a later commit, or to none. `acted_on`, `still_here`, `know_why` and the replay use it. A bug here is quiet: a wrong line, or a match that should be none.
+
+- It reuses the model of `guide-check`: the input is the old and new line counts and the removed and added masks of the diff (from `coverage::parse_hunks`), with the old and new texts. The kernel first checks that the lines not removed equal the lines not added, in order, with the proved check of `guide-check` (`kept_equal_from`, G3), and refuses them if not.
+- The map: the k-th kept old line maps to the k-th kept new line. A removed line maps to none.
+- T1. The whole statement, as G1 is: `track ⦃ r => r = some m ↔ (old line n is kept, and m is the new line at the same kept index) ⦄`.
+- T2. A mapped line has the same text: `old[n] = new[m]`.
+- T3. Order stays: `n1 < n2`, both mapped → `m1 < m2`. So no two lines map to one.
+- T4. A chain of diffs maps as its steps one after the other, and is none when one step is none.
+- T5. Masks that do not rebuild the new text are refused. Nothing overflows.
+- The hunk-to-mask step stays outside, trusted: a wrong mask that still rebuilds changes only which equal lines pair, and T2 still holds.
+- **What it does not prove:** that two lines are "the same line" in meaning. git can pair one `}` with another. It proves an order-keeping match of equal text.
+- Renames are found outside the kernel, with `-M50%`.
+
+**`crates/citecheck`: the citation checker.** It proves that a claim cannot name a source it was not given, or quote what the source does not say. It does not prove that the claim is right.
+
+- Input: the claims, each with its sources (kind, numeric id, quote), and the rows the writer was given (kind, id, text): for a dossier, the rows of its prompt; for a `history` note, the rows the tools returned in that session, which the hub logs. The kernel checks that this list is sorted by kind and id and has no repeats, and refuses it if not, so the order is not trusted.
+- C1. The whole statement: `check ⦃ r => r = ok ↔ CitesOk ⦄`, where `CitesOk` says: each claim has at least one source and at least one quote; each source is in the given rows with the same kind; each quote is in its source's text, after runs of ASCII white space (space, tab, newline, return, form feed, vertical tab) in both are made one space.
+- C2. Refused → the answer names the first claim and source that fail, and why.
+- C3. Nothing overflows, and it ends on every input.
+- Unicode normal form is done in the hub, and trusted.
+
+**`crates/pathglob`: rule paths.** Plain code with random tests, not proved: a wrong match only adds or drops a rule in a prompt.
+
+- `*` matches any run of characters in one part of the path, with no `/`. `**` as a whole part matches any number of whole parts, also none: `a/**` matches `a` and `a/b/c`; `**/x` matches `x`. `**` that is not a whole part (`a**b`) is two `*`. `?` is one byte other than `/`. Nothing else is special.
+- A table matcher over (glob position, path position), with a `Vec<bool>` and while loops: correct with `*` and `**` together, which a matcher with one point of backtracking is not (`**/a/*/b` against `x/a/y/a/z/b`). It stays in the Aeneas subset, so a proof can come later.
+- Random tests against a plain recursive matcher.
+
+**`models/knowledge_mine.qnt`: mining.** Actors: the backfill, the poller, the second pass, Delete, a crash and restart at any step, rate limit waits, and many triggers at once (the CLI, Build, Go further back). Each PR has a create time and a merge time of its own, in any order with the runs.
+
+- K1. The rows of a PR (threads, comments, files, commits) all come from one ingest.
+- K2. The backfill cursor never passes a PR whose rows did not commit.
+- K3. When no run is active and the poller has run once after the last merge, every PR merged in the range is in the store (as `NoSilentLeak` in 26).
+- K4. At most one run for each repo at a time.
+- K5. The second pass never writes `acted_on` to a PR from an ingest older than its rows.
+- K6. A crash at any step leaves a store a restart goes on from.
+
+**Mutants that must fail:** a tracker that maps a removed line; a checker that skips the quote test; a backfill that writes the cursor before the rows; a poller ordered by create time; two runs at once; a second pass with no ingest check.
+
+### 35.13 The replay: does it help
+
+The replay is how we know the knowledge makes the review better. It runs from phase 0, before the work that costs the most.
+
+- **`sb know replay --last 50`** takes the last 50 merged PRs with at least 2 weighted threads.
+- **No leaks.** The real review must not reach the agent:
+  - The run has WebFetch and WebSearch denied, so it cannot read the PR on GitHub.
+  - It runs in a temporary clone with only the PR's base commit and its first commit. No other refs: the merged code and the later fixes are not there.
+  - Every query has a time cut: a row counts only when its comment, commit or PR came before the PR was opened. The cut is on each comment's own time.
+  - `know_why` and `know_history` blame and log at the base commit.
+  - Data built from the whole index (dossiers, rules, vectors, co-change, `still_here`, the code graph) is built again as of that time, or left out of that replay and named as not measured.
+  - The limit we cannot remove: public PRs may be in Claude's training data. The comparison with and without knowledge is fair; the absolute scores may be high.
+- **The target.** Each human thread's line is mapped to the PR's first commit. A thread that maps to none was on code that did not exist yet, and is left out.
+- **Each PR is reviewed twice,** with the knowledge and without it, by the guide and the take. Each case runs twice.
+- **Scores:**
+  - Recall by place: the share of the target threads with a note within 3 lines in the same file.
+  - Recall by concern: the same, when a judge run of Claude says the note and the thread raise the same concern. The judge sees the two texts and the hunk. 20 of its answers are checked by hand once, and the agreement is written down.
+  - Noise: the notes with no target thread near them that the judge rates as not useful.
+  - Citations: all must pass the checker: 100%.
+- **The bar.** Each PR is compared with itself, with a bootstrap interval. A phase that adds cost stays only when recall by concern goes up by at least 5 points, the interval is above 0, and noise does not go up.
+- **Results** go in `spikes/README.md` with the date and the commit.
+- **Cost:** 50 PRs × 2 runs × 2 times, plus the judge, is a large share of a week's Claude use. The run shows its use when it ends.
+
+### 35.14 Privacy and cost
+
+- The index and the clone stay on the hub machine. Nothing in them goes to GitHub.
+- Claude sees what a review shows today, plus the rows its tools return and up to 3,000 words of notes. The dossier build sends module rows to Claude.
+- Embeddings with an API send hunks and comment text to that API (D4).
+- Knowledge text is from strangers and can try to steer Claude. It is marked as data (35.11), and the tools are read only.
+- Cost is given as Claude use on your plan, as section 32 measures it. A guess for a repo like lighthouse (3 years, about 3,000 PRs): a few hours of GitHub queries; dossiers about as much Claude use as 20 to 40 reviews; a replay about as much as 200 reviews. Phase 0 counts the real numbers.
+
+### 35.15 Tests
+
+- Mining: a fake GitHub for the miner, a trait of its own (`KnowGh`), not the `Gh` of 11.8.1. Its pages, slices, rate limits, a 502, a 429 with `retry-after`, a PR over the inner page sizes, and PRs that open early and merge late, during a backfill. A crash test that stops the miner at each step and checks K1 to K3 on the store after a restart.
+- Line tracker and citation checker: unit tests, random tests against plain reference code (a full diff walk; a plain search), the proofs, and the mutants.
+- Glob: random globs and paths against a recursive matcher, with the edge cases of 35.12.
+- `acted_on` and `still_here` on real git repos made in the test: an edit after a comment, an edit next to it, a resolve, a rebase that drops the original commit, a LEFT thread, a file thread, a suggestion, a rename. Squash, merge and rebase merges for the commit-to-PR map.
+- MCP tools: each one on a small fixed store. The replay's time cut on every query, and the temporary clone's refs.
+- Live and ignored: a build of 20 PRs of a real repo, and the replay on 5.
+
+### 35.16 Build phases
+
+| Phase | What | Size |
+|---|---|---|
+| 0 | A spike script: mine about 200 lighthouse PRs into a plain file, label 50 threads for `acted_on` by hand, put the threads of the touched files into the guide prompt by hand, and run the replay of 35.13 with and without. Notes in `spikes/README.md`. If it does not help, stop here. | S |
+| 1 | The bare clone, the store, the miner and the poller, `sb know add/build/status/stop`, the simple `acted_on`, `know_why` and `know_threads` in the guide and Ask. A minimal Make it an expert form. | L: 1,500 lines |
+| 2 | `linetrack` with its proofs, `still_here`, weights, `know_history`. `models/knowledge_mine.qnt`. The replay command. | L: 1,200 lines plus proofs |
+| 3 | Vectors and `know_similar`. Kept only when the replay clears the bar. | M: 700 lines |
+| 4 | SCIP, `know_reach`, co-change. | M: 900 lines |
+| 5 | Dossiers and rules, `citecheck` with its proofs, `pathglob`, `history` notes in the take, the full Settings list. | L: 1,500 lines plus proofs |
+
+Each phase adds its notes to section 23 and passes `cargo nextest run --workspace`, clippy, `scripts/check-proofs.sh`, `scripts/check-models.sh` and `web-tests/run.sh`.
+
+### 35.17 Decisions you may want to change
+
+- D1. You choose the range for each repo, 3 years by default, newest first; blame and fix commits reach further.
+- D2. Merged PRs, and closed PRs that landed through a commit. Not PRs closed without landing.
+- D3. Maintainers (owner, member, collaborator on GitHub) weigh 3 times a contributor and 6 times a first-time or outside commenter. `knowledge.reviewers` weighs some people more.
+- D4. Embeddings: an API or a local model. Open until phase 3.
+- D5. One SQLite file and one bare clone for each repo, on the hub machine. Not shared with a team in v1.
+- D6. A build starts only on a click or a command.
+- D7. What Claude learns reaches you only as cited notes and tool answers. It never posts to GitHub.
+- D8. Any GitHub repo, any language. A call graph only where a SCIP indexer is installed. Not GitLab or others in v1.
+- D9. The path glob is tested, not proved.
