@@ -2378,7 +2378,12 @@ Private repo text is kept as plain files in the knowledge folder, readable only 
 ### 35.7 Vectors (phase 3)
 
 - **What is embedded:** each thread (its first comment, its hunk, and the fix when there is one), each PR title and body, each issue, and each rule. Not raw code: the code is in the clone, and Claude reads it.
-- **Search:** cosine over all rows of a kind, in Rust. 100k vectors of 1,024 numbers are 400 MB on disk; in memory they are mapped, not loaded, or kept as int8 when the replay shows no loss. No vector server.
+- **Only what has weight.** Threads with weight 0 (35.6) get no vector. Nor do the replies of a thread.
+- **How many.** A repo like lighthouse over 3 years: about 40k to 80k vectors. A very large repo with all its history (100k PRs or more) can have millions. Phase 0 counts it, and the estimate (35.10) shows it before a build.
+- **Size.** Vectors are cut to 256 numbers (the model must support shorter vectors with little loss; the replay checks it), and stored as int8 when the replay shows no loss: 256 bytes each, so 1 million is 256 MB.
+- **Search, up to 500k vectors:** cosine over all rows of a kind, in Rust, on a mapped file, not loaded. Search the modules the PR touches first, and the whole repo only when asked.
+- **Search, over 500k:** an approximate nearest-neighbour index (HNSW), built from the vectors and kept as a file next to `index.db`, built again after each run that added vectors. Still no vector server.
+- A cap, `knowledge.max_vectors` (default 2 million): over it, the oldest threads with the least weight get no vector.
 - **The model** is a decision (D4): an embeddings API (best quality; hunks and comments leave your computer) or a local model (private; weaker). The row keeps the model name, so a change of model builds them again.
 
 ### 35.8 Reach (phase 4)
