@@ -220,6 +220,23 @@ pub struct Hub {
     _lock: std::fs::File,
 }
 
+/// Between the fields of a tmux format. Printable ASCII: tmux puts `_` in place of a
+/// tab or any other control character for a client it thinks has no UTF-8.
+const FIELD_SEP: &str = "|~|";
+
+/// A tmux format of `fields` joined by `FIELD_SEP`. Only the last field may hold
+/// any text, such as a path.
+fn fields_format(fields: &[&str]) -> String {
+    fields.join(FIELD_SEP)
+}
+
+/// The `n` fields of one line of `fields_format` output, or None when the line is
+/// not one: wrong count, or no pane id first.
+fn split_fields(line: &str, n: usize) -> Option<Vec<&str>> {
+    let f: Vec<&str> = line.splitn(n, FIELD_SEP).collect();
+    (f.len() == n && f[0].starts_with('%')).then_some(f)
+}
+
 type Res<T> = Result<T, String>;
 type Env = Vec<(String, String)>;
 
@@ -386,23 +403,29 @@ impl Hub {
     fn reattach(&self) -> Res<()> {
         let lines = self
             .tmux
-            .list("#{pane_id}\t#{@sb_pane}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_current_path}\t#{pane_pid}\t#{@sb_keep}")
+            .list(&fields_format(&["#{pane_id}", "#{@sb_pane}", "#{pane_dead}", "#{pane_dead_status}", "#{pane_pid}", "#{@sb_keep}", "#{pane_current_path}"]))
             .map_err(e)?;
+        // Never adopt or close a pane from output we cannot read: a client that tmux
+        // thinks has no UTF-8 gets `_` in place of a tab, and every pane would look new.
+        let parsed: Vec<Vec<&str>> = lines
+            .iter()
+            .map(|l| split_fields(l, 7))
+            .collect::<Option<_>>()
+            .ok_or_else(|| format!("tmux pane list did not parse: {:?}", lines.first()))?;
         let store = self.store.lock().unwrap();
         let rows = store.open_panes().map_err(e)?;
         let mut panes = vec![];
         let mut found = std::collections::HashSet::new();
-        for line in &lines {
-            let f: Vec<&str> = line.split('\t').collect();
+        for f in &parsed {
             let (tid, tag, dead, path, pid) = (
                 f[0],
-                f.get(1).copied().unwrap_or(""),
-                f.get(2) == Some(&"1"),
-                f.get(4).copied().unwrap_or("/"),
-                f.get(5).and_then(|p| p.parse().ok()),
+                f[1],
+                f[2] == "1",
+                if f[6].is_empty() { "/" } else { f[6] },
+                f[4].parse().ok(),
             );
-            let status: i32 = f.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
-            if f.get(6) == Some(&"1") {
+            let status: i32 = f[3].parse().unwrap_or(0);
+            if f[5] == "1" {
                 continue;
             }
             let _ = self.tmux.set_streaming(tid, false);
@@ -1850,17 +1873,21 @@ impl Hub {
         let seen = self.spawns.load(std::sync::atomic::Ordering::SeqCst);
         let Ok(lines) = self
             .tmux
-            .list("#{pane_id}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_pid}\t#{pane_current_command}")
+            .list(&fields_format(&["#{pane_id}", "#{pane_dead}", "#{pane_dead_status}", "#{pane_pid}", "#{pane_current_command}"]))
         else {
+            return;
+        };
+        // A list we cannot read would make every pane look gone: skip this tick.
+        let Some(parsed) = lines.iter().map(|l| split_fields(l, 5)).collect::<Option<Vec<_>>>() else {
+            tracing::warn!(target: "sb::tick", line = ?lines.first(), "tmux pane list did not parse; tick skipped");
             return;
         };
         if n.is_multiple_of(2) {
             self.poll_nvim();
         }
-        let state: HashMap<String, (bool, i32, Option<u32>, String)> = lines
+        let state: HashMap<String, (bool, i32, Option<u32>, String)> = parsed
             .iter()
-            .filter_map(|l| {
-                let f: Vec<&str> = l.split('\t').collect();
+            .filter_map(|f| {
                 Some((
                     f.first()?.to_string(),
                     (
@@ -2081,6 +2108,18 @@ fn request_kind(r: &Request) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tmux_fields_split_and_refuse_bad_lines() {
+        let fmt = super::fields_format(&["#{pane_id}", "#{pane_dead}", "#{pane_current_path}"]);
+        assert_eq!(fmt, "#{pane_id}|~|#{pane_dead}|~|#{pane_current_path}");
+        assert_eq!(super::split_fields("%3|~|0|~|/a/b|~|c", 3), Some(vec!["%3", "0", "/a/b|~|c"]));
+        assert_eq!(super::split_fields("%3|~||~|", 3), Some(vec!["%3", "", ""]));
+        // What tmux sent a client with no UTF-8: tabs turned into `_`.
+        assert_eq!(super::split_fields("%0_p42_0__/Users/eitan_1473_", 7), None);
+        assert_eq!(super::split_fields("%3|~|0", 3), None);
+        assert_eq!(super::split_fields("x|~|0|~|/", 3), None);
+    }
+
     use super::*;
 
     #[test]

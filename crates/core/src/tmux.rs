@@ -93,7 +93,9 @@ impl Tmux {
         on_event: impl Fn(Event) + Send + 'static,
     ) -> Result<Arc<Tmux>, Error> {
         let mut child = Command::new("tmux")
-            .args(["-L", socket, "-f"])
+            // `-u`: a client with no UTF-8 locale (an app started from Finder) gets `_`
+            // in place of tabs and other characters in replies.
+            .args(["-u", "-L", socket, "-f"])
             .arg(conf)
             .args([
                 "-C",
