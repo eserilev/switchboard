@@ -357,3 +357,80 @@ For each of the 143 target threads: past weighted threads on the PR's files, fol
 ### Verdict
 
 No. A block of 30 past threads does not make the review better on this data. B wins as often as it loses (23 to 22, p = 1.0), writes as many useful notes (6.5 per run each) and as many wrong ones (0.25). Its notes are a bit less noisy (5.8 vs 6.6 per run). Its extra catches almost never trace to a past thread (about 5%): they are luck. History could in theory help with about a quarter of what reviewers raise, but the fixed block picked the right thread for only a quarter of those. If knowledge has value, it is in finding the right past thread for the lines at hand (phase 1's tools), not in a fixed block. Do not build more on the fixed block.
+
+## Repo knowledge, phase 0 lookup test (`knowledge/lookup.py`)
+
+Question: can a lookup keyed on the lines under review find the past thread that raised the same concern? The fixed block found it for 10 of 40 repeat concerns. Retrieval only. Run on 2026-11-16, from commit 1d07411, on the round 2 and deep dive data. Results are in `~/.cache/sb-know-spike/deep/lookup*.json`.
+
+### Setup
+
+- Ground truth: the ceiling judge of the deep dive. 40 of 143 targets repeat a past concern, through 60 (target, past thread) pairs.
+- Pool: weighted threads of other PRs whose first comment is before the PR was created (about 4,500 per PR). Weight as of that time.
+- Query units: the hunks of `git diff -U3 base..snapshot` (33 per PR, 11 files), or one unit per changed file.
+- A target is found at k when one of its past threads is in the top k of the unit that holds the target's line, or the nearest unit in that file.
+- Size: the union of every unit's top k for the whole PR, in threads and words (the last 8 hunk lines plus up to 3 comments of 500 characters, as in the block).
+- Methods:
+  - L1: same file, by weight.
+  - L2: same file; the line maps with `track.py` from the original commit to the merge commit to the PR base, within 20 lines of the hunk; by distance, then weight.
+  - L2s: as L2, but a changed line goes to the start of the code that replaced it.
+  - L3: same file, same function (the hunk header's `fn`, or the enclosing `fn` in the code).
+  - L4f and L4r: BM25 by hand (identifiers split on `_` and case) between the hunk text plus function names and the thread's comments plus its diff hunk; same file only, or the whole repo.
+  - L5: L2s, then L3, then L4f, then L4r.
+- The ceiling judge only saw past threads picked by word overlap, which favors L4. So sonnet also judged the 955 top-10 candidates of every method that the ceiling never saw: 2 runs. It found 5 more pairs (43 targets). The numbers below barely move with them (+1 to +3 found).
+
+### Found at k, per unit (40 repeat targets)
+
+| unit | method | @5 | @10 | @30 | threads/PR k=5 | words/PR k=5 | threads/PR k=10 | words/PR k=10 |
+|---|---|---|---|---|---|---|---|---|
+| hunk | L1 | 7 | 11 | 21 | 36 | 2,402 | 63 | 4,194 |
+| hunk | L2 | 0 | 0 | 0 | 4 | 266 | 4 | 266 |
+| hunk | L2s | 4 | 6 | 6 | 15 | 1,031 | 16 | 1,075 |
+| hunk | L3 | 8 | 9 | 9 | 17 | 1,160 | 21 | 1,465 |
+| hunk | L4f | 15 | 19 | 23 | 56 | 3,778 | 85 | 5,755 |
+| hunk | L4r | 16 | 21 | 26 | 81 | 5,583 | 147 | 10,159 |
+| hunk | L5 | 14 | 23 | 28 | 79 | 5,402 | 139 | 9,656 |
+| file | L2s | 9 | 12 | 13 | 13 | 843 | 15 | 1,035 |
+| file | L3 | 12 | 14 | 15 | 14 | 968 | 20 | 1,386 |
+| file | L4f | 16 | 19 | 23 | 36 | 2,385 | 61 | 4,153 |
+| file | L4r | 19 | 24 | 27 | 40 | 2,801 | 75 | 5,251 |
+| file | L5 | 11 | 22 | 28 | 49 | 3,313 | 92 | 6,338 |
+
+Against all 143 targets, divide by 143: the best is 28 of 143 (20%) at k = 30.
+
+### A fixed budget per PR
+
+Round robin over the units' lists until n threads are taken. Found when a match is anywhere in the PR's set, since the agent sees all of it.
+
+| unit | method | 30 threads | 40 threads | 45 threads |
+|---|---|---|---|---|
+| file | L1 (close to the old block) | 8 (1,830 words) | | 12 (2,712) |
+| file | L3 | 15 (1,334) | | 18 (1,634) |
+| file | L4f | 21 (1,847) | 24 (2,448) | 24 (2,722) |
+| file | L4r | 20 (2,166) | 25 (2,883) | 26 (3,232) |
+| hunk | L5 | 17 (2,043) | | 23 (3,082) |
+
+Of the 1,200 threads that L4r at 40 shows over 30 PRs, 24 are a match (2%).
+
+### Why lookups miss
+
+- Lines are the wrong key. Of the 60 pairs, 31 are on the same file, 17 on another file of the PR, 12 on a file the PR does not touch. Of the 31 on the same file, only 6 past lines still exist at the PR base; 24 were changed since. Mapped softly, 5 land within 20 lines of the target; the median is about 100 lines away. A repeat concern is the same kind of thing elsewhere, not a comment on the same lines. So L2 finds 0 and L2s finds 6.
+- Function match is narrow: the same `fn` name in the same file is rare across PRs.
+- For L4r at 40 threads, 15 targets are missed:
+  - 6: a general habit raised in a file the PR does not touch, in other words ("dont panic here" vs "why not expect?"; "add gossip metrics" vs a metrics note in `fetch_blobs.rs`; "we dont need the clone" vs three older clone notes).
+  - 5: same file, phrased differently (rank 28 to over 200).
+  - 4: ranked 6 to 28 in their file, but cut by the budget.
+  - About 3 of the 15 are weak matches from a lenient judge ("rename this arg" for "pass in proposal_slot").
+- Per hunk is worse than per file: one hunk has too few words, and a PR has 33 hunks, so k = 10 per hunk is 140 threads and 10,000 words.
+
+### Limits
+
+- The ground truth is one sonnet judge, lenient, with no human check. Its candidates were picked by word overlap, which favors L4. The extra judge on 955 lookup candidates added only 5 pairs.
+- 30 PRs, one repo. Lighthouse reviewers are almost all members, so weight sorts little.
+- Found means the right thread is in front of the agent. It does not mean the agent uses it: in the deep dive, 10 matches in the block gave about 3 catches that trace to history.
+- 2 Claude runs (sonnet), counted in `claude_runs_lookup.txt`.
+
+### Verdict
+
+Line lookups fail; text lookup works, barely. No lookup keyed on lines finds most repeat concerns: at best 19 of 40 (L2s or L3, 45 threads). Per hunk, nothing reaches most of them under 3,000 words. BM25 per changed file over all past threads of the repo (L4r), 40 threads per PR round robin, finds 25 of 40 (63%) in about 2,900 words: 2.5 times the fixed block at a similar size. That meets the bar, just.
+
+The ceiling stays low: 25 found targets are 17% of all 143. If a targeted test runs, use L4r per file with 40 threads, and score only on the 40 repeat targets, A against B, 3 runs each. If B does not catch clearly more of those, the idea is dead for this repo.
