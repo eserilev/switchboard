@@ -43,6 +43,12 @@ pub enum Request {
         pane: Option<String>,
         op: crate::tasks::TaskOp,
     },
+    /// `board_list` of the pane tools (SPEC 36): the panes in the caller's repo.
+    /// Names, branches and states only: no text the agents wrote.
+    Board {
+        #[serde(default)]
+        pane: Option<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

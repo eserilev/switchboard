@@ -764,10 +764,17 @@ impl Hub {
         let config = self.config();
         // A pane that starts again keeps its sandbox: a resumed Ask pane has no `ask`.
         let sandboxed = config.sandbox.covers(start.ask) || crate::sandbox::file_on(&settings);
+        // The pane tools (SPEC 36): every agent pane but one with its own server (Ask).
+        let tools = config.pane_tools.enabled && start.mcp.is_none();
+        let mut allow = start.allow.clone();
+        if tools {
+            allow.push(hooks::PANE_TOOLS_RULE.to_owned());
+            env.push(("SB_TOOLS".to_owned(), "1".to_owned()));
+        }
         let pane = hooks::PaneSettings {
             sb: &self.sb,
             rust,
-            allow: &start.allow,
+            allow: &allow,
             sandbox: sandboxed.then(|| crate::sandbox::block(&config.sandbox, tree)),
         };
         std::fs::write(&settings, hooks::settings(&pane).to_string()).map_err(e)?;
@@ -796,6 +803,9 @@ impl Hub {
         // `--mcp-config` and `--add-dir` take lists: a flag ends each one.
         if let Some(cfg) = &start.mcp {
             argv.extend(["--mcp-config".into(), cfg.clone(), "--strict-mcp-config".into()]);
+        } else if tools {
+            // Not strict: the user's own servers still load beside it.
+            argv.extend(["--mcp-config".into(), hooks::pane_tools_config(&self.sb, id, &self.paths.sock()).to_string()]);
         }
         for d in &start.dirs {
             argv.extend(["--add-dir".into(), d.clone()]);
@@ -1839,6 +1849,7 @@ impl Hub {
                 Err(err) => Ack::err(err),
             }),
             Request::Task { pane, op } => self.task_socket(pane.as_deref(), op),
+            Request::Board { pane } => self.board_socket(pane.as_deref()),
         };
         let mut w = &conn;
         let _ = writeln!(w, "{reply}");
@@ -2103,6 +2114,7 @@ fn request_kind(r: &Request) -> &'static str {
         Request::GuideUpdate { .. } => "guide_update",
         Request::ReviewShow { .. } => "review_show",
         Request::Task { .. } => "task",
+        Request::Board { .. } => "board",
     }
 }
 

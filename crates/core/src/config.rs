@@ -16,6 +16,7 @@ pub struct Config {
     pub review: ReviewCfg,
     pub tasks: TasksCfg,
     pub sandbox: SandboxCfg,
+    pub pane_tools: PaneToolsCfg,
     /// Remote mode (SPEC 29): the ssh host of the hub, for example `me@box`. With
     /// none, the hub runs here.
     pub remote: Option<String>,
@@ -203,6 +204,20 @@ impl Default for TasksCfg {
     }
 }
 
+/// The `[pane_tools]` table (SPEC 36): the `switchboard` MCP server in agent panes.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields, default)]
+pub struct PaneToolsCfg {
+    /// Off: panes start with no `switchboard` server and no start note.
+    pub enabled: bool,
+}
+
+impl Default for PaneToolsCfg {
+    fn default() -> Self {
+        PaneToolsCfg { enabled: true }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -214,6 +229,7 @@ impl Default for Config {
             review: ReviewCfg::default(),
             tasks: TasksCfg::default(),
             sandbox: SandboxCfg::default(),
+            pane_tools: PaneToolsCfg::default(),
             remote: None,
             remote_command: None,
         }

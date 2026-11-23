@@ -45,7 +45,10 @@ fn main() {
         Some("permit") => permit(),
         Some("open") => open(&args[1..]),
         Some("task") => task(&args[1..]),
-        Some("mcp") => mcp::serve(args.get(1).map(String::as_str) == Some("--ask")),
+        Some("mcp") => match args.get(1).map(String::as_str) {
+            Some("--pane") => mcp::serve_pane(),
+            a => mcp::serve(a == Some("--ask")),
+        },
         Some("serve") => serve(),
         Some("attach") => attach(),
         Some("connect") if args.get(1).map(String::as_str) == Some("add") => {
@@ -277,6 +280,10 @@ fn state(arg: &str) -> i32 {
         }
     }
     let _ = send(&Request::State(msg), false);
+    // A pane with the pane tools learns at the start that it runs in Switchboard (SPEC 36).
+    if arg == "session" && std::env::var("SB_TOOLS").as_deref() == Ok("1") {
+        println!("{}", hooks::session_start_output(&pane));
+    }
     0
 }
 

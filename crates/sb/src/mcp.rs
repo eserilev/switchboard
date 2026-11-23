@@ -9,6 +9,9 @@
 //! `sb mcp --ask` is the server of the review's Ask pane (SPEC 11.15). It has only
 //! `review_show`, which moves the review window to code. It has no guide tool and no
 //! `git`, and it refuses them by name too.
+//!
+//! `sb mcp --pane` is the `switchboard` server of every agent pane (SPEC 36): the
+//! task tools and `board_list`, each one request on the socket.
 
 use crate::send;
 use serde_json::{json, Value};
@@ -136,6 +139,136 @@ pub fn ask_tools() -> Value {
     }])
 }
 
+/// The tools of `sb mcp --pane` (SPEC 36), the `switchboard` server of every agent
+/// pane. Tasks and the board only. None of them reaches GitHub, starts a process or
+/// touches the network: each one is one request on the socket.
+pub fn pane_tools() -> Value {
+    let s = |d: &str| json!({ "type": "string", "description": d });
+    json!([
+        {
+            "name": "task_list",
+            "description": "List the user's Switchboard tasks (their to-do list and sprint). Each task has an id, title, status (todo, doing, blocked, review, done), priority and sprint.",
+            "inputSchema": { "type": "object", "properties": {
+                "sprint": s("current, backlog, or a sprint name. Leave out for all."),
+                "status": s("todo, doing, blocked, review or done. Leave out for all.")
+            } }
+        },
+        {
+            "name": "task_show",
+            "description": "One task in full: notes, sprint, linked agent panes and history. With no id, the task linked to this pane.",
+            "inputSchema": { "type": "object", "properties": { "id": s("The task id, for example T12.") } }
+        },
+        {
+            "name": "task_add",
+            "description": "Add a task to the user's list. Only when the user asks for one.",
+            "inputSchema": { "type": "object", "properties": {
+                "title": s("One line."),
+                "notes": s("Optional detail."),
+                "sprint": s("current, backlog or a sprint name. Leave out for the backlog.")
+            }, "required": ["title"] }
+        },
+        {
+            "name": "task_note",
+            "description": "Add a note at the end of a task's notes, marked as from this pane.",
+            "inputSchema": { "type": "object", "properties": { "id": s("The task id."), "text": s("The note.") }, "required": ["id", "text"] }
+        },
+        {
+            "name": "task_status",
+            "description": "Set a task's status to todo, doing, blocked or review. Only the user sets done, in the Switchboard window.",
+            "inputSchema": { "type": "object", "properties": {
+                "id": s("The task id."),
+                "status": { "type": "string", "enum": switchboard_core::tasks::SOCKET_STATUSES },
+                "blocked_by": s("Who or what blocks it. Required for blocked.")
+            }, "required": ["id", "status"] }
+        },
+        {
+            "name": "board_list",
+            "description": "The agent panes on the user's Switchboard board in this repo: pane id, title, worktree, branch, state (working, turn = waiting for the user, needs permission, idle, ended) and linked task. `you` marks this pane.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }
+    ])
+}
+
+/// The socket request for one pane tool, or `None` for a name it does not have.
+pub fn pane_request(name: &str, args: &Value, pane: Option<String>) -> Option<Request> {
+    use switchboard_core::tasks::TaskOp;
+    let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_owned);
+    let op = match name {
+        "board_list" => return Some(Request::Board { pane }),
+        "task_list" => TaskOp::List { sprint: s("sprint"), status: s("status") },
+        "task_show" => TaskOp::Show { id: s("id") },
+        "task_add" => TaskOp::Add { title: s("title").unwrap_or_default(), notes: s("notes"), repo: None, sprint: s("sprint") },
+        "task_note" => TaskOp::Note { id: s("id").unwrap_or_default(), text: s("text").unwrap_or_default() },
+        "task_status" => TaskOp::Status { id: s("id").unwrap_or_default(), status: s("status").unwrap_or_default(), blocked_by: s("blocked_by") },
+        _ => return None,
+    };
+    Some(Request::Task { pane, op })
+}
+
+/// Handles one JSON-RPC message of `sb mcp --pane`. `call` sends a request and
+/// returns the reply line.
+pub fn handle_pane(msg: &Value, pane: Option<String>, call: &dyn Fn(Request) -> Result<String, String>) -> Option<Value> {
+    let id = msg.get("id")?.clone();
+    let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
+    let result = match method {
+        "initialize" => {
+            let v = msg.pointer("/params/protocolVersion").cloned().unwrap_or(json!("2025-06-18"));
+            json!({
+                "protocolVersion": v,
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "switchboard", "version": env!("CARGO_PKG_VERSION") },
+                "instructions": "Switchboard is the app this agent runs in. These tools read and change the user's Switchboard tasks, to-do list and sprint, and list the other agent panes on the board in this repo."
+            })
+        }
+        "ping" => json!({}),
+        "tools/list" => json!({ "tools": pane_tools() }),
+        "tools/call" => {
+            let name = msg.pointer("/params/name").and_then(Value::as_str).unwrap_or("");
+            let args = msg.pointer("/params/arguments").cloned().unwrap_or(json!({}));
+            let (text, error) = match pane_request(name, &args, pane) {
+                None => (format!("unknown tool {name}"), true),
+                Some(req) => match call(req) {
+                    Err(e) => (format!("Switchboard is not reachable: {e}"), true),
+                    Ok(line) => {
+                        let mut v: Value = serde_json::from_str(&line).unwrap_or(json!({ "ok": false, "error": "bad reply" }));
+                        if v["ok"] == json!(true) {
+                            if let Some(o) = v.as_object_mut() {
+                                o.remove("ok");
+                            }
+                            (serde_json::to_string_pretty(&v).unwrap_or_default(), false)
+                        } else {
+                            (v["error"].as_str().unwrap_or("refused").to_owned(), true)
+                        }
+                    }
+                },
+            };
+            json!({ "content": [{ "type": "text", "text": text }], "isError": error })
+        }
+        _ => {
+            return Some(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": format!("unknown method {method}") } }))
+        }
+    };
+    Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+/// `sb mcp --pane`: the server of an agent pane. `SB_PANE` says which pane.
+pub fn serve_pane() -> i32 {
+    let pane = std::env::var("SB_PANE").ok().filter(|p| !p.is_empty());
+    let call = |req: Request| -> Result<String, String> { Ok(send(&req, true)?.unwrap_or_default()) };
+    let stdin = std::io::stdin();
+    let mut out = std::io::stdout();
+    for line in stdin.lock().lines().map_while(Result::ok) {
+        let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if let Some(reply) = handle_pane(&msg, pane.clone(), &call) {
+            let _ = writeln!(out, "{reply}");
+            let _ = out.flush();
+        }
+    }
+    0
+}
+
 /// Handles one JSON-RPC message. `None` for a notification. With `ask`, only the
 /// tool of the Ask pane.
 pub fn handle(
@@ -255,6 +388,73 @@ mod tests {
 
     fn ok(_: Request) -> Result<Ack, String> {
         Ok(Ack::ok())
+    }
+
+    #[test]
+    fn pane_server_lists_only_the_pane_tools() {
+        let r = handle_pane(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}), Some("p1".into()), &|_| Ok(String::new())).unwrap();
+        assert_eq!(r["result"]["serverInfo"]["name"], "switchboard");
+        assert!(r["result"]["instructions"].as_str().unwrap().contains("tasks"));
+        let r = handle_pane(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}), Some("p1".into()), &|_| Ok(String::new())).unwrap();
+        let names: Vec<&str> = r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["task_list", "task_show", "task_add", "task_note", "task_status", "board_list"]);
+    }
+
+    #[test]
+    fn pane_server_refuses_other_tools_and_sends_nothing() {
+        let sent = std::cell::Cell::new(false);
+        for name in ["guide_set_steps", "guide_update_step", "git", "review_show", "task_delete", ""] {
+            let r = handle_pane(
+                &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":name,"arguments":{}}}),
+                Some("p1".into()),
+                &|_| {
+                    sent.set(true);
+                    Ok("{\"ok\":true}".into())
+                },
+            )
+            .unwrap();
+            assert_eq!(r["result"]["isError"], true, "{name}");
+        }
+        assert!(!sent.get());
+    }
+
+    #[test]
+    fn pane_calls_carry_the_pane_and_return_the_data() {
+        let seen = std::cell::RefCell::new(vec![]);
+        let call = |req: Request| -> Result<String, String> {
+            seen.borrow_mut().push(req);
+            Ok(r#"{"ok":true,"tasks":[{"id":"T1"}]}"#.into())
+        };
+        let r = handle_pane(&json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"task_list","arguments":{"status":"doing"}}}), Some("p1".into()), &call).unwrap();
+        assert_eq!(r["result"]["isError"], false);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("T1") && !text.contains("\"ok\""));
+        handle_pane(&json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"board_list"}}), Some("p1".into()), &call).unwrap();
+        let seen = seen.borrow();
+        assert_eq!(
+            seen[0],
+            Request::Task { pane: Some("p1".into()), op: switchboard_core::tasks::TaskOp::List { sprint: None, status: Some("doing".into()) } }
+        );
+        assert_eq!(seen[1], Request::Board { pane: Some("p1".into()) });
+    }
+
+    #[test]
+    fn pane_refusals_are_tool_errors() {
+        let r = handle_pane(
+            &json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"task_status","arguments":{"id":"T1","status":"done"}}}),
+            Some("p1".into()),
+            &|_| Ok(r#"{"ok":false,"error":"only the Switchboard window sets a task to done"}"#.into()),
+        )
+        .unwrap();
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("window"));
+        let r = handle_pane(
+            &json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"task_list"}}),
+            None,
+            &|_| Err("no socket".into()),
+        )
+        .unwrap();
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("not reachable"));
     }
 
     #[test]

@@ -837,6 +837,9 @@ mode = "review"                 # "off", "review" (review Ask panes) or "all" (e
 domains = ["github.com", "api.github.com", "*.githubusercontent.com", "crates.io", "index.crates.io", "static.crates.io", "registry.npmjs.org", "pypi.org", "files.pythonhosted.org"]
 write = []                      # more folders that commands can write
 unsandboxed = ["git push *", "git fetch *", "git pull *", "gh *", "docker *"]
+
+[pane_tools]                    # SPEC 36
+enabled = true                  # the `switchboard` MCP server in every agent pane
 ```
 
 `remote = "me@box"` runs the window against a hub on that host, and `remote_command` replaces the ssh command (29.1).
@@ -1079,6 +1082,7 @@ Where the build differs from the text above:
 - Sandbox (31): not checked with a real `claude` yet. The keys follow the Claude Code docs (code.claude.com/docs/en/sandboxing, read on 2026-11-03). Not verified: that a blocked site in an interactive pane comes to the `PermissionRequest` hook, so the tile shows Allow and Deny; that `git commit` in a worktree works with the git folder in `allowWrite`; that the `Read(~/.ssh/**)` rules stop the Read tool; and that `failIfUnavailable` stops a pane on Linux with no `bwrap`.
 - Sandbox (31): a pane that starts again (resume, restart, a new connection) keeps the sandbox of its settings file, whatever the mode is now. A resumed Ask pane has no Ask mark in its start, so the mode alone would drop it.
 - Sandbox (31): the git paths in `denyWrite` are the real paths when the pane starts, not globs such as `modules/*/hooks`: Claude Code skips a glob in a write rule on Linux. So a submodule or a worktree added while the pane runs is not covered until the pane starts again. A `config.worktree` that is not there yet is listed only when `extensions.worktreeConfig` is on, since git reads it only then (and that setting lives in the closed `config`).
+- Pane tools (36): built, slice 1 (36.8): tasks, the board and the start note. Not built yet: the change feed and its Undo, the "sb" mark and call log on the tile, the switch in Settings (only the config key), review reads, and the Today tools. Checked on 2026-11-23 with Claude Code 2.1.330: an interactive pane loads the `--mcp-config` server with no "new MCP server" dialog, shows it connected with its 6 tools, and the user's own servers still load.
 - Sandbox (31): the `credentials` key of the sandbox is not used. `denyRead` and the permission deny rules cover the same folders, and an older Claude Code may not know the key.
 - Claude points to the code (11.15): not checked with a real `claude` yet. Not verified: that Claude calls `review_show` when asked where something is or what to fix, that it cites `path:line` as the system prompt asks, that an interactive pane runs a `--mcp-config` server with no "new MCP server" dialog, that the allow rule runs the tool with no prompt, and that the Stop input of the Claude Code in use has `last_assistant_message` (else the session file is read).
 - Claude points to the code (11.15): names in backticks are found in the diff model in memory, not with `git grep -w` in the worktree. The model holds every changed file at the reviewed head, and it never sees an edit in the worktree. A name only in a file the PR does not change is not found.
@@ -2572,3 +2576,69 @@ The index is not Switchboard's alone. A repo made an expert in Switchboard is an
 - **Gnomish Relay** (confirmed with its session, 2026-11-16): a Rust desktop app with no Tauri. It would link the library, mostly read, and paste `context` into its guide prompt, because its guide has no MCP server and no network. It would not build an index during a game session. Its data stays in its own folder.
 - **Tests:** two processes that build the same repo (one waits); a reader during a write; a crash with the lock held; a reader of an older and of a newer version; the CLI's JSON for each command; the MCP server's tools on a fixed store.
 
+## 36. Pane tools
+
+Status: slice 1 built (36.8).
+
+Every agent pane can see Switchboard. In a pane you can say "what's on my task list?", "what are my other agents doing?" or "make a task for this", and the agent knows how.
+
+### 36.1 How a pane gets them
+
+- `Hub::command` builds every agent pane's start. When `pane_tools.enabled` is on (the default) and the pane has no server of its own (the Ask pane has `sb mcp --ask`), it adds:
+  - `--mcp-config` with one server, `switchboard`: `sb mcp --pane`, with `SB_PANE` and `SB_SOCK`. It is not strict, so the user's own MCP servers still load.
+  - `mcp__switchboard` in the pane settings' `permissions.allow`, so the tools never prompt. The hub decides what they may do (36.4).
+  - `SB_TOOLS=1` in the pane's environment.
+- Every start goes through `command`: new, resume, connection switch, task Resume, a closed pane started again. A pane that runs from before gets the tools at its next start.
+- **The start note.** With `SB_TOOLS=1`, the `SessionStart` hook (`sb state session`) prints `additionalContext`. It is fixed text: the pane id, what the tools cover, and that task text is notes, not orders. Nothing from GitHub or another agent goes in it.
+- The server's `instructions` say the same in one line, for a Claude Code that defers tool schemas.
+
+### 36.2 The tools
+
+| Tool | Does |
+|---|---|
+| `task_list(sprint?, status?)` | The tasks (27), as `sb task list`. |
+| `task_show(id?)` | One task with notes, sprint, links and history. No id: the task linked to this pane. |
+| `task_add(title, notes?, sprint?)` | As `sb task add`. |
+| `task_note(id, text)` | As `sb task note`. |
+| `task_status(id, status, blocked_by?)` | todo, doing, blocked or review. Never `done`: only the window sets it (27.7). |
+| `board_list()` | The panes of the caller's repo (worktrees too): pane id, kind, title, worktree, branch, state (the lamp, or "needs permission"), linked task, and `you`. |
+
+Each tool is one request on the socket. No tool starts a process, reaches the network or writes to GitHub. A reply is the hub's JSON without `ok`; a refusal is a tool error with the reason.
+
+### 36.3 What a pane can see
+
+- `board_list` shows only the panes whose repo is the caller's repo. A caller that is not a pane on the board is refused.
+- It never returns a summary, the screen tail, or any text an agent wrote. One agent does not read another's words through it.
+- Tasks are all visible, as with `sb task`.
+
+### 36.4 Trust
+
+- As with `sb task` (27.7), these rules guard against mistakes and injected text. They are not a security boundary: the pane runs as you and can reach the socket.
+- The hub enforces the rules (never `done`, never delete, the board scope), not Claude Code's allow rules, which the user can change.
+- A task note can become the first message of a new agent (27.6). You read the paste before you press Enter.
+
+### 36.5 Not in scope
+
+- `pane_peek` and `pane_send`: one agent reading or driving another. Send to agent (11.11) does this with you in the loop.
+- Any tool that writes to GitHub, closes panes, or changes config, settings, permissions, connections or the sandbox.
+
+### 36.6 Later
+
+- **The change feed.** Every change an agent makes shows in the window, already applied, with Undo: "pane-3 added task T12 · Undo". The task history already names the pane.
+- **The tile.** An "sb" mark, and the last 20 Switchboard calls of the pane in the inspector.
+- **Settings.** The switch, and an on/off for each group.
+- **Review reads.** `review_list` and `review_get`: steps, takes, notes and your drafts.
+- **Today.** `today_list`, `today_item`, `today_done`, `today_later` and `today_open`, when the Today view (a ranked GitHub to-do list) is built. Quoted GitHub text then goes in a block with a new random marker for each call.
+- **Job scope.** With jobs, a pane maps to repos through every git remote of its common dir, and sees the jobs that hold any of them.
+
+### 36.7 Config
+
+`[pane_tools] enabled = true`. Off: no server, no allow rule, no start note. It applies to panes that start after the change.
+
+### 36.8 Build and tests
+
+Slice 1: the start, the note, the six tools, the board scope.
+
+- `sb` unit tests: the pane server lists only its six tools, refuses others by name and sends nothing for them, sends the caller's pane with each call, and turns a refusal or a missing socket into a tool error.
+- `crates/sb/tests/pane_tools.rs`: a real hub and tmux, and a stand-in `claude` that writes its args. An agent pane starts with the `switchboard` server, not strict, the allow rule and `SB_TOOLS`. The start note shows only with `SB_TOOLS`. `board_list` shows the panes of the caller's repo, worktrees too, and not another repo's, and refuses a caller that is not a pane. A task added through the tools is in the list, its note and history name the pane, and `done` is refused.
+- The Ask pane keeps `sb mcp --ask` with `--strict-mcp-config` (`review_show.rs`).

@@ -385,6 +385,38 @@ impl Hub {
         self.emit_tasks();
     }
 
+    /// `board_list` of the pane tools (SPEC 36): the panes of the caller's repo, with
+    /// their branch, state and linked task. No summary, tail or other text an agent
+    /// wrote: one agent never reads another's words through this.
+    pub(crate) fn board_socket(&self, pane: Option<&str>) -> Value {
+        // Two steps, so the panes lock is never held with the store lock.
+        let mut list: Vec<Value> = {
+            let panes = self.panes.lock().unwrap();
+            let Some(me) = pane.and_then(|p| panes.iter().find(|x| x.row.id == p)) else {
+                return json!({ "ok": false, "error": "not a Switchboard pane" });
+            };
+            panes
+                .iter()
+                .filter(|x| x.row.repo == me.row.repo)
+                .map(|x| {
+                    let state = if x.permit.is_some() { "needs permission".to_owned() } else { x.row.lamp.clone() };
+                    json!({
+                        "pane": x.row.id, "kind": x.row.kind, "title": x.row.title, "tree": x.row.tree,
+                        "branch": x.branch, "state": state, "task": null, "you": x.row.id == me.row.id,
+                    })
+                })
+                .collect()
+        };
+        {
+            let store = self.store.lock().unwrap();
+            for v in &mut list {
+                let id = v["pane"].as_str().unwrap_or_default().to_owned();
+                v["task"] = json!(store.task_of_pane(&id).ok().flatten());
+            }
+        }
+        json!({ "ok": true, "panes": list })
+    }
+
     /// One `sb task` request from the socket. The reply is `{ok, error}` plus the data.
     /// The history names the pane only when it is a pane on the board; else `cli`. So
     /// `SB_PANE=you` does not look like a change from the window.
