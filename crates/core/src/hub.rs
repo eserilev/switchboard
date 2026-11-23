@@ -269,6 +269,24 @@ fn is_shell(command: &str) -> bool {
         || matches!(name, "bash" | "zsh" | "fish" | "sh" | "dash" | "ksh" | "nu" | "tcsh" | "csh")
 }
 
+/// The image types that Claude Code reads from a pasted path.
+const PASTE_TYPES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
+/// The largest image the window can paste. A screenshot of a big screen is a few MB.
+const PASTE_MAX: usize = 32 << 20;
+/// How long a pasted image stays. The agent reads it in its next turn.
+const PASTE_KEEP: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 3600);
+
+/// Removes the pasted images older than `keep`.
+fn sweep_pastes(dir: &Path, keep: std::time::Duration) {
+    let Ok(list) = std::fs::read_dir(dir) else { return };
+    for f in list.flatten() {
+        let old = f.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > keep);
+        if old {
+            let _ = std::fs::remove_file(f.path());
+        }
+    }
+}
+
 /// `text` as one bracketed paste, with no control characters but newline and tab.
 /// So a text from an agent (a task note, a draft) can never end the paste early or
 /// press Enter: you read the paste and send it yourself.
@@ -1063,6 +1081,34 @@ impl Hub {
                 }
             }
         }
+    }
+
+    /// An image from the window's clipboard (SPEC 29.10). The hub saves it in
+    /// `~/.switchboard/paste` and types its path into the pane as a paste, with no
+    /// Enter. Claude Code reads the path as an image. So an image reaches an agent on
+    /// a remote hub, where the agent has no access to the window's clipboard.
+    pub fn paste_image(&self, id: &str, data: &[u8], ext: &str) -> Res<String> {
+        if !PASTE_TYPES.contains(&ext) {
+            return Err(format!("{ext} is not an image type the agent reads"));
+        }
+        if data.is_empty() || data.len() > PASTE_MAX {
+            return Err(format!("the image has {} bytes; the limit is {} MB", data.len(), PASTE_MAX >> 20));
+        }
+        let dir = self.paths.home.join("paste");
+        std::fs::create_dir_all(&dir).map_err(e)?;
+        sweep_pastes(&dir, PASTE_KEEP);
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        let path = dir.join(format!("{}-{:09}.{ext}", at.as_secs(), at.subsec_nanos()));
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).map_err(e)?;
+            f.write_all(data).map_err(e)?;
+        }
+        let text = path.to_string_lossy().into_owned();
+        tracing::info!(target: "sb::hub", pane = id, path = %text, bytes = data.len(), "paste image");
+        // The space after the path ends it, so text you type next is not part of it.
+        self.input(id, bracketed_paste(&format!("{text} ")).as_bytes())?;
+        Ok(text)
     }
 
     pub fn input(&self, id: &str, bytes: &[u8]) -> Res<()> {

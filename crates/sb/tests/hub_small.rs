@@ -113,3 +113,47 @@ fn a_close_takes_the_state_file() {
     }
     assert!(!state.exists());
 }
+
+/// An image from the window lands in `~/.switchboard/paste` on the hub, and the
+/// pane gets its path as a paste with no Enter (SPEC 29.10).
+#[test]
+fn a_pasted_image_lands_on_the_hub_and_its_path_in_the_pane() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let b = board("paste-image");
+    let id = b.open(None);
+    let png = [137u8, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3];
+    assert!(b.hub.paste_image(&id, &png, "exe").is_err());
+    assert!(b.hub.paste_image(&id, &[], "png").is_err());
+    let dir = switchboard_core::paths::Paths::from_env().home.join("paste");
+    // An old paste goes at the next paste; a new one stays.
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = dir.join("1-000000000.png");
+    std::fs::write(&old, b"x").unwrap();
+    let week = std::time::SystemTime::now() - Duration::from_secs(8 * 24 * 3600);
+    std::fs::File::options().write(true).open(&old).unwrap().set_modified(week).unwrap();
+    // Every pane of the test server: the hub keeps more than the agent's.
+    let screen = || {
+        let tmux = |args: &[&str]| String::from_utf8_lossy(&Command::new("tmux").arg("-L").arg(&b.socket).args(args).output().unwrap().stdout).into_owned();
+        let ids = tmux(&["list-panes", "-a", "-F", "#{pane_id}"]);
+        ids.lines().map(|p| tmux(&["capture-pane", "-p", "-J", "-t", p])).collect::<Vec<_>>().join("\n")
+    };
+    // The shell reads input once its prompt shows.
+    let end = Instant::now() + Duration::from_secs(5);
+    while !screen().lines().any(|l| l.trim_end().ends_with('$')) && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let path = b.hub.paste_image(&id, &png, "png").unwrap();
+    assert!(path.starts_with(&dir.to_string_lossy().into_owned()) && path.ends_with(".png"), "{path}");
+    assert_eq!(std::fs::read(&path).unwrap(), png);
+    assert!(!old.exists());
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    let end = Instant::now() + Duration::from_secs(5);
+    while !screen().contains(&path) && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let s = screen();
+    assert!(s.contains(&path), "{s}");
+    // No Enter: the shell did not run the path.
+    assert!(!s.contains("Permission denied") && !s.contains("command not found"), "{s}");
+}

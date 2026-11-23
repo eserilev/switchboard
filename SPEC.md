@@ -770,6 +770,7 @@ Commands from the window to the core:
 |---|---|
 | `pane_open` | repo, tree, kind, title |
 | `pane_input` | pane, bytes |
+| `pane_image` | pane, image bytes (base64), type; returns the path on the hub (29.10) |
 | `pane_resize` | pane, cols, rows |
 | `pane_expand` / `pane_collapse` | pane |
 | `pane_close` | pane |
@@ -1704,7 +1705,7 @@ One JSON object per line, on the window socket. `sb attach` copies its stdin and
 
 ### 29.4 Order
 
-- The commands in `dispatch::ORDERED` (the screen commands and `pane_input`) run in the order the window sends them.
+- The commands in `dispatch::ORDERED` (the screen commands, `pane_input` and `pane_image`) run in the order the window sends them.
 - In the app, one lane thread sends them in order. It does not wait for an answer, so keys over ssh do not wait for a round trip.
 - `sb serve` runs them in the read loop of the window, and queues each answer before it reads the next line. Other commands run in threads of their own.
 - In the window, only the answer of the newest expand draws. An older answer has an older screen.
@@ -1780,6 +1781,17 @@ A review by a second agent found these. All are fixed:
 - Without `loginctl enable-linger` on the server, logind can remove the runtime folder when your last ssh session ends. Then `window.sock` goes, and the next `sb attach` fails. Turn linger on.
 - Any process of your user on the server can run `sb attach` and answer a permit. The tmux socket gives the same power already.
 - A server can send one very long line. The window reads it all.
+- A file dropped on the terminal does not go to a remote hub. Paste it instead.
+
+### 29.10 Images
+
+An agent on a remote hub cannot read the clipboard of the window's machine. So the window sends the image itself:
+
+- A paste in the live terminal (Cmd+V, Ctrl+Shift+V) with an image and no text calls `pane_image`. A paste with text pastes the text, as before.
+- With a remote hub, Ctrl+V in the live terminal reads the clipboard. An image goes to `pane_image`; anything else sends Ctrl+V to the pane as before. On a local hub, Ctrl+V goes to the pane, and Claude Code reads the clipboard itself.
+- `pane_image` takes PNG, JPEG, GIF and WebP, up to 32 MB. The hub writes the image to `~/.switchboard/paste/<seconds>-<nanoseconds>.<type>` with mode 0600, and types its path and a space into the pane as one bracketed paste, with no Enter. Claude Code shows the path as `[Image #N]`. A paste removes the images older than 7 days.
+- `pane_image` is in `dispatch::ORDERED`: the path lands after the keys typed before it.
+- Tests: `a_pasted_image_lands_on_the_hub_and_its_path_in_the_pane` (a real hub and tmux: the file, its mode, the path in the pane, no Enter, bad types and empty images refused, the sweep of old images). Window checks: an image paste calls `pane_image` for the live pane with the bytes; a paste with text and an image does not.
 
 ## 30. Work environment
 

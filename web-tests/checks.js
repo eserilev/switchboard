@@ -187,6 +187,26 @@
   check("pane_resize before expand", window.__calls.findIndex((c) => c[0] === "pane_resize") < window.__calls.findIndex((c) => c[0] === "pane_expand"));
   await wait(100);
   check("terminal drew the screen", screen().includes("hello from the live pane"), screen().slice(0, 80));
+  // An image on the clipboard goes to the hub as a file (SPEC 29.10); text pastes as text.
+  {
+    const paste = (files, text) => {
+      const dt = new DataTransfer();
+      if (text) dt.setData("text/plain", text);
+      for (const f of files) dt.items.add(f);
+      $("#term textarea").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+    };
+    const png = new File([new Uint8Array([137, 80, 78, 71, 1, 2, 3])], "shot.png", { type: "image/png" });
+    const before = called("pane_image").length;
+    window.SB.S.pasting = null;
+    paste([png]);
+    await window.SB.S.pasting;
+    const sent = called("pane_image").at(-1)?.[1];
+    check("an image paste sends the image to the hub for the live pane", sent?.id === window.SB.S.live && sent?.ext === "png" && sent?.data === btoa(String.fromCharCode(137, 80, 78, 71, 1, 2, 3)), JSON.stringify({ sent, live: window.SB.S.live, ta: !!$("#term textarea"), toast: $("#toast")?.textContent }));
+    window.SB.S.pasting = null;
+    paste([png], "some text");
+    await wait(20);
+    check("a paste with text and an image pastes the text, not the image", called("pane_image").length === before + 1 && window.SB.S.pasting === null);
+  }
   window.__emit("pane_output", { pane: "p1", data: btoa("streamed bytes") });
   await wait(100);
   check("stream writes to the terminal", screen().includes("streamed bytes"), screen().slice(0, 120));

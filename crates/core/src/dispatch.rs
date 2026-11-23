@@ -49,6 +49,7 @@ pub const ORDERED: &[&str] = &[
     "pane_resize",
     "part_resize",
     "pane_input",
+    "pane_image",
 ];
 
 macro_rules! commands {
@@ -85,6 +86,10 @@ commands! {
     shell_open(tree: String) -> String => |h| h.shell_open(std::path::Path::new(&tree));
     pane_seen(id: String) -> () => |h| h.seen(&id);
     pane_close(id: String) -> () => |h| h.close(&id);
+    pane_image(id: String, data: String, ext: String) -> String => |h| {
+        let bytes = B64.decode(data.as_bytes()).map_err(|err| format!("the image is not base64: {err}"))?;
+        h.paste_image(&id, &bytes, &ext)
+    };
     pane_rename(id: String, title: Option<String>) -> () => |h| h.rename(&id, title);
     pane_reorder(ids: Vec<String>) -> () => |h| h.reorder(&ids);
     pane_resume(id: String) -> () => |h| h.resume(&id);

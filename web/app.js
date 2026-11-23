@@ -594,7 +594,17 @@ const remeasure = (t) => document.fonts?.load('13px "JetBrains Mono"').then(() =
   t.options.fontFamily = f;
 }).catch(() => {});
 remeasure(term)?.then(() => fitSoon());
-term.attachCustomKeyEventHandler((e) => !isLeader(e));
+term.attachCustomKeyEventHandler((e) => {
+  if (isLeader(e)) return false;
+  // Ctrl+V is Claude Code's image paste. On a remote hub it reads the clipboard of
+  // the server, which has none: the window sends the image instead (SPEC 29.10).
+  if (LINK.remote && e.type === "keydown" && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "v" && navigator.clipboard?.read) {
+    e.preventDefault();
+    clipImage().then((img) => (img ? pasteImage(img) : send("\x16", false)));
+    return false;
+  }
+  return true;
+});
 // Web links in a terminal open in your browser (`open_url`): a plain http(s) URL
 // in the text, and an OSC 8 link that a program marks. xterm.js would call
 // window.open for an OSC 8 link, and the window drops that.
@@ -673,6 +683,47 @@ const send = (data, binary) => {
 };
 term.onData((data) => send(data, false));
 term.onBinary((data) => send(data, true));
+
+// An image on the clipboard goes to the hub as a file, and the pane gets its path
+// as a paste (SPEC 29.10). xterm pastes only text, and an agent on a remote hub
+// cannot read the window's clipboard.
+const IMG_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" };
+async function pasteImage(blob) {
+  const id = S.live;
+  if (!id) return;
+  const ext = IMG_EXT[blob.type];
+  if (!ext) return toast(`The agent does not read ${blob.type || "this type of"} images.`);
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  const data = btoa(bin);
+  try {
+    await invoke("pane_image", { id, data, ext });
+  } catch (e) {
+    toast(`The image did not go in: ${e}`);
+  }
+}
+// The image on the clipboard, or null. Text on the clipboard wins: it pastes as text.
+async function clipImage() {
+  try {
+    for (const item of await navigator.clipboard.read()) {
+      if (item.types.includes("text/plain")) return null;
+      const type = item.types.find((t) => IMG_EXT[t]);
+      if (type) return await item.getType(type);
+    }
+  } catch (_) {}
+  return null;
+}
+$("#term").addEventListener("paste", (e) => {
+  const items = [...(e.clipboardData?.items || [])];
+  if (items.some((i) => i.type === "text/plain")) return;
+  const img = items.find((i) => i.kind === "file" && i.type.startsWith("image/"));
+  if (!img) return;
+  e.preventDefault();
+  e.stopPropagation();
+  // The window checks wait on this.
+  S.pasting = pasteImage(img.getAsFile());
+}, true);
 
 let drawn = false;
 let held = [];
