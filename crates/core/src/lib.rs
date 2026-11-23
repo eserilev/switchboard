@@ -24,6 +24,7 @@ pub mod paths;
 pub mod post;
 pub mod proto;
 pub mod remote;
+pub mod repo_context;
 pub mod repos;
 pub mod review;
 pub mod review_git;

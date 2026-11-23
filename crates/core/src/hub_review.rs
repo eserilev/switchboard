@@ -1461,6 +1461,7 @@ impl Hub {
             dirs: &specs,
             web: &config.review.web_domains,
             search: config.review.web_search,
+            context: &crate::repo_context::for_dir(&config, self.paths.config.parent().unwrap_or(Path::new(".")), &tree).text,
         };
         let result = review::run(&run, |ev| match ev {
             Stream::Started { pid } => match self.reviews.lock().unwrap().get_mut(id) {
@@ -2129,6 +2130,7 @@ impl Hub {
             dirs: &specs,
             web: &config.review.web_domains,
             search: config.review.web_search,
+            context: &crate::repo_context::for_dir(&config, self.paths.config.parent().unwrap_or(Path::new(".")), &tree).text,
         };
         let result = review::run(&run, |ev| match ev {
             Stream::Init { session, .. } if fork => {
@@ -2201,6 +2203,7 @@ impl Hub {
             dirs: &specs,
             web: &config.review.web_domains,
             search: config.review.web_search,
+            context: &crate::repo_context::for_dir(&config, self.paths.config.parent().unwrap_or(Path::new(".")), &tree).text,
         };
         match review::run(&run, |_| {})? {
             Stream::Result {

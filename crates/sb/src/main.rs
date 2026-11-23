@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use switchboard_core::paths::Paths;
 use switchboard_core::proto::{Ack, PermitReply, Request};
-use switchboard_core::{connections, hooks, now};
+use switchboard_core::config::Config;
+use switchboard_core::{connections, hooks, now, repo_context};
 
 mod mcp;
 
@@ -45,6 +46,7 @@ fn main() {
         Some("permit") => permit(),
         Some("open") => open(&args[1..]),
         Some("task") => task(&args[1..]),
+        Some("context") => context(args.get(1).map(String::as_str)),
         Some("mcp") => match args.get(1).map(String::as_str) {
             Some("--pane") => mcp::serve_pane(),
             a => mcp::serve(a == Some("--ask")),
@@ -59,12 +61,47 @@ fn main() {
             0
         }
         _ => {
-            eprintln!("usage: sb open [path] [-w branch] [--nvim|--shell]\n       {TASK_USAGE}\n       sb connect add <name> [--endpoint <url> --model <m> --token <keyring:name>]\n       sb serve      (the hub for remote windows)\n       sb attach     (a remote window's link; starts sb serve when none runs)");
+            eprintln!("usage: sb open [path] [-w branch] [--nvim|--shell]\n       sb context [path]   (the repo notes an agent here gets)\n       {TASK_USAGE}\n       sb connect add <name> [--endpoint <url> --model <m> --token <keyring:name>]\n       sb serve      (the hub for remote windows)\n       sb attach     (a remote window's link; starts sb serve when none runs)");
             2
         }
     };
     tracing::info!(target: "sb::cli", args = ?args, code, ms = t0.elapsed().as_millis() as u64, pane = ?std::env::var("SB_PANE").ok(), "sb");
     std::process::exit(code);
+}
+
+/// `sb context [path]`: the repo notes that an agent in `path` gets (SPEC 37), and
+/// where each part came from.
+fn context(dir: Option<&str>) -> i32 {
+    let dir = dir.map(PathBuf::from).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
+    let paths = Paths::from_env();
+    let config = match Config::load(&paths.config) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("sb context: {e}");
+            return 1;
+        }
+    };
+    let cdir = paths.config.parent().unwrap_or(Path::new("."));
+    let ctx = repo_context::for_dir(&config, cdir, &dir);
+    if ctx.repos.is_empty() {
+        eprintln!("sb context: {} has no GitHub remote", dir.display());
+        return 1;
+    }
+    for r in &ctx.repos {
+        eprintln!("{r}: your own notes go in {}", cdir.join("context").join(format!("{r}.md")).display());
+    }
+    for s in &ctx.sources {
+        match &s.read {
+            Ok(n) => eprintln!("  {}: {n} bytes", s.path.display()),
+            Err(e) => eprintln!("  {}: {e}", s.path.display()),
+        }
+    }
+    if ctx.text.is_empty() {
+        eprintln!("No notes for this repo.");
+    } else {
+        println!("{}", ctx.text);
+    }
+    0
 }
 
 // ---------- remote mode (SPEC 29) ----------
@@ -280,9 +317,25 @@ fn state(arg: &str) -> i32 {
         }
     }
     let _ = send(&Request::State(msg), false);
-    // A pane with the pane tools learns at the start that it runs in Switchboard (SPEC 36).
-    if arg == "session" && std::env::var("SB_TOOLS").as_deref() == Ok("1") {
-        println!("{}", hooks::session_start_output(&pane));
+    if arg == "session" {
+        // A pane with the pane tools learns at the start that it runs in Switchboard
+        // (SPEC 36), and every pane gets your notes for its repo (SPEC 37).
+        let mut parts: Vec<String> = vec![];
+        if std::env::var("SB_TOOLS").as_deref() == Ok("1") {
+            parts.push(hooks::pane_tools_note(&pane));
+        }
+        let dir = input.get("cwd").and_then(Value::as_str).map(PathBuf::from).or_else(|| std::env::current_dir().ok());
+        if let Some(dir) = dir {
+            let paths = Paths::from_env();
+            let config = Config::load(&paths.config).unwrap_or_default();
+            let ctx = repo_context::for_dir(&config, paths.config.parent().unwrap_or(Path::new(".")), &dir);
+            if !ctx.text.is_empty() {
+                parts.push(ctx.text);
+            }
+        }
+        if !parts.is_empty() {
+            println!("{}", hooks::session_start_output(&parts.join("\n\n")));
+        }
     }
     0
 }

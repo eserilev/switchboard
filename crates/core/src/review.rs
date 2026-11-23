@@ -952,6 +952,8 @@ pub struct Run<'a> {
     pub web: &'a [String],
     /// WebSearch on. Off, it is denied: Claude Code has it on by default.
     pub search: bool,
+    /// Your notes for the repo (SPEC 37), added to the system prompt.
+    pub context: &'a str,
 }
 
 pub fn args(run: &Run) -> Vec<String> {
@@ -969,10 +971,13 @@ pub fn args(run: &Run) -> Vec<String> {
             "--setting-sources",
             SETTING_SOURCES,
             "--append-system-prompt",
-            WRITING,
         ]
         .map(String::from),
     );
+    a.push(match run.context {
+        "" => WRITING.to_owned(),
+        c => format!("{WRITING}\n\n{c}"),
+    });
     if let Some(r) = run.resume {
         a.extend(["--resume".into(), r.into()]);
         if run.fork {
@@ -1649,6 +1654,7 @@ mod tests {
             dirs: &[],
             web: &[],
             search: false,
+            context: "",
         });
         let s = a.join(" ");
         assert!(s.contains("--resume g1 --fork-session"));
@@ -1677,7 +1683,10 @@ mod tests {
             dirs: &["/specs a".into()],
             web: &["github.com".into(), " eips.ethereum.org ".into(), "x,Bash".into(), "".into()],
             search: true,
+            context: "Check upgrade timing.",
         });
+        let i = b.iter().position(|x| x == "--append-system-prompt").unwrap();
+        assert_eq!(b[i + 1], format!("{WRITING}\n\nCheck upgrade timing."));
         let i = b.iter().position(|x| x == "--allowedTools").unwrap();
         assert_eq!(
             b[i + 1],

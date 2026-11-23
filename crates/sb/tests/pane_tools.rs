@@ -135,6 +135,25 @@ fn agent_panes_see_switchboard() {
     assert!(note["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("task_list"));
     assert_eq!(sb(&root, &[("SB_PANE", &p1)], &["state", "session"], "{}").trim(), "");
 
+    // Repo notes (SPEC 37): a fork with an upstream remote gets the upstream's notes,
+    // with or without the pane tools, and `sb context` shows them.
+    g(&a, &["remote", "add", "upstream", "https://github.com/sigp/lighthouse"]);
+    std::fs::create_dir_all(root.join("context/sigp")).unwrap();
+    std::fs::write(root.join("context/sigp/lighthouse.md"), "Upgrade timing: check a node started before the fork.").unwrap();
+    let hook_in = json!({ "cwd": a.to_string_lossy() }).to_string();
+    for env in [vec![("SB_PANE", p1.as_str()), ("SB_TOOLS", "1")], vec![("SB_PANE", p1.as_str())]] {
+        let out = sb(&root, &env, &["state", "session"], &hook_in);
+        let ctx: Value = serde_json::from_str(out.trim()).unwrap_or_else(|_| panic!("not JSON: {out}"));
+        let ctx = ctx["hookSpecificOutput"]["additionalContext"].as_str().unwrap().to_owned();
+        assert!(ctx.contains("notes for the repo sigp/lighthouse") && ctx.contains("Upgrade timing"), "{ctx}");
+        assert_eq!(ctx.contains("task_list"), env.len() == 2, "{ctx}");
+    }
+    let shown = Command::new(env!("CARGO_BIN_EXE_sb")).args(["context"]).arg(&a).env("SB_HOME", &root).output().unwrap();
+    assert!(String::from_utf8_lossy(&shown.stdout).contains("Upgrade timing"));
+    // Another repo gets none.
+    let out = sb(&root, &[("SB_PANE", &p3)], &["state", "session"], &json!({ "cwd": b.to_string_lossy() }).to_string());
+    assert_eq!(out.trim(), "");
+
     // The board: the panes of the caller's repo, worktrees too; not the other repo.
     let (text, err) = call(&root, &p1, "board_list", json!({}));
     assert!(!err, "{text}");

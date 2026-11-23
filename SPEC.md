@@ -840,6 +840,9 @@ unsandboxed = ["git push *", "git fetch *", "git pull *", "gh *", "docker *"]
 
 [pane_tools]                    # SPEC 36
 enabled = true                  # the `switchboard` MCP server in every agent pane
+
+[repos."sigp/lighthouse"]       # SPEC 37; an example
+context = ["~/packs/lighthouse"]   # shared notes: files, or folders of .md files
 ```
 
 `remote = "me@box"` runs the window against a hub on that host, and `remote_command` replaces the ssh command (29.1).
@@ -1082,6 +1085,7 @@ Where the build differs from the text above:
 - Sandbox (31): not checked with a real `claude` yet. The keys follow the Claude Code docs (code.claude.com/docs/en/sandboxing, read on 2026-11-03). Not verified: that a blocked site in an interactive pane comes to the `PermissionRequest` hook, so the tile shows Allow and Deny; that `git commit` in a worktree works with the git folder in `allowWrite`; that the `Read(~/.ssh/**)` rules stop the Read tool; and that `failIfUnavailable` stops a pane on Linux with no `bwrap`.
 - Sandbox (31): a pane that starts again (resume, restart, a new connection) keeps the sandbox of its settings file, whatever the mode is now. A resumed Ask pane has no Ask mark in its start, so the mode alone would drop it.
 - Sandbox (31): the git paths in `denyWrite` are the real paths when the pane starts, not globs such as `modules/*/hooks`: Claude Code skips a glob in a write rule on Linux. So a submodule or a worktree added while the pane runs is not covered until the pane starts again. A `config.worktree` that is not there yet is listed only when `extensions.worktreeConfig` is on, since git reads it only then (and that setting lives in the closed `config`).
+- Repo context (37): built as 37 says. Not built yet: notes in Settings, URL sources, and the notes in the window's review panel.
 - Pane tools (36): built, slice 1 (36.8): tasks, the board and the start note. Not built yet: the change feed and its Undo, the "sb" mark and call log on the tile, the switch in Settings (only the config key), review reads, and the Today tools. Checked on 2026-11-23 with Claude Code 2.1.330: an interactive pane loads the `--mcp-config` server with no "new MCP server" dialog, shows it connected with its 6 tools, and the user's own servers still load.
 - Sandbox (31): the `credentials` key of the sandbox is not used. `denyRead` and the permission deny rules cover the same folders, and an older Claude Code may not know the key.
 - Claude points to the code (11.15): not checked with a real `claude` yet. Not verified: that Claude calls `review_show` when asked where something is or what to fix, that it cites `path:line` as the system prompt asks, that an interactive pane runs a `--mcp-config` server with no "new MCP server" dialog, that the allow rule runs the tool with no prompt, and that the Stop input of the Claude Code in use has `last_assistant_message` (else the session file is read).
@@ -2642,3 +2646,48 @@ Slice 1: the start, the note, the six tools, the board scope.
 - `sb` unit tests: the pane server lists only its six tools, refuses others by name and sends nothing for them, sends the caller's pane with each call, and turns a refusal or a missing socket into a tool error.
 - `crates/sb/tests/pane_tools.rs`: a real hub and tmux, and a stand-in `claude` that writes its args. An agent pane starts with the `switchboard` server, not strict, the allow rule and `SB_TOOLS`. The start note shows only with `SB_TOOLS`. `board_list` shows the panes of the caller's repo, worktrees too, and not another repo's, and refuses a caller that is not a pane. A task added through the tools is in the list, its note and history name the pane, and `done` is refused.
 - The Ask pane keeps `sb mcp --ask` with `--strict-mcp-config` (`review_show.rs`).
+
+## 37. Repo context
+
+Status: built, 2026-11-23.
+
+Your own notes for a repo: how to review it, what to watch for, how you like to work in it. Switchboard gives them to every agent of that repo. They live in your Switchboard config, not in the repo, so other contributors never see them, and no CLAUDE.md or `.ai/` file changes.
+
+### 37.1 Where the notes live
+
+- **Your own notes:** `context/<owner>/<name>.md` in the config folder, for example `~/.config/switchboard/context/sigp/lighthouse.md`. No config key is needed: the file exists, so it counts.
+- **Shared packs:** `[repos."owner/name"] context = [...]` lists more sources, in order. A source is a file, or a folder whose `.md` files are read in name order. A relative path is from the config folder. The key matches with any case.
+- **Order:** the packs first, then your own file, so your notes come last and can add to or change what a pack says. A file listed twice is read once. A source that is missing is skipped, and `sb context` names it.
+- **Limit:** 20,000 bytes for all the notes of one agent. More is cut, and the agent is told it was cut.
+
+### 37.2 Which repo a folder is
+
+Every GitHub repo that one of the folder's git remotes points at, each once. A fork with `origin` = your fork and `upstream` = `sigp/lighthouse` gets the notes of both, so a key for the upstream repo covers every clone and fork. A worktree has the remotes of its repo.
+
+### 37.3 Who gets them
+
+- **Every claude pane,** with or without the pane tools: the `SessionStart` hook (`sb state session`) adds them as `additionalContext`, after the pane tools note (36.4). It reads the files at each session start, so an edit counts at the next new, resumed or cleared session, with no restart. This covers your own work, a task's pane (27.6) and the review Ask pane.
+- **Every review run** (`claude -p`: the guide, the thread answers, the ask): the notes go in `--append-system-prompt`, after `review::WRITING`.
+- They are given as the user's own notes for that repo, to use when working on, reviewing or explaining its code.
+
+### 37.4 Sharing
+
+A pack is a folder of `.md` files. To share one, put it in a git repo or a gist (a gist is a git repo), clone it, and list the folder. Updating it is `git pull`. Switchboard itself never fetches anything: no network at the start of an agent, and nothing changes under you without a pull.
+
+A pack's text goes to your agents as your own notes, so read a pack before you add it, as you would a script.
+
+### 37.5 `sb context [path]`
+
+Shows what an agent in `path` (the current folder by default) gets: the repos of its remotes, where your own notes for each go, each source with its size or why it was not read, and the text itself.
+
+### 37.6 Not built yet
+
+- Notes in Settings: edit the file for now.
+- URL sources, such as a raw gist link, fetched into a cache by a command and never at the start of an agent.
+- The notes shown in the review panel, so you can see what the guide was told.
+
+### 37.7 Tests
+
+- `repo_context` unit tests: remotes give each repo once, in lower case; a pack folder's `.md` files come in name order and before your own file; a file listed twice comes once; a missing source is named; a repo with no notes adds nothing; notes over the limit are cut on a character boundary.
+- `review.rs`: the notes follow `WRITING` in `--append-system-prompt`.
+- `crates/sb/tests/pane_tools.rs`: a folder with an `upstream` remote to `sigp/lighthouse` gets that repo's notes at session start, with and without `SB_TOOLS`; `sb context` prints them; a folder of another repo gets nothing.

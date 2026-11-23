@@ -17,12 +17,23 @@ pub struct Config {
     pub tasks: TasksCfg,
     pub sandbox: SandboxCfg,
     pub pane_tools: PaneToolsCfg,
+    /// Your own notes for each repo, by `owner/name` (SPEC 37).
+    pub repos: BTreeMap<String, RepoCfg>,
     /// Remote mode (SPEC 29): the ssh host of the hub, for example `me@box`. With
     /// none, the hub runs here.
     pub remote: Option<String>,
     /// The program that links the window to the remote hub. With none,
     /// `ssh -T <remote> sb attach`, with `~/.local/bin` and `~/.cargo/bin` on its PATH.
     pub remote_command: Option<Vec<String>>,
+}
+
+/// One repo's table, `[repos."owner/name"]` (SPEC 37).
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct RepoCfg {
+    /// Files or folders of notes that agents of this repo get, in order. A folder
+    /// gives its `.md` files by name. A relative path is from the config folder.
+    pub context: Vec<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -230,6 +241,7 @@ impl Default for Config {
             tasks: TasksCfg::default(),
             sandbox: SandboxCfg::default(),
             pane_tools: PaneToolsCfg::default(),
+            repos: BTreeMap::new(),
             remote: None,
             remote_command: None,
         }
