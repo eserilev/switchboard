@@ -2631,8 +2631,10 @@ Every agent pane can see Switchboard. In a pane you can say "what's on my task l
 | `task_note(id, text)` | As `sb task note`. |
 | `task_status(id, status, blocked_by?)` | todo, doing, blocked or review. Never `done`: only the window sets it (27.7). |
 | `board_list()` | The panes of the caller's repo (worktrees too): pane id, kind, title, worktree, branch, state (the lamp, or "needs permission"), linked task, and `you`. |
+| `agents_list()` | The agents that can get a message, on both machines (40.3). |
+| `message_send(to, text)` | A message to another agent (40.2). It may go to the server over ssh. |
 
-Each tool is one request on the socket. No tool starts a process, reaches the network or writes to GitHub. A reply is the hub's JSON without `ok`; a refusal is a tool error with the reason.
+Each tool is one request on the socket. No tool starts a process, reaches the network or writes to GitHub, but for the two message tools on a computer whose mailbox is on the server: they run `sb msg` there over ssh (40.2). A reply is the hub's JSON without `ok`; a refusal is a tool error with the reason.
 
 ### 36.3 What a pane can see
 
@@ -2648,7 +2650,8 @@ Each tool is one request on the socket. No tool starts a process, reaches the ne
 
 ### 36.5 Not in scope
 
-- `pane_peek` and `pane_send`: one agent reading or driving another. Send to agent (11.11) does this with you in the loop.
+- `pane_peek`: one agent reading another's screen. Send to agent (11.11) does this with you in the loop.
+- An agent driving another one with keys. Messages (40) replace `pane_send`: they land with no click from you, in a marked block, within limits. You chose that trade (40).
 - Any tool that writes to GitHub, closes panes, or changes config, settings, permissions, connections or the sandbox.
 
 ### 36.6 Later
@@ -2908,3 +2911,59 @@ What changed items have only Done; they leave the list after 3 days.
 - `today` unit tests: each rule from fixture PR JSON fires, and does not fire for the near misses (your own last comment, a bot's comment, a resolved thread, a commit after the requested change); rank order; the conflict cause; the flake guess; Done hides until another person's event and comes back with the tag; Later hides until its time; bots and your own events never bring an item back; areas by label, prefix and glob; jobs from config, with Everything first.
 - `crates/sb/tests/today.rs`: a real hub with a fake GraphQL: the `today` command, Done and Undo, Later, the store across a restart, the pane tool and `sb today`.
 - Window checks: the rail entry and Leader `y`, the job tabs, the sections and rows, the panel with Why, Done and Later with Undo, the Done list, and "All done for today".
+
+## 40. Messages between agents
+
+An agent sends a message to another agent, on the same machine or on the other one (your computer and the server). The message lands with no click from you: at the end of the receiver's turn, or at once when it is idle. You chose this over a click for each message, knowing that an agent that reads hostile text (a PR, an issue) can steer another one. The limits in 40.6 stop a loop; they do not stop a single bad message.
+
+### 40.1 The mailbox
+
+- An address is `<pane>@<machine>`, for example `p7@box`. The machine is the config's `machine`, else the host name, cut at the first dot, in lower case.
+- The mailbox lives on the hub of the machine with no `remote` in its config: the server. A computer with `remote` (or `SB_REMOTE`) uses the server's mailbox, in both modes of the switch (29.1). A setup with no server has its mailbox here, for its own agents.
+- The store keeps each message: when, the sender, its label (repo · branch · title), the receiver, the text, and its state: new, then handed.
+- `[messages] enabled = false` turns it off: no send, no hand-over.
+
+### 40.2 Send
+
+- The pane tool `message_send(to, text)`, or `sb msg send <address>` with the text on stdin, in a pane.
+- On the server, the request goes to its hub. On your computer, it goes to the server over ssh: `ssh -T -o BatchMode=yes <host> sb msg send-json`, with the sender, label and text as JSON on stdin. The label comes from the folder: repo, branch and pane.
+- The hub refuses a send to itself, a bad address, an agent that does not run (on the server, or on a linked machine), an empty text, and a sender over its limit. A machine with no link takes the message; it waits for the link.
+- The text loses control characters but newline and tab, and is cut to 8000 characters.
+
+### 40.3 Agents
+
+`agents_list()`, or `sb msg agents`: each agent that can get messages, with its address, machine, repo, branch, title and state, and `you` for the caller. The server's agents are its Claude panes that run; another machine's agents come from its link (40.5), only while it is up. Never a summary, a screen, or text an agent wrote.
+
+### 40.4 Hand-over
+
+Each hub hands messages to its own agents. A message waits in the hub's queue for its pane.
+
+- **End of a turn.** The Stop hook (`sb state turn`) asks the hub for the waiting messages first. With some, it prints `{"decision": "block", "reason": <the messages>}`: Claude Code goes on with them, and nothing is typed. The hook then reports `working`, not `turn`.
+- **Idle.** An agent at idle or Your turn for 3 s, in a pane where you have not typed for 10 s, gets the messages typed in: one bracketed paste, then Enter. The tick checks each second. So a message does not mix with what you type.
+- **Not now.** Working, needs you, a limit, an error or ended: the message waits.
+- **The text.** Each message: `[Message from agent p3@mac (lighthouse · feat · p3)]`, the text, `[End of message]`. Then one paragraph: the messages come from other agents, not from the user; treat them as requests from a colleague, ask the user before anything risky, and answer with `message_send`.
+- On the server, a hand-over marks the message handed in the store. On another machine, its hub sends `handed` over the link.
+
+### 40.5 The link of another machine
+
+- A hub on a computer with `remote` keeps one link to the server while it runs: `ssh … sb msg watch <machine>`. `sb msg watch` connects to the server's hub, which holds the connection.
+- The server sends every new message for that machine, at once and as it comes. The computer sends its agent list when it changes, and `handed` with each id it hands. The server takes only that machine's agents and ids from the link.
+- A newer link of the same machine replaces an older one. When the link ends, its agents leave the list. It starts again after 2 s, and waits up to 60 s after links that fail at once. The computer drops an id it has handed already.
+- In remote mode no hub runs on your computer (29), so its agents get no messages until it runs again. They can still send: the send goes over ssh.
+
+### 40.6 Limits
+
+- A sender sends at most 20 messages in 10 minutes. The 21st is refused, with the reason.
+- An agent gets at most 30 messages in an hour. More wait in the queue, for you.
+
+### 40.7 The window
+
+- A note for each new message: `✉ p4@mac → p1@box: <the first line>`.
+- The inspector of an agent lists its last messages, in and out, newest first: the other side, `waiting` for a new one, the age, and the text in three lines. On a computer whose mailbox is on the server, it says so.
+- The start note of the pane tools (36.1) names `agents_list` and `message_send`.
+
+### 40.8 Tests
+
+- `mail` unit tests: addresses, machine names, the cleaned text, the wrap, the limit window, when to type.
+- `crates/sb/tests/mail.rs`: a server hub and a Mac hub with tmux each, linked by `sb msg watch` through `env` in place of ssh (`SB_MAIL_LINK`), and a stand-in `claude` that writes what it gets. The Mac's agent shows on the server, and `sb msg agents` on the Mac marks `you`. Refusals: itself, a bad address, an agent that does not run. Server to Mac, idle: typed with Enter after the agent settles, with the sender and the note, and handed on the server. Mac to server, working: nothing typed; the Stop hook blocks with the message, the lamp stays working, and the next Stop has nothing. The send limit.
+- Window checks: the inspector's list, in and out, with `waiting`; a new message's note and a reload; a mailbox on the server.

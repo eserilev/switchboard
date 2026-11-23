@@ -929,3 +929,12 @@ body.rail-wide .nav svg { width: 16px; height: 16px; }
 .tdempty { color: var(--muted); }
 .tdkeys { padding: 6px 18px; border-top: 1px solid var(--line); color: var(--muted); font: 500 11px/1.4 var(--mono); }
 .today kbd { padding: 0 4px; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); font: 500 10px/1.4 var(--mono); }
+
+/* ---------- messages between agents (SPEC 40) ---------- */
+.imail { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.imail li { padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); min-width: 0; }
+.imail .mhead { display: flex; align-items: center; gap: 8px; font: 500 11px/1.2 var(--mono); color: var(--muted); }
+.imail .mwho { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imail .min .mwho { color: var(--soft); }
+.imail .mst { color: var(--needs-fg); }
+.imail p { margin: 4px 0 0; font-size: 12px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }

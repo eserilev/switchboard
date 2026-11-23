@@ -211,6 +211,8 @@ pub struct Hub {
     /// True while the nvim poll runs, so two never overlap.
     nvim_polling: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) me: Weak<Hub>,
+    /// Messages between agents (SPEC 40).
+    pub(crate) mail: Mutex<crate::hub_mail::MailState>,
     /// GitHub for a send and for the pending review (SPEC 11.8.1). A test swaps it.
     pub(crate) gh: RwLock<Arc<dyn crate::gh::Gh>>,
     /// Today (SPEC 39): the last refresh.
@@ -367,6 +369,7 @@ impl Hub {
             polling: std::sync::atomic::AtomicBool::new(false),
             nvim_polling: Arc::default(),
             me: me.clone(),
+            mail: Mutex::default(),
             gh: RwLock::new(Arc::new(crate::gh::RealGh)),
             today: Mutex::default(),
             gh_sync: std::sync::atomic::AtomicBool::new(std::env::var_os("SB_HOME").is_none()),
@@ -386,6 +389,7 @@ impl Hub {
         }
         hub.listen()?;
         hub.tick_loop();
+        hub.mail_link_start();
         Ok(hub)
     }
 
@@ -1903,6 +1907,9 @@ impl Hub {
                 let item = repo.zip(number);
                 self.today_socket(pane.as_deref(), job.as_deref(), item)
             }
+            // The link of another machine keeps the connection (SPEC 40.5).
+            Request::Mail(crate::proto::MailOp::Watch { machine }) => return self.mail_watch(&machine, conn),
+            Request::Mail(op) => self.mail_socket(op),
         };
         let mut w = &conn;
         let _ = writeln!(w, "{reply}");
@@ -1921,6 +1928,7 @@ impl Hub {
                     let Some(hub) = me.upgrade() else { break };
                     let t0 = std::time::Instant::now();
                     hub.tick(n);
+                    hub.mail_tick();
                     if n.is_multiple_of(30) {
                         hub.today_tick();
                     }
@@ -2172,6 +2180,7 @@ fn request_kind(r: &Request) -> &'static str {
         Request::Task { .. } => "task",
         Request::Board { .. } => "board",
         Request::Today { .. } => "today",
+        Request::Mail(_) => "mail",
     }
 }
 

@@ -27,8 +27,8 @@
   check("tally lists needs before turn", /1 needs you.*1 your turn/.test($("#tally").textContent), $("#tally").textContent);
   check("ANSI is stripped from tails", !$("#board").textContent.includes("\x1b") && $("#board").textContent.includes("test result: ok"));
   // The shell (SPEC 33): a wide rail on the Board, one 52 px header, no tab bar.
-  check("the rail is wide on the Board, with Board, Tasks, Work and Reviews", document.body.classList.contains("rail-wide") && Math.round($("#rail").getBoundingClientRect().width) === 184
-    && $$("#tabs .nav").map((b) => b.querySelector(".nl").textContent).join() === "Board,Tasks,Work,Reviews" && $('#tabs [data-tab="board"]').getAttribute("aria-current") === "page",
+  check("the rail is wide on the Board, with Board, Tasks, Today, Work and Reviews", document.body.classList.contains("rail-wide") && Math.round($("#rail").getBoundingClientRect().width) === 184
+    && $$("#tabs .nav").map((b) => b.querySelector(".nl").textContent).join() === "Board,Tasks,Today,Work,Reviews" && $('#tabs [data-tab="board"]').getAttribute("aria-current") === "page",
     `${$("#rail").getBoundingClientRect().width} ${$$("#tabs .nav").map((b) => b.textContent).join("|")}`);
   check("the board header is 52 px, with the state chips and Next waiting", Math.round($("#bhead").getBoundingClientRect().height) === 52 && !!$('#tally [data-jump="needs"]') && !!$("#bnext") && !$("#bhead h1"));
   check("the leader shows only while it waits for its key", $("#leader").hidden);
@@ -2230,6 +2230,33 @@
       check("an agent that arrived opens, with a note on what came along", window.SB.S.live === "p2" && $("#toast").textContent.includes("Continued from box: branch feat-2, 3 changed files, the conversation."), $("#toast").textContent);
       window.SB.collapse();
       await wait(30);
+    }
+    {
+      // Messages between agents (SPEC 40): the inspector lists them, and a new one shows a note.
+      const t0 = Math.floor(Date.now() / 1000);
+      window.__mail = { address: "p1@box", here: true, on: true, messages: [
+        { id: 2, at: t0 - 120, from: "p1@box", label: "", to: "p4@mac", text: "Tests pass here.", state: "new" },
+        { id: 1, at: t0 - 600, from: "p4@mac", label: "lighthouse · feat", to: "p1@box", text: "Run the tests <b>please</b>", state: "handed" },
+      ] };
+      // A list loaded before is old now: an event clears it, as the hub sends one for each change.
+      window.__emit("mail", { id: 9, at: 0, from: "a@b", label: "", to: "c@d", text: "x", state: "handed" });
+      $('.pane[data-id="p1"]').focus();
+      window.SBInsp.open();
+      await wait(80);
+      const mails = () => $$("#insp .imail li");
+      check("the inspector lists an agent's messages, in and out, with waiting ones marked", mails().length === 2 && mails()[0].textContent.includes("→ to p4@mac") && mails()[0].textContent.includes("waiting")
+        && mails()[1].textContent.includes("← from p4@mac") && mails()[1].textContent.includes("<b>please</b>") && !$("#insp .imail b"), $("#insp .iextra").innerHTML);
+      window.__mail.messages[0].state = "handed";
+      const n = called("mail_list").length;
+      window.__emit("mail", { id: 3, at: 0, from: "p4@mac", label: "", to: "p1@box", text: "One more thing\nsecond line", state: "new" });
+      await wait(80);
+      check("a new message shows a note and reloads the list", $("#toast").textContent === "✉ p4@mac → p1@box: One more thing" && called("mail_list").length > n && !$("#insp .imail .mst"), $("#toast").textContent);
+      window.__mail = { address: "p1@mac", here: false, on: true, messages: [] };
+      window.__emit("mail", { id: 4, at: 0, from: "a@b", label: "", to: "c@d", text: "x", state: "handed" });
+      await wait(80);
+      check("on a computer whose mailbox is on the server, the inspector says so", $("#insp .iextra").textContent.includes("mailbox is on the server"));
+      window.__mail = null;
+      window.SBInsp.close();
     }
   }
 

@@ -61,6 +61,35 @@ pub enum Request {
         #[serde(default)]
         number: Option<u64>,
     },
+    /// Messages between agents (SPEC 40).
+    Mail(MailOp),
+}
+
+/// One mail request. `pane` is the caller's `SB_PANE`: a label, not proof.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum MailOp {
+    /// A message from a pane of this hub (`pane`), or from another machine
+    /// (`from` and `label`, through `sb msg send` over ssh).
+    Send {
+        #[serde(default)]
+        pane: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+        #[serde(default)]
+        label: Option<String>,
+        to: String,
+        text: String,
+    },
+    /// The agents that can get messages, on each machine.
+    Agents {
+        #[serde(default)]
+        pane: Option<String>,
+    },
+    /// The Stop hook of a pane: the messages that wait for it, as one text.
+    Take { pane: String },
+    /// The link of another machine's hub: the connection stays open (SPEC 40.5).
+    Watch { machine: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

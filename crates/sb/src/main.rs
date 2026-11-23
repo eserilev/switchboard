@@ -48,6 +48,7 @@ fn main() {
         Some("task") => task(&args[1..]),
         Some("today") => today(args.get(1).map(String::as_str)),
         Some("context") => context(args.get(1).map(String::as_str)),
+        Some("msg") => msg(&args[1..]),
         Some("mcp") => match args.get(1).map(String::as_str) {
             Some("--pane") => mcp::serve_pane(),
             a => mcp::serve(a == Some("--ask")),
@@ -102,6 +103,143 @@ fn context(dir: Option<&str>) -> i32 {
     } else {
         println!("{}", ctx.text);
     }
+    0
+}
+
+// ---------- messages between agents (SPEC 40) ----------
+
+const MSG_USAGE: &str = "sb msg agents            (the agents that can get messages)\n       sb msg send <address>    (the text on stdin; from this pane)";
+
+/// The messages that wait for `pane`, from its hub, as one text.
+fn mail_take(pane: &str) -> Option<String> {
+    use switchboard_core::proto::MailOp;
+    let line = send(&Request::Mail(MailOp::Take { pane: pane.into() }), true).ok()??;
+    let v: Value = serde_json::from_str(&line).ok()?;
+    v["text"].as_str().filter(|t| !t.is_empty()).map(str::to_owned)
+}
+
+/// Runs `sb msg <args>` on the mailbox host, with `input` on stdin, and gives
+/// its reply line.
+fn mail_remote(config: &Config, args: &[&str], input: &str) -> Result<String, String> {
+    let argv = config.mail_argv(args).ok_or("no mailbox host")?;
+    let mut child = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("{}: {e}", argv[0]))?;
+    child.stdin.take().ok_or("no stdin")?.write_all(input.as_bytes()).map_err(|e| e.to_string())?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let line = String::from_utf8_lossy(&out.stdout).lines().last().unwrap_or("").to_owned();
+    if line.is_empty() {
+        return Err(format!("the mailbox host did not answer: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(line)
+}
+
+/// The repo and branch of the folder, as the label of a sender on this computer.
+fn here_label(pane: &str) -> String {
+    let dir = std::env::current_dir().unwrap_or_default();
+    let repo = switchboard_core::repos::main_checkout(&dir).unwrap_or(dir.clone());
+    let name = repo.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let branch = switchboard_core::repos::git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
+    [name, branch, pane.to_owned()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")
+}
+
+/// A mail request of a pane or of `sb msg`. On a computer whose mailbox is on the
+/// server (`remote` in the config), sends and the agent list go there over ssh;
+/// everything else goes to this computer's hub.
+pub fn mail_route(req: &Request) -> Result<String, String> {
+    use switchboard_core::proto::MailOp;
+    let config = Config::load(&Paths::from_env().config).unwrap_or_default();
+    if config.mail_host().is_none() {
+        return Ok(send(req, true)?.unwrap_or_default());
+    }
+    let machine = switchboard_core::mail::machine_name(&config);
+    match req {
+        Request::Mail(MailOp::Send { pane: Some(p), to, text, .. }) => {
+            let body = json!({ "from": format!("{p}@{machine}"), "label": here_label(p), "to": to, "text": text });
+            mail_remote(&config, &["send-json"], &body.to_string())
+        }
+        Request::Mail(MailOp::Agents { pane }) => {
+            let line = mail_remote(&config, &["agents"], "")?;
+            // The mailbox does not know which pane asks: mark it here.
+            let mut v: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+            let me = pane.as_ref().map(|p| format!("{p}@{machine}"));
+            if let Some(list) = v["agents"].as_array_mut() {
+                for a in list {
+                    a["you"] = json!(me.is_some() && a["address"].as_str() == me.as_deref());
+                }
+            }
+            Ok(v.to_string())
+        }
+        _ => Ok(send(req, true)?.unwrap_or_default()),
+    }
+}
+
+fn msg(args: &[String]) -> i32 {
+    use switchboard_core::proto::MailOp;
+    let pane = std::env::var("SB_PANE").ok().filter(|p| !p.is_empty());
+    let reply = match args.first().map(String::as_str) {
+        Some("agents") => mail_route(&Request::Mail(MailOp::Agents { pane })),
+        Some("send") if args.len() == 2 => {
+            let mut text = String::new();
+            let _ = std::io::stdin().read_to_string(&mut text);
+            let Some(pane) = pane else {
+                eprintln!("sb msg send: run it in an agent pane (no SB_PANE)");
+                return 1;
+            };
+            mail_route(&Request::Mail(MailOp::Send { pane: Some(pane), from: None, label: None, to: args[1].clone(), text }))
+        }
+        // Over ssh from another machine's agent: the sender comes in the JSON.
+        Some("send-json") => {
+            let v = stdin_json();
+            let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+            send(&Request::Mail(MailOp::Send { pane: None, from: Some(s("from")), label: Some(s("label")), to: s("to"), text: s("text") }), true)
+                .map(Option::unwrap_or_default)
+        }
+        Some("watch") if args.len() == 2 => return msg_watch(&args[1]),
+        _ => {
+            eprintln!("usage: {MSG_USAGE}");
+            return 2;
+        }
+    };
+    match reply {
+        Ok(line) => {
+            println!("{}", line.trim());
+            let ok: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+            if ok["ok"] == json!(true) { 0 } else { 1 }
+        }
+        Err(e) => {
+            println!("{}", json!({ "ok": false, "error": e }));
+            1
+        }
+    }
+}
+
+/// `sb msg watch <machine>`: the link of another machine's hub, over ssh. stdin
+/// and stdout to a watch on this hub (SPEC 40.5).
+fn msg_watch(machine: &str) -> i32 {
+    use switchboard_core::proto::MailOp;
+    let sock = Paths::from_env().sock();
+    if safe_sock_dir(&sock).is_err() {
+        return 1;
+    }
+    let Ok(mut s) = UnixStream::connect(&sock) else {
+        eprintln!("sb msg watch: no Switchboard hub runs here");
+        return 1;
+    };
+    let req = Request::Mail(MailOp::Watch { machine: machine.into() });
+    if writeln!(s, "{}", serde_json::to_string(&req).unwrap_or_default()).is_err() {
+        return 1;
+    }
+    let Ok(mut up) = s.try_clone() else { return 1 };
+    std::thread::spawn(move || {
+        relay(&mut std::io::stdin().lock(), &mut up);
+        let _ = up.shutdown(std::net::Shutdown::Write);
+    });
+    relay(&mut s, &mut std::io::stdout().lock());
     0
 }
 
@@ -306,7 +444,11 @@ fn state(arg: &str) -> i32 {
     if arg == "turn" {
         with_transcript_text(&mut input);
     }
-    let Some(msg) = hooks::state_msg(&pane, arg, &input, now()) else {
+    // The end of a turn: messages from other agents that wait for this one go
+    // in as the reason to go on (SPEC 40.4). Then the agent works, not waits.
+    let mail = if arg == "turn" { mail_take(&pane) } else { None };
+    let event = if mail.is_some() { "working" } else { arg };
+    let Some(msg) = hooks::state_msg(&pane, event, &input, now()) else {
         return 0;
     };
     // The state file first: it is the record when the app is closed.
@@ -318,6 +460,10 @@ fn state(arg: &str) -> i32 {
         }
     }
     let _ = send(&Request::State(msg), false);
+    if let Some(text) = mail {
+        println!("{}", json!({ "decision": "block", "reason": text }));
+        return 0;
+    }
     if arg == "session" {
         // A pane with the pane tools learns at the start that it runs in Switchboard
         // (SPEC 36), and every pane gets your notes for its repo (SPEC 37).

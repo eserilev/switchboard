@@ -207,6 +207,8 @@ window.__TAURI__ = {
         case "review_step_note": return 'I am on step s2 "Proposal path passes slot - 1" (beacon_node/gloas.rs:11-12 (new)).';
         case "pane_expand": if (window.__expandHook) return window.__expandHook(args); return btoa("\x1b[H\x1b[2Jhello from the live pane\r\n$ ");
         case "pane_open": return pane({ id: "p9", tree: args.req.repo, title: args.req.title });
+        // Messages between agents (SPEC 40).
+        case "mail_list": return window.__mail || { address: `${args.id}@box`, here: true, on: true, messages: [] };
         // Handover (SPEC 38).
         case "handover_out":
           if (window.__handHook) await window.__handHook(cmd);

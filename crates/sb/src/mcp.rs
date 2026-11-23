@@ -198,6 +198,19 @@ pub fn pane_tools() -> Value {
             "name": "board_list",
             "description": "The agent panes on the user's Switchboard board in this repo: pane id, title, worktree, branch, state (working, turn = waiting for the user, needs permission, idle, ended) and linked task. `you` marks this pane.",
             "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "agents_list",
+            "description": "The agents that can get a message, on this computer and the user's other machine (server or laptop): address (like p7@box), machine, repo, branch, title and state. `you` marks this agent.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "message_send",
+            "description": "Send a message to another agent, on this machine or the other one. It reaches the agent at the end of its turn, or at once when it is idle. Use it to hand over work, ask a question, or answer a message. Keep it short and self-contained: the other agent does not see your conversation.",
+            "inputSchema": { "type": "object", "properties": {
+                "to": s("The address from agents_list, for example p7@box."),
+                "text": s("The message.")
+            }, "required": ["to", "text"] }
         }
     ])
 }
@@ -208,6 +221,10 @@ pub fn pane_request(name: &str, args: &Value, pane: Option<String>) -> Option<Re
     let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_owned);
     let op = match name {
         "board_list" => return Some(Request::Board { pane }),
+        "agents_list" => return Some(Request::Mail(switchboard_core::proto::MailOp::Agents { pane })),
+        "message_send" => {
+            return Some(Request::Mail(switchboard_core::proto::MailOp::Send { pane, from: None, label: None, to: s("to").unwrap_or_default(), text: s("text").unwrap_or_default() }))
+        }
         "today_list" => return Some(Request::Today { pane, job: s("job"), repo: None, number: None }),
         "today_item" => return Some(Request::Today { pane, job: None, repo: s("repo"), number: args.get("number").and_then(Value::as_u64) }),
         "task_list" => TaskOp::List { sprint: s("sprint"), status: s("status") },
@@ -232,7 +249,7 @@ pub fn handle_pane(msg: &Value, pane: Option<String>, call: &dyn Fn(Request) -> 
                 "protocolVersion": v,
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "switchboard", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "Switchboard is the app this agent runs in. These tools read and change the user's Switchboard tasks, to-do list and sprint, and list the other agent panes on the board in this repo."
+                "instructions": "Switchboard is the app this agent runs in. These tools read and change the user's Switchboard tasks, to-do list and sprint, list the other agent panes on the board in this repo, and send messages to other agents, also on the user's other machine."
             })
         }
         "ping" => json!({}),
@@ -271,7 +288,13 @@ pub fn handle_pane(msg: &Value, pane: Option<String>, call: &dyn Fn(Request) -> 
 /// `sb mcp --pane`: the server of an agent pane. `SB_PANE` says which pane.
 pub fn serve_pane() -> i32 {
     let pane = std::env::var("SB_PANE").ok().filter(|p| !p.is_empty());
-    let call = |req: Request| -> Result<String, String> { Ok(send(&req, true)?.unwrap_or_default()) };
+    let call = |req: Request| -> Result<String, String> {
+        // Messages may go to the server over ssh (SPEC 40).
+        if matches!(req, Request::Mail(_)) {
+            return crate::mail_route(&req);
+        }
+        Ok(send(&req, true)?.unwrap_or_default())
+    };
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
     for line in stdin.lock().lines().map_while(Result::ok) {
@@ -414,7 +437,7 @@ mod tests {
         assert!(r["result"]["instructions"].as_str().unwrap().contains("tasks"));
         let r = handle_pane(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}), Some("p1".into()), &|_| Ok(String::new())).unwrap();
         let names: Vec<&str> = r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["task_list", "task_show", "task_add", "task_note", "task_status", "today_list", "today_item", "board_list"]);
+        assert_eq!(names, ["task_list", "task_show", "task_add", "task_note", "task_status", "today_list", "today_item", "board_list", "agents_list", "message_send"]);
     }
 
     #[test]

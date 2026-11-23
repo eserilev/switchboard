@@ -109,6 +109,11 @@ const SCHEMA: &[&str] = &[
        done_event INTEGER, later_until INTEGER, PRIMARY KEY (repo, number));
      CREATE TABLE today_pr (repo TEXT NOT NULL, number INTEGER NOT NULL, mergeable TEXT NOT NULL,
        broke_at INTEGER, cause INTEGER, PRIMARY KEY (repo, number));",
+    // Version 15: messages between agents (SPEC 40). `state` is new, handed or dropped.
+    "CREATE TABLE mail (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, sender TEXT NOT NULL,
+       label TEXT NOT NULL, target TEXT NOT NULL, text TEXT NOT NULL, state TEXT NOT NULL,
+       handed_at INTEGER);
+     CREATE INDEX mail_target ON mail (target, state);",
 ];
 
 pub struct Store {
@@ -431,6 +436,54 @@ impl Store {
             params![p.id, p.kind, p.repo, p.tree, p.title, p.connection, p.session, p.lamp, p.unseen, p.summary, p.updated as i64],
         )?;
         Ok(())
+    }
+
+    // ---------- mail (SPEC 40) ----------
+
+    /// Saves a new message and gives its id.
+    pub fn mail_add(&self, at: u64, from: &str, label: &str, to: &str, text: &str) -> R<i64> {
+        self.db.execute(
+            "INSERT INTO mail (at, sender, label, target, text, state) VALUES (?1, ?2, ?3, ?4, ?5, 'new')",
+            params![at as i64, from, label, to, text],
+        )?;
+        Ok(self.db.last_insert_rowid())
+    }
+
+    fn mail_rows(&self, sql: &str, args: &[&dyn rusqlite::ToSql]) -> R<Vec<crate::mail::Msg>> {
+        let mut q = self.db.prepare(sql)?;
+        let rows = q.query_map(args, |r| {
+            Ok(crate::mail::Msg {
+                id: r.get(0)?,
+                at: r.get::<_, i64>(1)? as u64,
+                from: r.get(2)?,
+                label: r.get(3)?,
+                to: r.get(4)?,
+                text: r.get(5)?,
+                state: r.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// The new messages to the addresses on `machine`, oldest first.
+    pub fn mail_new_for_machine(&self, machine: &str) -> R<Vec<crate::mail::Msg>> {
+        let like = format!("%@{machine}");
+        self.mail_rows("SELECT id, at, sender, label, target, text, state FROM mail WHERE state = 'new' AND target LIKE ?1 ORDER BY id", &[&like])
+    }
+
+    /// Marks a message handed to its agent, or dropped. Only a new one changes.
+    pub fn mail_set(&self, id: i64, state: &str, at: u64) -> R<bool> {
+        let n = self.db.execute("UPDATE mail SET state = ?2, handed_at = ?3 WHERE id = ?1 AND state = 'new'", params![id, state, at as i64])?;
+        Ok(n == 1)
+    }
+
+    /// The last `n` messages from or to `addr`, newest first.
+    pub fn mail_of(&self, addr: &str, n: usize) -> R<Vec<crate::mail::Msg>> {
+        let n = n as i64;
+        self.mail_rows(
+            "SELECT id, at, sender, label, target, text, state FROM mail WHERE sender = ?1 OR target = ?1 ORDER BY id DESC LIMIT ?2",
+            &[&addr, &n],
+        )
     }
 
     pub fn open_panes(&self) -> R<Vec<PaneRow>> {

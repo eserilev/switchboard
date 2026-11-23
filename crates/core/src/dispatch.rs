@@ -88,6 +88,8 @@ commands! {
     pane_close(id: String) -> () => |h| h.close(&id);
     handover_out(id: String) -> Value => |h| h.handover_out(&id).map(|v| json!(v));
     handover_take() -> Value => |h| h.handover_take().map(|v| json!(v));
+    mail_list(id: String) -> Value => |h| h.mail_list(&id);
+    mail_agents() -> Value => |h| Ok(json!(h.mail_agents()));
     pane_image(id: String, data: String, ext: String) -> String => |h| {
         let bytes = B64.decode(data.as_bytes()).map_err(|err| format!("the image is not base64: {err}"))?;
         h.paste_image(&id, &bytes, &ext)
@@ -172,6 +174,8 @@ commands! {
     pane_input(id: String, data: String, binary: bool) -> () => |h| {
         // `binary` data (mouse reports) is one byte per char.
         let bytes: Vec<u8> = if binary { data.chars().map(|c| c as u8).collect() } else { data.into_bytes() };
+        // A key from you: a message for this agent waits until you stop (SPEC 40.4).
+        h.mail_key(&id);
         h.input(&id, &bytes)
     };
 }

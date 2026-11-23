@@ -1089,6 +1089,45 @@ window.SBInsp = {
   screen: () => screenOf(S.tab),
 };
 
+// ---------- messages between agents (SPEC 40) ----------
+
+// The messages of each pane, as the hub last gave them. A `mail` event clears it.
+// `gen` drops an answer that a `mail` event made old while it was on its way.
+const MAIL = { list: new Map(), loading: new Set(), gen: 0 };
+const ago = (t) => { const s = Math.max(0, Math.round(Date.now() / 1000 - t)); return s < 60 ? "now" : s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} d`; };
+function mailHtml(p) {
+  if (p.kind !== "claude") return "";
+  const m = MAIL.list.get(p.id);
+  if (!m) {
+    const key = `${MAIL.gen}|${p.id}`;
+    if (!MAIL.loading.has(key)) {
+      MAIL.loading.add(key);
+      const gen = MAIL.gen;
+      const done = (v) => { MAIL.loading.delete(key); if (gen === MAIL.gen) { MAIL.list.set(p.id, v); drawInsp(); } };
+      invoke("mail_list", { id: p.id }).then(done, () => done({ messages: [], here: true, on: true }));
+    }
+    return "";
+  }
+  const head = `<div class="isech">Messages${m.messages?.length ? ` · ${m.messages.length}` : ""}</div>`;
+  if (!m.on) return `<div class="isec">${head}<p class="iempty">Messages between agents are off in the config.</p></div>`;
+  if (!m.here) return `<div class="isec">${head}<p class="iempty">The mailbox is on the server. Agents here send and get messages through it.</p></div>`;
+  if (!m.messages?.length) return `<div class="isec">${head}<p class="iempty">None yet. Ask the agent to message another one; <code>${esc(m.address)}</code> is its address.</p></div>`;
+  const rows = m.messages.slice(0, 10).map((x) => {
+    const out = x.from === m.address;
+    const who = out ? `to ${x.to}` : `from ${x.from}`;
+    const st = x.state === "new" ? `<span class="mst">waiting</span>` : "";
+    return `<li class="${out ? "mout" : "min"}"><div class="mhead"><span class="mwho">${out ? "→" : "←"} ${esc(who)}</span>${st}<span class="mt">${esc(ago(x.at))}</span></div><p title="${esc(x.text)}">${esc(x.text)}</p></li>`;
+  }).join("");
+  return `<div class="isec">${head}<ul class="imail">${rows}</ul></div>`;
+}
+listen("mail", (e) => {
+  const m = e.payload;
+  MAIL.gen++;
+  MAIL.list.clear();
+  drawInsp();
+  if (m.state === "new") toast(`✉ ${m.from} → ${m.to}: ${m.text.split("\n")[0].slice(0, 90)}`);
+});
+
 // The board's inspector: the focused tile, or the live pane.
 function boardTarget() {
   const own = S.focus && (S.focus === S.live || tiles().some((p) => p.id === S.focus)) ? S.focus : null;
@@ -1111,6 +1150,7 @@ SBInsp.provide("board", () => {
     title: paneName(p),
     display: true,
     alert: parts?.alert || null,
+    body: mailHtml(p),
     facts: [
       ["State", stateWord(p)],
       ["Repo", p.repo],

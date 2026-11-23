@@ -17,6 +17,11 @@ pub struct Config {
     pub tasks: TasksCfg,
     pub sandbox: SandboxCfg,
     pub pane_tools: PaneToolsCfg,
+    /// Messages between agents, on this computer and the server (SPEC 40).
+    pub messages: MessagesCfg,
+    /// This computer's name in agent addresses, as `p3@<machine>`. With none, the
+    /// host name, cut at the first dot.
+    pub machine: Option<String>,
     /// Your own notes for each repo, by `owner/name` (SPEC 37).
     pub repos: BTreeMap<String, RepoCfg>,
     /// Today (SPEC 39): what needs you on GitHub.
@@ -228,6 +233,19 @@ pub struct PaneToolsCfg {
     pub enabled: bool,
 }
 
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields, default)]
+pub struct MessagesCfg {
+    /// Off: no agent can send, and nothing is delivered.
+    pub enabled: bool,
+}
+
+impl Default for MessagesCfg {
+    fn default() -> Self {
+        MessagesCfg { enabled: true }
+    }
+}
+
 impl Default for PaneToolsCfg {
     fn default() -> Self {
         PaneToolsCfg { enabled: true }
@@ -246,6 +264,8 @@ impl Default for Config {
             tasks: TasksCfg::default(),
             sandbox: SandboxCfg::default(),
             pane_tools: PaneToolsCfg::default(),
+            messages: MessagesCfg::default(),
+            machine: None,
             repos: BTreeMap::new(),
             today: crate::today::TodayCfg::default(),
             remote: None,
@@ -317,6 +337,30 @@ pub fn write_file(path: &Path, text: &str) -> Result<(), String> {
 impl Config {
     /// The argv of the remote link, or `None` when the hub runs here. `SB_REMOTE`
     /// sets the host for one run, and wins over `remote_off`.
+    /// The host whose hub holds the mailbox (SPEC 40.1), when it is not this
+    /// computer: `SB_REMOTE`, else `remote`, in both modes of the switch.
+    pub fn mail_host(&self) -> Option<String> {
+        sb_remote_env().or_else(|| self.remote.clone()).filter(|h| !h.is_empty())
+    }
+
+    /// The command that runs `sb msg <args>` on the mailbox host. `SB_MAIL_LINK`
+    /// (a JSON list) replaces the ssh part, for tests.
+    pub fn mail_argv(&self, args: &[&str]) -> Option<Vec<String>> {
+        let host = self.mail_host()?;
+        if let Some(prefix) = std::env::var("SB_MAIL_LINK").ok().and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok()) {
+            return Some(prefix.into_iter().chain(args.iter().map(|a| a.to_string())).collect());
+        }
+        // Each arg is a fixed word or a machine name: letters, digits, - and _.
+        let safe = args.iter().all(|a| a.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')));
+        if !safe {
+            return None;
+        }
+        let mut argv: Vec<String> = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"].map(String::from).to_vec();
+        argv.push(host);
+        argv.push(format!("PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\" exec sb msg {}", args.join(" ")));
+        Some(argv)
+    }
+
     pub fn remote_argv(&self) -> Option<(String, Vec<String>)> {
         self.remote_argv_with(sb_remote_env())
     }
