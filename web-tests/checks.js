@@ -2243,6 +2243,11 @@
       $("#wbar").textContent);
     check("the Work tab has no live title: the header has the state", getComputedStyle($("#livetitle")).display === "none");
     {
+      // With no title, the parts still fill the pane down to its foot.
+      const lv = box("#live");
+      check("the Work parts fill the live pane", Math.abs(lp.bottom - (lv.bottom - 1)) < 3 && Math.abs(lp.top - (lv.top + 1)) < 3, JSON.stringify({ lp, lv }));
+    }
+    {
       // The inspector of the work tab: closed at first, its own memory, the parts.
       check("the work inspector starts closed", $("#insp").hidden && !$("#itoggle").hidden);
       window.SBInsp.toggle();
