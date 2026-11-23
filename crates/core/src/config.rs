@@ -22,6 +22,9 @@ pub struct Config {
     /// Remote mode (SPEC 29): the ssh host of the hub, for example `me@box`. With
     /// none, the hub runs here.
     pub remote: Option<String>,
+    /// True: the hub runs here, though `remote` names a host. The switch in the
+    /// window sets it, so the host stays for the switch back (SPEC 29.1).
+    pub remote_off: bool,
     /// The program that links the window to the remote hub. With none,
     /// `ssh -T <remote> sb attach`, with `~/.local/bin` and `~/.cargo/bin` on its PATH.
     pub remote_command: Option<Vec<String>>,
@@ -243,6 +246,7 @@ impl Default for Config {
             pane_tools: PaneToolsCfg::default(),
             repos: BTreeMap::new(),
             remote: None,
+            remote_off: false,
             remote_command: None,
         }
     }
@@ -309,13 +313,25 @@ pub fn write_file(path: &Path, text: &str) -> Result<(), String> {
 
 impl Config {
     /// The argv of the remote link, or `None` when the hub runs here. `SB_REMOTE`
-    /// sets the host for one run.
+    /// sets the host for one run, and wins over `remote_off`.
     pub fn remote_argv(&self) -> Option<(String, Vec<String>)> {
-        let host = std::env::var("SB_REMOTE").ok().filter(|h| !h.is_empty()).or_else(|| self.remote.clone())?;
+        self.remote_argv_with(sb_remote_env())
+    }
+
+    fn remote_argv_with(&self, env: Option<String>) -> Option<(String, Vec<String>)> {
+        let host = match env {
+            Some(h) => h,
+            None if self.remote_off => return None,
+            None => self.remote.clone()?,
+        };
         let argv = self.remote_command.clone().unwrap_or_else(|| {
             vec![
                 "ssh".into(),
                 "-T".into(),
+                // No prompt: a new host key or a password fails at once, with
+                // ssh's reason, not after the hello wait. The window has no terminal.
+                "-o".into(),
+                "BatchMode=yes".into(),
                 "-o".into(),
                 "ServerAliveInterval=15".into(),
                 "-o".into(),
@@ -326,6 +342,39 @@ impl Config {
         });
         Some((host, argv))
     }
+
+    /// Turns remote mode off or on in the config file, for the next start. Keeps
+    /// every other key and the comments. On needs a `remote` host.
+    pub fn set_remote_off(path: &Path, off: bool) -> Result<Config, String> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        let mut doc: toml_edit::Document = text
+            .parse()
+            .map_err(|e: toml_edit::TomlError| format!("{}: {}. Fix the file, then try again.", path.display(), e.message()))?;
+        if off {
+            doc["remote_off"] = toml_edit::value(true);
+        } else {
+            doc.remove("remote_off");
+        }
+        let text = doc.to_string();
+        let config = Config::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        if !off && config.remote.is_none() {
+            return Err(format!("{}: set remote = \"me@box\" first.", path.display()));
+        }
+        write_file(path, &text)?;
+        Ok(config)
+    }
+}
+
+/// The host of `SB_REMOTE`, when it is set and not empty.
+pub fn sb_remote_env() -> Option<String> {
+    std::env::var("SB_REMOTE").ok().filter(|h| !h.is_empty())
+}
+
+impl Config {
 
     pub fn load(path: &Path) -> Result<Config, String> {
         match std::fs::read_to_string(path) {
@@ -597,6 +646,30 @@ mod tests {
         let other = ConnectionCfg { kind: "claude".into(), url: None, model: None, ..conn.clone() };
         assert!(Config::add_connection(&path, "y", &other).unwrap());
         assert_eq!(Config::load(&path).unwrap().connections.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remote_off_runs_the_hub_here_and_keeps_the_host() {
+        let dir = std::env::temp_dir().join(format!("sb-config-remote-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("config.toml");
+        // No host: remote mode cannot go on.
+        assert!(Config::set_remote_off(&path, false).is_err());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, "# my box\nremote = \"me@box\"\n").unwrap();
+        let c = Config::load(&path).unwrap();
+        let (host, argv) = c.remote_argv_with(None).unwrap();
+        assert_eq!(host, "me@box");
+        assert!(argv.contains(&"BatchMode=yes".to_owned()));
+        let c = Config::set_remote_off(&path, true).unwrap();
+        assert!(c.remote_off && c.remote_argv_with(None).is_none());
+        assert_eq!(Config::load(&path).unwrap(), c);
+        // SB_REMOTE wins.
+        assert_eq!(c.remote_argv_with(Some("other".into())).unwrap().0, "other");
+        let c = Config::set_remote_off(&path, false).unwrap();
+        assert!(!c.remote_off && c.remote_argv_with(None).is_some());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# my box\nremote = \"me@box\"\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -329,9 +329,30 @@ fn log(level: &str, message: &str) {
 /// The parse error of this computer's config, when it has one.
 static CONFIG_ERROR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// What the switch between here and the server needs: this computer's config
+/// file, and the host to switch to. No host, or `SB_REMOTE` set: no switch.
+struct Switch {
+    config: PathBuf,
+    host: Option<String>,
+}
+static SWITCH: std::sync::OnceLock<Switch> = std::sync::OnceLock::new();
+
+/// Writes the mode into this computer's config, for the restart (SPEC 29.1).
+fn link_mode(remote: bool) -> Res<()> {
+    let s = SWITCH.get().ok_or("the app is starting")?;
+    if switchboard_core::config::sb_remote_env().is_some() {
+        return Err("SB_REMOTE sets the hub for this run. Start the app without it to switch.".into());
+    }
+    if s.host.is_none() {
+        return Err(format!("No server to switch to. Set remote = \"me@box\" in {}.", s.config.display()));
+    }
+    tracing::info!(target: "sb::app", remote, "switch the hub");
+    Config::set_remote_off(&s.config, !remote).map(drop)
+}
+
 /// The commands that run in the app, in remote mode too. Every other command goes
 /// to the backend. A test keeps this list short (SPEC 29).
-const LOCAL: &[&str] = &["log", "open_url", "link_state", "link_reconnect"];
+const LOCAL: &[&str] = &["log", "open_url", "link_state", "link_reconnect", "link_mode"];
 
 /// The one handler of every `invoke` of the window.
 fn handle(invoke: tauri::ipc::Invoke) -> bool {
@@ -371,7 +392,21 @@ fn handle(invoke: tauri::ipc::Invoke) -> bool {
             if let Some(err) = CONFIG_ERROR.get() {
                 v["config_error"] = json!(format!("The config does not parse, so the defaults are in use: {err}"));
             }
+            // The server the switch goes to, or none.
+            let host = SWITCH.get().and_then(|s| s.host.clone());
+            v["switch"] = json!(host.filter(|_| switchboard_core::config::sb_remote_env().is_none()));
             invoke.resolver.resolve(v)
+        }
+        // The app starts again in the other mode. The agents keep running in tmux.
+        "link_mode" => {
+            let remote = args.get("remote").and_then(Value::as_bool).unwrap_or(false);
+            match link_mode(remote) {
+                Ok(()) => {
+                    invoke.resolver.resolve(Value::Null);
+                    webview.app_handle().request_restart();
+                }
+                Err(e) => invoke.resolver.reject(e),
+            }
         }
         "link_reconnect" => invoke.resolver.respond_async(async move {
             let b = Arc::clone(&backend);
@@ -448,6 +483,7 @@ fn main() {
                 let _ = CONFIG_ERROR.set(err);
                 Config::default()
             });
+            let _ = SWITCH.set(Switch { config: paths.config.clone(), host: config.remote.clone() });
             let backend = match config.remote_argv() {
                 Some((host, argv)) => {
                     tracing::info!(target: "sb::app", %host, ?argv, "remote mode");
@@ -525,7 +561,7 @@ mod tests {
     /// nothing else here (SPEC 29).
     #[test]
     fn the_local_commands_stay_few() {
-        assert_eq!(LOCAL, &["log", "open_url", "link_state", "link_reconnect"]);
+        assert_eq!(LOCAL, &["log", "open_url", "link_state", "link_reconnect", "link_mode"]);
         for c in LOCAL {
             assert!(!dispatch::COMMANDS.contains(c), "{c} is a hub command too");
         }

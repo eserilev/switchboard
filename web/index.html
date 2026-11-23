@@ -15,7 +15,10 @@
     <div class="rnav" id="tabs"></div>
     <span class="rsp"></span>
     <div class="rfoot">
-      <span class="host" id="host" hidden title="The hub runs on this server (SPEC 29)"></span>
+      <div class="conn" id="hostsw" hidden>
+        <button class="host" id="host" type="button" aria-haspopup="menu"></button>
+        <div class="menu" id="hostmenu" role="menu" hidden></div>
+      </div>
       <div class="conn">
         <button class="rbtn rconn" id="conn" type="button" aria-haspopup="menu"></button>
         <div class="menu" id="connmenu" role="menu" hidden></div>
@@ -25,7 +28,7 @@
   </nav>
 
   <div class="app">
-    <div class="link" id="link" role="status" hidden><span id="linktext"></span><button class="btn small" id="linkgo" type="button">Reconnect</button></div>
+    <div class="link" id="link" role="status" hidden><span id="linktext"></span><button class="btn small" id="linkgo" type="button">Reconnect</button><button class="btn small" id="linklocal" type="button" hidden title="Switchboard restarts with the hub on this computer. Your agents on the server keep running.">Use this computer</button></div>
 
     <div class="stage">
       <div class="screens" id="screens">

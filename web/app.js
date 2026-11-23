@@ -81,12 +81,25 @@ function linkChanged() {
   drawLink();
 }
 function drawLink() {
-  $("#host").hidden = !LINK.remote;
-  $("#host").textContent = LINK.host;
+  // `switch`: the server of this computer's config, when the app can switch.
+  const sw = LINK.switch;
+  $("#hostsw").hidden = !LINK.remote && !sw;
+  const name = LINK.remote ? LINK.host : "This computer";
+  $("#host").textContent = name;
+  const tip = LINK.remote ? `The hub runs on ${LINK.host}` : "The hub runs on this computer";
+  $("#host").title = sw ? `${tip}. Click to switch.` : tip;
   $("#host").classList.toggle("down", !LINK.up);
+  $("#host").classList.toggle("here", !LINK.remote);
+  $("#host").disabled = !sw;
+  setHTML($("#hostmenu"), sw ? [
+    `<button role="menuitemradio" aria-checked="${!LINK.remote}" data-mode="local">This computer</button>`,
+    `<button role="menuitemradio" aria-checked="${!!LINK.remote}" data-mode="remote">${esc(sw)}</button>`,
+    `<div class="note">Switchboard restarts. Agents keep running where they are.${LINK.remote ? "" : " Review runs here stop."}</div>`,
+  ].join("") : "");
   $("#link").hidden = LINK.up;
   if (LINK.up) return;
   const connecting = LINK.why === "connecting";
+  $("#linklocal").hidden = connecting || !sw;
   $("#linktext").textContent = connecting ? `Connecting to ${LINK.host}…`
     : LINK.taken ? `Another window took over the hub on ${LINK.host}. Your agents run on there.`
     : `No link to ${LINK.host}: ${LINK.why || "the link is down"}. Your agents run on there.`;
@@ -1491,6 +1504,24 @@ listen("link", (e) => {
   if (!LINK.up) $("#toast").hidden = true;
 });
 $("#linkgo").addEventListener("click", reconnect);
+// The switch between a hub here and the hub on the server: the app restarts.
+async function switchHub(remote) {
+  $("#hostmenu").hidden = true;
+  if (remote === !!LINK.remote) return;
+  try {
+    await invoke("link_mode", { remote });
+    toast(remote ? `Restarting with the hub on ${LINK.switch}…` : "Restarting with the hub on this computer…");
+  } catch (e) {
+    toast(e);
+  }
+}
+$("#host").addEventListener("click", () => ($("#hostmenu").hidden = !$("#hostmenu").hidden));
+$("#hostmenu").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-mode]");
+  if (b) switchHub(b.dataset.mode === "remote");
+});
+document.addEventListener("click", (e) => { if (!e.target.closest("#hostsw")) $("#hostmenu").hidden = true; });
+$("#linklocal").addEventListener("click", () => switchHub(false));
 listen("error", (e) => toast(e.payload.message || e.payload));
 listen("review", (e) => {
   const was = S.reviews.has(e.payload.id);

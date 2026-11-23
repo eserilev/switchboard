@@ -845,7 +845,7 @@ enabled = true                  # the `switchboard` MCP server in every agent pa
 context = ["~/packs/lighthouse"]   # shared notes: files, or folders of .md files
 ```
 
-`remote = "me@box"` runs the window against a hub on that host, and `remote_command` replaces the ssh command (29.1).
+`remote = "me@box"` runs the window against a hub on that host, `remote_off = true` keeps the host but runs the hub here (the switch on the rail sets it), and `remote_command` replaces the ssh command (29.1).
 
 A missing file gives the defaults. An unknown key is an error with the key name.
 
@@ -1673,9 +1673,10 @@ The hub runs on a server, and the window runs on your computer. The agents, tmux
    remote = "me@box"
    ```
 
-3. Start the app. It runs `ssh -T -o ServerAliveInterval=15 -o ServerAliveCountMax=3 me@box sb attach`, with `~/.local/bin` and `~/.cargo/bin` on the server PATH.
+3. Start the app. It runs `ssh -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 me@box sb attach`, with `~/.local/bin` and `~/.cargo/bin` on the server PATH. `BatchMode` means ssh never asks: a host key it does not know, or a password, fails at once with ssh's reason. The window has no terminal, so a prompt would only wait out the 20 s hello. Connect once with `ssh me@box` in a terminal to accept the host key.
 
-- `SB_REMOTE=me@box switchboard` sets the host for one run.
+- **The switch.** With `remote` set, the foot of the rail names where the hub runs: the host, or "This computer". A click opens a menu with both. The other one writes `remote_off = true` (or takes it out) in the config of your computer, and the app restarts in that mode. The host stays in the config for the switch back. While the link is down, the banner also offers **Use this computer**. The agents keep running in tmux on each side. A restart from a hub here stops its review runs, as a quit does. `link_mode` is the one command for it, and it runs on your computer (29.2).
+- `SB_REMOTE=me@box switchboard` sets the host for one run. It wins over `remote_off`, and the switch is off for that run.
 - `remote_command = ["ssh", "-p", "2222", "me@box", "sb", "attach"]` replaces the whole command.
 - `sb attach` starts `sb serve` when none runs. `sb serve` runs on after the window goes, with its own session (`setsid`). It stops on SIGTERM or SIGINT, and ignores SIGHUP.
 - `sb serve` logs to `~/.switchboard/logs/serve.log`. Its pid is in `run/serve.pid`, and its socket is `run/window.sock` (mode 600).
@@ -1690,7 +1691,7 @@ One JSON object per line, on the window socket. `sb attach` copies its stdin and
 - A command: `{"id":7,"cmd":"pane_open","args":{...}}`. Its answer: `{"id":7,"ok":<value>}` or `{"id":7,"err":"..."}`. Answers can come out of order.
 - News: `{"event":"panes","payload":...}`. Pane bytes: `{"event":"pane_output","payload":{"pane":"p3","data":"<base64>"}}`.
 - One table in `crates/core/src/dispatch.rs` holds every command, for the app and for `sb serve`.
-- In remote mode only `log`, `open_url`, `link_state` and `link_reconnect` run on your computer. A test keeps that list short. So a server can make the app do nothing else on your computer.
+- In remote mode only `log`, `open_url`, `link_state`, `link_reconnect` and `link_mode` run on your computer. A test keeps that list short. So a server can make the app do nothing else on your computer.
 
 ### 29.3 One window at a time
 
@@ -1719,7 +1720,7 @@ One JSON object per line, on the window socket. `sb attach` copies its stdin and
 ### 29.6 A lost link
 
 - ssh ends the link after 45 s with no answer. A banner shows the host and the why, with Reconnect.
-- A connect waits 20 s at most for the hello. It skips up to 100 lines that are not a hello, for example a banner of the login shell. On any failure it kills the ssh process.
+- A connect waits 20 s at most for the hello. When it gives up, the error carries the last lines ssh wrote to stderr. It skips up to 100 lines that are not a hello, for example a banner of the login shell. On any failure it kills the ssh process.
 - Each link has a number. News of an older link is dropped, and the link shows as up only while its client is up.
 - While the link is down, a failed command makes no toast.
 - After Reconnect, the window reads everything again: settings, connections, panes, reviews and tasks. Then it opens its live pane again, where it was: on the board, in the Work environment tab, or in a review's column. The tab stays.

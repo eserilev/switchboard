@@ -2071,7 +2071,8 @@
     window.__emit("link", { up: false, host: "box", why: "ssh: connect to host box port 22: Connection timed out", taken: false });
     await wait(30);
     check("a lost link shows a banner with the host and the reason", !$("#link").hidden && $("#linktext").textContent.includes("box") && $("#linktext").textContent.includes("timed out") && $("#linkgo").textContent === "Reconnect");
-    check("the top bar names the host, marked down", !$("#host").hidden && $("#host").textContent === "box" && $("#host").classList.contains("down"));
+    check("the top bar names the host, marked down", !$("#hostsw").hidden && $("#host").textContent === "box" && $("#host").classList.contains("down"));
+    check("with no server in this computer's config, no switch", $("#host").disabled && $("#linklocal").hidden);
     check("the banner keeps the board in its place", $("#view-board").getBoundingClientRect().top >= $("#link").getBoundingClientRect().bottom - 1);
     {
       // A command while the link is down: the banner says it, no toast.
@@ -2100,8 +2101,33 @@
     window.__emit("link", { up: true, host: "box" });
     await wait(200);
     window.SB.collapse();
-    Object.assign(window.SB.LINK, { remote: false, up: true });
-    $("#host").hidden = true;
+    {
+      // The switch between here and the server (SPEC 29.1): the app restarts.
+      window.SB.LINK.switch = "box";
+      window.__emit("link", { up: false, host: "box", why: "ssh: Host key verification failed.", taken: false });
+      await wait(30);
+      check("a lost link offers this computer", !$("#linklocal").hidden && !$("#host").disabled);
+      $("#linklocal").click();
+      await wait(30);
+      let m = called("link_mode");
+      check("Use this computer switches to a hub here", m.length === 1 && m[0][1].remote === false, JSON.stringify(m));
+      $("#host").click();
+      await wait(10);
+      const items = $$("#hostmenu [data-mode]");
+      check("the host menu has this computer and the server, the server marked", !$("#hostmenu").hidden && items.length === 2 && items[1].textContent === "box" && items[1].getAttribute("aria-checked") === "true");
+      items[1].click();
+      await wait(30);
+      check("a click on the mode in use does nothing", called("link_mode").length === 1 && $("#hostmenu").hidden);
+      $("#host").click();
+      $$("#hostmenu [data-mode]")[0].click();
+      await wait(30);
+      m = called("link_mode");
+      check("the menu switches to this computer", m.length === 2 && m[1][1].remote === false);
+      window.__emit("link", { up: true, host: "box" });
+      await wait(200);
+    }
+    Object.assign(window.SB.LINK, { remote: false, up: true, switch: null });
+    $("#hostsw").hidden = true;
   }
 
   {

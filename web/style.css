@@ -790,6 +790,10 @@ tr.gap .hidden { color: var(--muted); font-size: 11px; }
 body:not(.rail-wide) .host { font-size: 0; }
 body:not(.rail-wide) .host::before { margin: 0; }
 .host.down::before { color: var(--error); }
+.host.here::before { color: var(--muted); }
+button.host { border: 0; background: transparent; padding: 4px 0; cursor: pointer; text-align: left; }
+button.host:hover { color: var(--fg); }
+#hostmenu .note { padding: 6px 10px 4px; color: var(--muted); font-size: 11px; max-width: 240px; }
 .link { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: color-mix(in srgb, var(--error) 18%, var(--panel)); border-bottom: 1px solid var(--line); font-size: 13px; }
 .link span { flex: 1; min-width: 0; }
 

@@ -517,7 +517,10 @@ impl Client {
             let _ = tx.send((got, lines));
         });
         let Ok((got, mut lines)) = rx.recv_timeout(HELLO_WAIT) else {
-            return Err(format!("no answer from the server in {} s", HELLO_WAIT.as_secs()));
+            // What ssh said, if anything, tells why.
+            let said = errs.lock().unwrap().iter().cloned().collect::<Vec<_>>().join(" ");
+            let wait = HELLO_WAIT.as_secs();
+            return Err(if said.is_empty() { format!("no answer from the server in {wait} s") } else { format!("no answer from the server in {wait} s: {said}") });
         };
         let Some(answer) = got? else {
             return Err(why_ended(&errs));
