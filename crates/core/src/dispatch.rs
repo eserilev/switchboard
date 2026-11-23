@@ -86,6 +86,8 @@ commands! {
     shell_open(tree: String) -> String => |h| h.shell_open(std::path::Path::new(&tree));
     pane_seen(id: String) -> () => |h| h.seen(&id);
     pane_close(id: String) -> () => |h| h.close(&id);
+    handover_out(id: String) -> Value => |h| h.handover_out(&id).map(|v| json!(v));
+    handover_take() -> Value => |h| h.handover_take().map(|v| json!(v));
     pane_image(id: String, data: String, ext: String) -> String => |h| {
         let bytes = B64.decode(data.as_bytes()).map_err(|err| format!("the image is not base64: {err}"))?;
         h.paste_image(&id, &bytes, &ext)

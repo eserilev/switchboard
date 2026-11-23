@@ -2161,8 +2161,76 @@
       window.__emit("link", { up: true, host: "box" });
       await wait(200);
     }
+    {
+      // Handover (SPEC 38): an agent on the server continues on this computer.
+      await window.SB.expand("p1");
+      await wait(60);
+      check("a server agent's live title offers Continue here", !!$("#livetitle [data-handover]"));
+      const hand = () => !$("#handover").hidden;
+      // The dialog shows its progress while the server and the fetch work.
+      let go = null;
+      window.__handHook = (cmd) => cmd === "handover_check" ? new Promise((ok) => (go = ok)) : null;
+      $("#livetitle [data-handover]").click();
+      for (let i = 0; i < 20 && !go; i++) await wait(10);
+      check("Continue here opens the dialog and shows its progress", hand() && $("#htitle").textContent.includes("on this computer") && $$("#handover .hsteps li").length === 2
+        && $("#handover .hs-done").textContent.includes("Snapshot") && $("#handover .hs-now").textContent.includes("Fetch") && $("#hgo").disabled, $("#handover .hbody").innerHTML);
+      go();
+      window.__handHook = null;
+      await wait(40);
+      const body = () => $("#handover .hbody").textContent;
+      check("then it shows what comes along and where it lands", body().includes("What comes along") && body().includes("3 files") && body().includes("c1c1c1c") && body().includes("300 KB")
+        && body().includes("~/code/lighthouse-feat-2") && body().includes("feat-2") && body().includes("commits that the server does not have") && !$("#hgo").disabled && $("#hstop").checked, body());
+      $('#handover [data-h="files"]').click();
+      await wait(10);
+      check("the changed files show on a click, with their state", $$("#handover .hfiles li").length === 3 && $("#handover .hst-D")?.parentElement.textContent.includes("gone.rs"));
+      // Continue: the worktree, the stop on the server, then the switch, in that order.
+      const n0 = window.__calls.length;
+      $("#hgo").click();
+      await wait(60);
+      const after = window.__calls.slice(n0).map((c) => c[0]).filter((c) => ["handover_in", "pane_close", "link_mode"].includes(c));
+      check("Continue here makes the worktree, stops the agent there, then switches", JSON.stringify(after) === '["handover_in","pane_close","link_mode"]'
+        && called("handover_in").at(-1)[1].plan.snap === "5a5a5a5a5a5a" && called("pane_close").at(-1)[1].id === "p1" && called("link_mode").at(-1)[1].remote === false, JSON.stringify(after));
+      check("the dialog shows the switch step while the app restarts", hand() && $("#handover .hs-now")?.textContent.includes("Switch") && $("#hcancel").hidden && $("#hgo").hidden);
+      // A restart that does not come: the shim keeps the window. Close it for the next case.
+      $("#handover").hidden = true;
+      window.SBHandover.open("p1");
+      await wait(60);
+      $("#hstop").click();
+      const n1 = window.__calls.length;
+      $("#hgo").click();
+      await wait(60);
+      const after2 = window.__calls.slice(n1).map((c) => c[0]).filter((c) => ["handover_in", "pane_close", "link_mode"].includes(c));
+      check("with Stop off, the agent on the server keeps running", JSON.stringify(after2) === '["handover_in","link_mode"]', JSON.stringify(after2));
+      $("#handover").hidden = true;
+      // A failure says why, and offers Try again; Escape closes.
+      window.__handFail = "No clone of git@github.com:sigp/lighthouse.git on this computer. Clone it into a scan folder, then try again.";
+      window.SBHandover.open("p1");
+      await wait(60);
+      check("a failure shows the step and the reason, with Try again", $("#handover .hs-fail")?.textContent.includes("Fetch") && $("#handover .herr").textContent.includes("No clone") && $("#hgo").textContent === "Try again" && !$("#hgo").disabled);
+      window.__handFail = null;
+      $("#hgo").click();
+      await wait(60);
+      check("Try again starts over", body().includes("What comes along"));
+      $("#handover").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      check("Escape closes the dialog", !hand());
+      window.SB.collapse();
+      await wait(30);
+      check("an nvim pane has no handover", !window.SBHandover.can(window.SB.paneById("p3")));
+    }
     Object.assign(window.SB.LINK, { remote: false, up: true, switch: null });
     $("#hostsw").hidden = true;
+    {
+      // On this computer: no handover from here, and an arrived agent opens with a note.
+      window.SBHandover.open("p1");
+      await wait(20);
+      check("on a hub here, Leader m only says why", $("#handover").hidden && $("#toast").textContent.includes("from the server"));
+      window.__arrive = { pane: window.SB.paneById("p2"), from: "box", branch: "feat-2", changes: 3, resumed: true };
+      await window.SBHandover.arrive();
+      await wait(60);
+      check("an agent that arrived opens, with a note on what came along", window.SB.S.live === "p2" && $("#toast").textContent.includes("Continued from box: branch feat-2, 3 changed files, the conversation."), $("#toast").textContent);
+      window.SB.collapse();
+      await wait(30);
+    }
   }
 
   {

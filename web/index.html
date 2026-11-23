@@ -115,6 +115,17 @@
     </div>
   </div>
 
+  <div class="launcher" id="handover" hidden>
+    <div class="lbox hbox" role="dialog" aria-modal="true" aria-labelledby="htitle" aria-describedby="hsub">
+      <div class="hhead"><h3 id="htitle">Continue on this computer</h3><p id="hsub"></p></div>
+      <div class="hbody" aria-live="polite"></div>
+      <div class="lfoot">
+        <button class="btn" id="hcancel" type="button">Cancel</button>
+        <button class="btn primary" id="hgo" type="button" disabled>Continue here</button>
+      </div>
+    </div>
+  </div>
+
   <div class="menu taskmenu" id="taskmenu" role="menu" hidden></div>
   <div class="toast" id="toast" hidden></div>
 
@@ -127,5 +138,6 @@
   <script src="review.js"></script>
   <script src="tasks.js"></script>
   <script src="work.js"></script>
+  <script src="handover.js"></script>
 </body>
 </html>

@@ -194,6 +194,7 @@ A live pane gets every key you type. Esc in Claude Code stops the agent. So app 
 | Leader, `w` | Work environment tab (30). |
 | Leader, `a` | Switch the active connection. |
 | Leader, `<` / `>` | Move the focused tile one place left or right. |
+| Leader, `m` | Continue the live or focused agent of the server on this computer (38). |
 | Enter / Delete on a focused tile | Open the tile, or close its pane. |
 | Review: `j` / `k` | Next or previous step. |
 | Review: `n` | Mark the step reviewed and go to the next one. In a tour of Claude's places (11.15), the next place. |
@@ -1692,7 +1693,7 @@ One JSON object per line, on the window socket. `sb attach` copies its stdin and
 - A command: `{"id":7,"cmd":"pane_open","args":{...}}`. Its answer: `{"id":7,"ok":<value>}` or `{"id":7,"err":"..."}`. Answers can come out of order.
 - News: `{"event":"panes","payload":...}`. Pane bytes: `{"event":"pane_output","payload":{"pane":"p3","data":"<base64>"}}`.
 - One table in `crates/core/src/dispatch.rs` holds every command, for the app and for `sb serve`.
-- In remote mode only `log`, `open_url`, `clip_write` (29.11), `link_state`, `link_reconnect` and `link_mode` run on your computer. A test keeps that list short. So a server can make the app do nothing else on your computer: it can write your clipboard, never read it.
+- In remote mode only `log`, `open_url`, `clip_write` (29.11), `handover_check` and `handover_in` (38.2), `link_state`, `link_reconnect` and `link_mode` run on your computer. A test keeps that list short. So a server can make the app do nothing else on your computer: it can write your clipboard, never read it.
 
 ### 29.3 One window at a time
 
@@ -2714,3 +2715,48 @@ Shows what an agent in `path` (the current folder by default) gets: the repos of
 - `repo_context` unit tests: remotes give each repo once, in lower case; a pack folder's `.md` files come in name order and before your own file; a file listed twice comes once; a missing source is named; a repo with no notes adds nothing; notes over the limit are cut on a character boundary.
 - `review.rs`: the notes follow `WRITING` in `--append-system-prompt`.
 - `crates/sb/tests/pane_tools.rs`: a folder with an `upstream` remote to `sigp/lighthouse` gets that repo's notes at session start, with and without `SB_TOOLS`; `sb context` prints them; a folder of another repo gets nothing.
+
+## 38. Handover
+
+An agent on the server continues on this computer, with its commits, the work it did not commit, and its conversation. Nothing goes to GitHub: this computer fetches the work from the server over ssh. The other way (from this computer to the server) is not built yet.
+
+### 38.1 On the server
+
+`handover_out(id)` runs on the server's hub, for an agent pane that is not working.
+
+- **Snapshot.** In a separate index (`GIT_INDEX_FILE`), the hub reads HEAD, adds every file that git does not ignore (`git add -A`), and writes the tree. When it differs from HEAD's tree, a commit on top of HEAD carries it, by "Switchboard". The worktree, its index and its branch do not change.
+- **Ref.** The snapshot goes under `refs/switchboard/handover/<pane>-<seconds>`, so `git fetch` can get it. A handover removes the refs older than 7 days.
+- **Plan.** The answer has the worktree, the branch, the head, the snapshot, the ref, the fetch URLs of the remotes, the files the snapshot changes (`git diff --name-status`), the pane's title (not the Work title, 30), and the session id with the text of its file. The file is Claude Code's file for the tree in the connection's Claude folder, else any project folder with that session. Up to 64 MB.
+- A working agent changes files while git reads them: the hub refuses, and says to wait or press Esc.
+
+### 38.2 On this computer
+
+Two commands of the app (29.2) run here, in remote mode only. The window sends the plan.
+
+- **Checks.** The plan comes from the server, so each part that reaches git or a file name is checked first: the ref is under `refs/switchboard/handover/` with only letters, digits and `-` after it; the commits are hex; the branch passes `git check-ref-format --branch` and does not start with `-`; the folder is absolute; the session id is a file name. Each git command puts `--` before paths and refs.
+- **The clone.** The clone here is the first repo of the launcher's list (9) with a remote of the same repo. The ssh and https forms match: `git@github.com:sigp/lighthouse.git` and `https://github.com/sigp/lighthouse` are both `github.com/sigp/lighthouse`. No clone: the reason names the URL.
+- **Fetch.** `git fetch --no-tags -- <host>:<tree> +<ref>:<ref>`, with `ssh -o BatchMode=yes`. The host is `remote` from the config, or `SB_REMOTE`. The fetched commit must be the snapshot.
+- **Branch.** The server's branch name (`handover` for a detached head). A name checked out here, a folder that exists, or a branch here with commits that the server's head does not have, takes the next name: `feat-2`, `feat-3`. A branch here that is behind moves up to the head, as a pull would. The note says why the name changed.
+- **`handover_check`** is the dry run. It fetches, so the link is tested and the branch choice sees the head, and names the clone, the folder, the branch and the note. It removes the fetched ref and changes nothing else.
+- **`handover_in`** fetches, makes the worktree at the head (`repos::worktree_path`), and puts the snapshot's changes back with `git diff --binary head snap | git apply`: as changes that are not staged, as on the server. When the apply fails, the worktree and a new branch go. Then it removes the fetched ref, and saves the pending handover and the session file in `~/.switchboard/handover/`.
+
+### 38.3 The switch and the arrival
+
+After `handover_in`, the window closes the agent on the server if you chose that, then calls `link_mode` (29.1): the app restarts on this computer. There the window calls `handover_take` after its first load. The hub reads the pending handover once, copies the session file into Claude Code's folder for the new worktree (`<claude>/projects/<path with each character that is not a letter, digit or - as ->`), in the active connection's Claude folder, and starts Claude Code there with `--resume <session>`. With no session file, a new agent starts. The window opens the agent, and a note says what came along: "Continued from box: branch feat, 3 changed files, the conversation."
+
+### 38.4 The dialog
+
+**Continue here** on the live title of a server agent, **Continue on this computer** in the inspector, or Leader `m`, opens the dialog.
+
+1. **Preparing.** Two steps with their state: the snapshot on the server, then the fetch and the choice of the folder. Continue here waits.
+2. **Ready.** *What comes along*: the branch and head, the files not committed (a click lists them with M, A or D), and the conversation with its size, or a note that a new agent starts. *Where it lands*: the clone, the folder, the branch and the note on its name. **Stop the agent on the server**, on at first: two agents on one piece of work drift apart. A line says the app restarts here. Enter or Continue here goes on; Escape or Cancel closes.
+3. **Going.** The steps: make the worktree, stop the agent on the server (if chosen), switch to this computer. No Cancel.
+4. **Failed.** The failed step is red, with the reason. **Try again** starts over, or goes on after the worktree when only the stop or the switch failed.
+
+With `SB_REMOTE` set, the app cannot switch: the dialog says so, and the agent opens at the next start without it.
+
+### 38.5 Tests
+
+- `handover` unit tests: URL forms match, project folders follow Claude Code's names, session ids are file names.
+- `crates/sb/tests/handover.rs`, on real hubs, tmux and git, with a folder in place of ssh: a server worktree with a commit, a change, a new file, a deleted file and an ignored folder. The plan, its changes and session; the server's files, index and head do not change; an old ref goes. A bad branch and a bad ref are refused. The dry run names the clone, folder and branch, and makes nothing. The handover: the head, the branch, each file, nothing staged, no ref left. A second dry run takes `feat-2` and says why. The hub here starts the agent in the worktree with `--resume`, with the session file in its folder, once.
+- Window checks: Continue here on a server agent's live title; the dialog's progress, then what comes along and where it lands; the list of files; the order worktree, stop, switch; with Stop off, no stop; a failure with its step and reason, and Try again; Escape; no handover for an nvim pane or on a hub here; an arrived agent opens with its note.

@@ -354,6 +354,28 @@ fn clip_write(text: &str) -> Res<()> {
     Err("no clipboard tool: install pbcopy, wl-copy or xclip".into())
 }
 
+/// The handover on this computer (SPEC 38.2). It runs here, in remote mode only:
+/// the work comes from the server the window is linked to. `go` false is the dry run.
+fn handover_here(remote: bool, go: bool, plan: Value) -> Res<Value> {
+    use switchboard_core::handover;
+    if !remote {
+        return Err("The window is not linked to a server.".into());
+    }
+    let host = switchboard_core::config::sb_remote_env()
+        .or_else(|| SWITCH.get().and_then(|s| s.host.clone()))
+        .ok_or("A handover needs remote = \"me@box\" in the config: git fetches over ssh from that host.")?;
+    let plan: handover::Plan = serde_json::from_value(plan).map_err(|e| format!("the plan does not parse: {e}"))?;
+    let paths = Paths::from_env();
+    let config = Config::load(&paths.config).unwrap_or_default();
+    let source = handover::source(&host, &plan.tree);
+    tracing::info!(target: "sb::app", %source, go, "handover here");
+    if go {
+        handover::bring_in_here(&paths, &config, &source, &host, &plan).map(|p| json!(p))
+    } else {
+        handover::target(&paths, &config, &source, &plan).map(|t| json!(t))
+    }
+}
+
 /// Log lines from the window.
 fn log(level: &str, message: &str) {
     match level {
@@ -390,7 +412,7 @@ fn link_mode(remote: bool) -> Res<()> {
 
 /// The commands that run in the app, in remote mode too. Every other command goes
 /// to the backend. A test keeps this list short (SPEC 29).
-const LOCAL: &[&str] = &["log", "open_url", "clip_write", "link_state", "link_reconnect", "link_mode"];
+const LOCAL: &[&str] = &["log", "open_url", "clip_write", "handover_check", "handover_in", "link_state", "link_reconnect", "link_mode"];
 
 /// The one handler of every `invoke` of the window.
 fn handle(invoke: tauri::ipc::Invoke) -> bool {
@@ -425,6 +447,18 @@ fn handle(invoke: tauri::ipc::Invoke) -> bool {
             invoke.resolver.resolve(Value::Null);
         }
         "open_url" => invoke.resolver.respond(open_url(&text("url")).map(|_| Value::Null).map_err(Into::into)),
+        // The handover on this computer (SPEC 38.2): the dry run, then the real one.
+        "handover_check" | "handover_in" => {
+            let remote = matches!(&*backend, Backend::Remote(_));
+            let plan = args.get("plan").cloned().unwrap_or(Value::Null);
+            invoke.resolver.respond_async(async move {
+                tauri::async_runtime::spawn_blocking(move || handover_here(remote, cmd == "handover_in", plan))
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r)
+                    .map_err(Into::into)
+            });
+        }
         "clip_write" => {
             let t = text("text");
             invoke.resolver.respond_async(async move {
@@ -605,7 +639,7 @@ mod tests {
     /// nothing else here (SPEC 29).
     #[test]
     fn the_local_commands_stay_few() {
-        assert_eq!(LOCAL, &["log", "open_url", "clip_write", "link_state", "link_reconnect", "link_mode"]);
+        assert_eq!(LOCAL, &["log", "open_url", "clip_write", "handover_check", "handover_in", "link_state", "link_reconnect", "link_mode"]);
         for c in LOCAL {
             assert!(!dispatch::COMMANDS.contains(c), "{c} is a hub command too");
         }

@@ -905,9 +905,11 @@ function drawLiveTitle() {
   if (lt.dataset.lamp !== p.lamp) lt.dataset.lamp = p.lamp;
   const nvimBtn = window.SBParts?.toggles(p) ?? (p.kind !== "nvim" && S.settings.nvim ? `<button class="chip" type="button" data-nvim title="Open nvim in this worktree (Leader e)">nvim</button>` : "");
   const reviewBtn = p.kind === "claude" && !S.termHost ? `<button class="btn sm" type="button" data-lreview title="Review the commits that are not pushed">Review</button>` : "";
+  // An agent on the server continues on this computer (SPEC 38).
+  const handBtn = !S.termHost && window.SBHandover?.can(p) ? `<button class="btn sm" type="button" data-handover title="Continue this agent on this computer, with its work and its conversation (Leader m)">Continue here</button>` : "";
   setHTML(lt, `<span class="name" title="Double-click to rename">${esc(paneName(p))}</span><span class="state">${lampIcon(p.lamp)}${esc(stateWord(p))}</span>`
     + `<span class="lmeta">${esc(metaShort(p))}</span>${taskLine(p)}${actions(p, S.focus === p.id)}<span class="sp"></span>`
-    + `${reviewBtn}${nvimBtn}<button class="icon" type="button" data-collapse aria-label="Collapse (Leader x)" title="Collapse (Leader x)">${ICON.collapse}</button>${closeBtn(p)}`);
+    + `${handBtn}${reviewBtn}${nvimBtn}<button class="icon" type="button" data-collapse aria-label="Collapse (Leader x)" title="Collapse (Leader x)">${ICON.collapse}</button>${closeBtn(p)}`);
 }
 $("#livetitle").addEventListener("click", (e) => {
   const b = e.target.closest("button");
@@ -915,6 +917,7 @@ $("#livetitle").addEventListener("click", (e) => {
   if (!b || !p) return;
   if (b.dataset.collapse !== undefined) return collapse();
   if (b.dataset.close !== undefined) return call("pane_close", { id: p.id });
+  if (b.dataset.handover !== undefined) return window.SBHandover?.open(p.id);
   if (b.dataset.nvim !== undefined) return openNvim(p.tree);
   if (b.dataset.ptoggle) return window.SBParts?.toggle(b.dataset.ptoggle, p.id);
   if (b.dataset.lreview !== undefined) return openLocalReview(p.id);
@@ -1092,6 +1095,7 @@ SBInsp.provide("board", () => {
   const parts = live && p.kind === "claude" ? window.SBParts?.inspector(p) : null;
   const actions = [];
   if (p.kind === "claude") actions.push({ label: "Review the commits not pushed", act: "lreview", title: "A review of this agent's commits that no remote has (SPEC 11.11)" });
+  if (window.SBHandover?.can(p)) actions.push({ label: "Continue on this computer", act: "handover", key: "m", title: "Bring this agent here, with its commits, the work it did not commit, and its conversation (SPEC 38)" });
   if (p.kind !== "nvim") actions.push({ label: task ? "Link to another task" : "Link to a task", act: "taskmenu", attr: "data-ptaskmenu" });
   actions.push({ label: "Rename", act: "rename" }, { label: "Move left", act: "left", key: "<" }, { label: "Move right", act: "right", key: ">" });
   if (parts) actions.push(...parts.actions);
@@ -1114,6 +1118,7 @@ SBInsp.provide("board", () => {
     danger: [...(parts?.danger || []), { label: "Close pane", act: "close", title: "Close this pane (Delete on a focused tile). An agent with a session can resume later." }],
     onAct: (act, el) => {
       if (act === "lreview") return openLocalReview(p.id);
+      if (act === "handover") return window.SBHandover?.open(p.id);
       if (act === "taskmenu") return window.SBTasks?.menu(p.id, el);
       if (act === "task") return task && window.SBTasks?.open(task.id);
       if (act === "rename") return startRename($("#insp .ititle"), p.id);
@@ -1187,6 +1192,7 @@ window.addEventListener("keydown", (e) => {
     case "l": return window.SBParts?.side(1);
     case "z": return window.SBParts?.zoom();
     case "n": return openLauncher();
+    case "m": return window.SBHandover?.open();
     case "i": return toggleInsp();
     case "b": return setTab("board");
     case "t": return setTab("tasks");
@@ -1670,6 +1676,7 @@ window.SB = { S, LINK, invoke, call, listen, esc, setHTML, toast, setTab, WORK_T
     await refreshPanes();
     await refreshReviews();
     setTab("board");
+    window.SBHandover?.arrive();
     invoke("repos").then((r) => (S.repos = r)).catch(() => {});
   } catch (e) {
     toast(e);

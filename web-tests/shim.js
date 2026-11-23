@@ -205,6 +205,17 @@ window.__TAURI__ = {
         case "review_step_note": return 'I am on step s2 "Proposal path passes slot - 1" (beacon_node/gloas.rs:11-12 (new)).';
         case "pane_expand": if (window.__expandHook) return window.__expandHook(args); return btoa("\x1b[H\x1b[2Jhello from the live pane\r\n$ ");
         case "pane_open": return pane({ id: "p9", tree: args.req.repo, title: args.req.title });
+        // Handover (SPEC 38).
+        case "handover_out":
+          if (window.__handHook) await window.__handHook(cmd);
+          return { tree: "/srv/lighthouse-feat", branch: "feat", head: "c1c1c1c1c1c1", snap: "5a5a5a5a5a5a", ref: "refs/switchboard/handover/p1-1", urls: ["git@github.com:sigp/lighthouse.git"],
+            session: "sess-1", session_data: "x".repeat(300 * 1024), title: "", changes: ["M\ta.rs", "A\tnew.rs", "D\tgone.rs"] };
+        case "handover_check":
+          if (window.__handHook) await window.__handHook(cmd);
+          if (window.__handFail) throw window.__handFail;
+          return { repo: "/home/me/code/lighthouse", tree: "/home/me/code/lighthouse-feat-2", branch: "feat-2", note: "feat here has commits that the server does not have" };
+        case "handover_in": return { repo: "/home/me/code/lighthouse", tree: "/home/me/code/lighthouse-feat-2", branch: "feat-2", session: "sess-1", title: "", from: "box", changes: 3 };
+        case "handover_take": { const a = window.__arrive; window.__arrive = null; return a || null; }
         case "link_reconnect": if (window.__linkFail) throw window.__linkFail; return { remote: true, host: "box", up: true, why: null };
         case "review_nvim": return "p3";
         // One nvim and one shell for each worktree (SPEC 28).
