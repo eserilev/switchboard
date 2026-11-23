@@ -74,6 +74,9 @@ const call = (cmd, args) => invoke(cmd, args).catch((e) => { log("warn", cmd, "f
 
 // `synced`: the window has loaded everything from the hub since the link came up.
 const LINK = { remote: false, up: true, host: "", why: null, taken: false, synced: true };
+// The count of `link` events. A `link_state` answer that a newer event passed is
+// old: the link came up while the answer was on its way, and it would say "connecting".
+let linkNews = 0;
 // Once for each time the link comes up, from the event or from Reconnect.
 function linkChanged() {
   if (!LINK.up) LINK.synced = false;
@@ -1499,6 +1502,7 @@ listen("connections", (e) => { S.conn = e.payload; drawConn(); drawBoard(); });
 listen("focus", (e) => refreshPanes().then(() => expand(e.payload)));
 listen("tmux_exit", () => toast("The Switchboard tmux server ended. Restart the app to start it again."));
 listen("link", (e) => {
+  linkNews++;
   Object.assign(LINK, { remote: true, why: null, taken: false }, e.payload);
   linkChanged();
   if (!LINK.up) $("#toast").hidden = true;
@@ -1561,7 +1565,15 @@ window.SB = { S, LINK, invoke, call, listen, esc, setHTML, toast, setTab, WORK_T
 
 (async function start() {
   try {
-    Object.assign(LINK, await invoke("link_state"));
+    const seen = linkNews;
+    const st = await invoke("link_state");
+    // A newer event wins for the state of the link; the rest (the switch, a
+    // config error) comes from the answer.
+    if (linkNews === seen) Object.assign(LINK, st);
+    else {
+      const { up, why, taken, host, remote, ...rest } = st || {};
+      Object.assign(LINK, rest);
+    }
     if (LINK.config_error) toast(LINK.config_error);
     // A remote hub that is not linked yet: the `link` event loads everything.
     LINK.synced = !LINK.remote || LINK.up;
