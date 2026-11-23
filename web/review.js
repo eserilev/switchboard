@@ -93,6 +93,7 @@
       const act = e.target.closest("[data-act]")?.dataset.act;
       if (act === "finish") return local(id).finish ? closeFinish(id) : openFinish(id);
       if (act === "agent") return sendAgent(id);
+      if (act === "close") return askClose(id);
       // New commits, New changes and comments to place: the inspector says what to do.
       if (act === "newcommits" || act === "stale") return window.SBInsp.open();
     };
@@ -332,6 +333,9 @@
     return `✓ All ${what} covered${missed}${gh}`;
   }
 
+  // The last button of each review header: close the review, after a yes.
+  const closeBtn = () => `<button type="button" class="icon rclose" data-act="close" aria-label="Close review" title="Close review">${window.SB.ICON.close}</button>`;
+
   const STATUS = { fetching: "fetching", writing: "writing", updating: "updating", ready: "guide ready", error: "error" };
 
   // The header: the title, the facts in grey, the guide's state, at most one gold
@@ -352,7 +356,7 @@
     const n = r.drafts.length;
     const next = (r.round || 1) + 1;
     put($("#racts"), (r.new_head ? `<button type="button" class="btn sm ghost" data-act="newcommits" title="${r.new_head === r.empty_round ? "New commits with no file change since this round: Update guide" : `Commits the guide does not cover: Start round ${next} or Update guide`}">New commits</button>` : "") + place
-      + `<button type="button" class="btn big${l.finish ? "" : " primary"}" data-act="finish" aria-haspopup="dialog" aria-expanded="${!!l.finish}" title="Send your comments to GitHub as one review">Finish review · ${n}</button>`);
+      + `<button type="button" class="btn big${l.finish ? "" : " primary"}" data-act="finish" aria-haspopup="dialog" aria-expanded="${!!l.finish}" title="Send your comments to GitHub as one review">Finish review · ${n}</button>${closeBtn()}`);
   }
 
   // The header of a review of an agent's work (SPEC 11.11, 11.14): the range, New
@@ -366,7 +370,7 @@
     $("#rstat").title = r.status === "error" ? r.error || "" : "";
     const n = r.drafts.filter((d) => !d.stale).length;
     put($("#racts"), (r.new_head ? `<button type="button" class="btn sm ghost" data-act="newcommits" title="The agent changed more: Refresh in the details">New changes</button>` : "") + place
-      + `<button type="button" class="btn big primary" data-act="agent"${n ? "" : " disabled"} title="Type the comments into the agent's prompt; you press Enter">Send ${plural(n, "comment")} to agent</button>`);
+      + `<button type="button" class="btn big primary" data-act="agent"${n ? "" : " disabled"} title="Type the comments into the agent's prompt; you press Enter">Send ${plural(n, "comment")} to agent</button>${closeBtn()}`);
   }
 
   // The side columns of a review: drag the handles, or use the arrow keys on them.
@@ -1137,6 +1141,17 @@
       });
   }
 
+  // The close button of the header or the rail: you say yes first, since a PR
+  // review's worktree and Claude pane go with it.
+  function askClose(id) {
+    const r = S.reviews.get(id);
+    if (!r) return;
+    if (S.tab !== id) window.SB.setTab(id);
+    const what = r.kind === "local" ? "Only the tab closes. The agent's folder and its pane stay." : "Its worktree and its Claude pane close. The app keeps the review and your comments for a later round.";
+    showBox(id, `<h4>Close ${esc(reviewTitle(r))}?</h4><p>${what}</p>`, [["Cancel", null], ["Close review", "go"]], (v) => v === "go" && closeReview(id));
+  }
+  const reviewTitle = (r) => (r.kind === "local" ? `the review of ${r.repo}` : `review #${r.number}`);
+
   // Closes a review. When its worktree has changes, you choose first (SPEC 11.10).
   // "Discard" sends the list you saw: a change that came after it is not dropped.
   async function closeReview(id, keep = false, discard = null) {
@@ -1878,6 +1893,7 @@
     },
     termWait: (id) => drawTermWait(S.reviews.get(id)),
     toggleNvim,
+    askClose,
     // A pane changed. Only a new state of the review's Claude pane (it asked, it
     // answered) reads its chat again; other panes print often and change nothing here.
     panes: () => {

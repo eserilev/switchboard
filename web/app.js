@@ -232,7 +232,7 @@ function drawTabs() {
     menu.innerHTML = list.map((r) => `<button role="menuitemradio" data-tab="${esc(r.id)}"></button>`).join("") +
       (list.length ? "" : '<div class="mnone">No open reviews</div>') +
       '<button role="menuitem" data-newreview>New review…</button>';
-    subs.innerHTML = list.map((r) => `<button class="sub" type="button" data-tab="${esc(r.id)}"></button>`).join("");
+    subs.innerHTML = list.map((r) => `<div class="subrow"><button class="sub" type="button" data-tab="${esc(r.id)}"></button><button class="icon subx" type="button" data-rclose="${esc(r.id)}" aria-label="Close ${reviewLabel(r)}" title="Close review">${ICON.close}</button></div>`).join("");
   }
   const items = menu.querySelectorAll("[data-tab]"), rows = subs.querySelectorAll("[data-tab]");
   list.forEach((r, i) => {
@@ -251,6 +251,8 @@ $("#tabs").addEventListener("click", (e) => {
   if (e.target.closest("#revtab")) { $("#revmenu").hidden = !$("#revmenu").hidden; $("#revtab").setAttribute("aria-expanded", String(!$("#revmenu").hidden)); return; }
   const shut = () => { $("#revmenu").hidden = true; $("#revtab").setAttribute("aria-expanded", "false"); };
   if (e.target.closest("[data-newreview]")) { shut(); return openLauncher(); }
+  const x = e.target.closest("[data-rclose]");
+  if (x) return window.SBReview?.askClose(x.dataset.rclose);
   const t = e.target.closest("[data-tab]");
   if (!t) return;
   shut();
@@ -316,12 +318,16 @@ function tile(p) {
   const chips = p.kind === "claude" && window.SBParts ? SBParts.chips(p) : p.kind !== "nvim" && S.settings.nvim ? `<button class="chip" type="button" data-nvim title="Open nvim in this worktree (Leader e)">nvim</button>` : "";
   return {
     cls: ["pane", p.unseen && "unseen", S.focus === p.id && "focused", p.id === S.live && "is-live"].filter(Boolean).join(" "),
-    title: `<i class="udot" title="Unseen"></i><span class="name" title="${esc(paneName(p))}">${esc(paneName(p))}</span><span class="state">${live ? "live" : lampIcon(p.lamp) + esc(stateWord(p))}</span>`,
+    title: `<i class="udot" title="Unseen"></i><span class="name" title="${esc(paneName(p))}">${esc(paneName(p))}</span><span class="state">${live ? "live" : lampIcon(p.lamp) + esc(stateWord(p))}</span>${closeBtn(p)}`,
     foot: `${chips}${taskLine(p)}<span class="sp"></span>${actions(p, S.focus === p.id && !live)}`,
     text: p.summary || "",
     tail: p.tail.map((l) => strip(l).trimEnd()).filter(Boolean).slice(-2).join("\n"),
   };
 }
+
+// The close button of a tile and of the live title. An agent with a session can
+// resume later; Delete on a focused tile does the same.
+const closeBtn = (p) => `<button class="icon pclose" type="button" data-close aria-label="Close ${esc(paneName(p))}" title="Close this pane (Delete)">${ICON.close}</button>`;
 
 // Changes a tile element to show `t`, the parts of `tile(p)`. The summary and the
 // tail change as text, so a button under the mouse stays.
@@ -800,13 +806,14 @@ function drawLiveTitle() {
   const reviewBtn = p.kind === "claude" && !S.termHost ? `<button class="btn sm" type="button" data-lreview title="Review the commits that are not pushed">Review</button>` : "";
   setHTML(lt, `<span class="name" title="Double-click to rename">${esc(paneName(p))}</span><span class="state">${lampIcon(p.lamp)}${esc(stateWord(p))}</span>`
     + `<span class="lmeta">${esc(metaShort(p))}</span>${taskLine(p)}${actions(p, S.focus === p.id)}<span class="sp"></span>`
-    + `${reviewBtn}${nvimBtn}<button class="icon" type="button" data-collapse aria-label="Collapse (Leader x)" title="Collapse (Leader x)">${ICON.collapse}</button>`);
+    + `${reviewBtn}${nvimBtn}<button class="icon" type="button" data-collapse aria-label="Collapse (Leader x)" title="Collapse (Leader x)">${ICON.collapse}</button>${closeBtn(p)}`);
 }
 $("#livetitle").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   const p = paneById(S.live);
   if (!b || !p) return;
   if (b.dataset.collapse !== undefined) return collapse();
+  if (b.dataset.close !== undefined) return call("pane_close", { id: p.id });
   if (b.dataset.nvim !== undefined) return openNvim(p.tree);
   if (b.dataset.ptoggle) return window.SBParts?.toggle(b.dataset.ptoggle, p.id);
   if (b.dataset.lreview !== undefined) return openLocalReview(p.id);

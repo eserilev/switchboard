@@ -37,10 +37,10 @@
   check("nvim tile has no nvim button", !$('.pane[data-id="p3"] [data-nvim]'));
   check("connection button shows a", $("#conn").textContent === "a");
   {
-    // The title row has only the unseen dot, the name and the state: the chips and
-    // the buttons sit on the last row, so a long name keeps its room.
+    // The title row has only the unseen dot, the name, the state and Close: the chips
+    // and the other buttons sit on the last row, so a long name keeps its room.
     const row = $('.pane[data-id="p1"] .ptitle');
-    check("the title row holds only the name and the state; the last row holds the chips and the task", !row.querySelector("button") && row.querySelector(".state")?.textContent === "Your turn"
+    check("the title row holds only the name, the state and Close; the last row holds the chips and the task", [...row.querySelectorAll("button")].every((b) => b.dataset.close !== undefined) && !!row.querySelector("[data-close]") && row.querySelector(".state")?.textContent === "Your turn"
       && $$('.pane[data-id="p1"] .pfoot [data-part]').length === 2 && !!$('.pane[data-id="p1"] .pfoot [data-ptask]'), $('.pane[data-id="p1"]').innerHTML);
     const name = $('.pane[data-id="p1"] .name');
     check("the name takes most of the title row", name.getBoundingClientRect().width > row.getBoundingClientRect().width * 0.5, `${name.getBoundingClientRect().width} of ${row.getBoundingClientRect().width}`);
@@ -101,6 +101,15 @@
     t3.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
     await wait(20);
     check("Delete on a focused tile closes its pane", called("pane_close").at(-1)?.[1].id === "p3");
+    $('.pane[data-id="p2"] [data-close]').click();
+    await wait(20);
+    check("the close button of a tile closes its pane and opens nothing", called("pane_close").at(-1)?.[1].id === "p2" && window.SB.S.live !== "p2");
+    window.SB.expand("p1");
+    for (let i = 0; i < 30 && window.SB.S.live !== "p1"; i++) await wait(40);
+    const live = window.SB.S.live;
+    $("#livetitle [data-close]")?.click();
+    await wait(20);
+    check("the close button of the live title closes the live pane", !!live && called("pane_close").at(-1)?.[1].id === live, live);
     window.SB.setTab("tasks");
     await wait(30);
     check("the Tasks screen has no inspector, and the rail is narrow there", $("#insp").hidden && $("#itoggle").hidden && Math.round($("#rail").getBoundingClientRect().width) === 52 && !document.body.classList.contains("rail-wide"));
@@ -306,11 +315,11 @@
     window.SBInsp.close();
     check("the review header leaves room for the inspector toggle", parseInt(getComputedStyle($("#rhead")).paddingRight) >= 60 && $("#rhead").getBoundingClientRect().height >= 52);
     // C v2 (SPEC 11.1): the title, #N · round, the state of the guide, and one gold button.
-    check("the review header is one 52 px row: the title, the number and round, the guide state, Finish review", Math.round($("#rhead").getBoundingClientRect().height) === 52
+    check("the review header is one 52 px row: the title, the number and round, the guide state, Finish review, Close", Math.round($("#rhead").getBoundingClientRect().height) === 52
       && $("#rtitle").textContent === "Add IL transactions" && getComputedStyle($("#rtitle")).fontSize === "20px" && $("#rmeta").textContent === "#10071 · round 1"
       && $("#rstat").textContent.includes("guide ready") && !!$("#rstat .sdot.s-ready")
       && $$("#view-review .btn.primary").length === 1 && $('#rhead [data-act="finish"]').classList.contains("primary") && $('#rhead [data-act="finish"]').textContent === "Finish review · 1"
-      && !$('#rhead [data-act="newcommits"]') && !$('#rhead [data-act="close"]') && !$('#rhead [data-act="restart"]'), $("#rhead").textContent);
+      && !$('#rhead [data-act="newcommits"]') && !!$('#rhead [data-act="close"]') && !$('#rhead [data-act="restart"]'), $("#rhead").textContent);
     check("the columns: steps 232 px and Claude 290 px by default", Math.round($("#rcols > .rside").getBoundingClientRect().width) === 232 && Math.round($("#rcols > .rclaude").getBoundingClientRect().width) === 290,
       [...$$("#rcols > .col")].map((c) => Math.round(c.getBoundingClientRect().width)).join());
     check("the steps column has the Guide and Files switch and how many steps are reviewed", !!$('#rshead #rmode [data-mode="guide"][aria-pressed="true"]') && $("#rshead .rcount").textContent === "1 / 2 reviewed", $("#rshead").textContent);
@@ -971,6 +980,20 @@
     await till(() => $("#rment").hidden);
     check("an answer with no places hides Mentioned, and no tour starts again", $("#rment").hidden && !$("#rtour"));
   }
+
+  // The close button of the header and of the rail ask first. Cancel closes nothing.
+  $('#racts [data-act="close"]').click();
+  await wait(50);
+  check("the header close button asks first", !$("#rfinish").hidden && $("#rfinish").textContent.includes("Close review #10071?") && !called("review_close").length, $("#rfinish").textContent);
+  [...$$("#rfinish [data-b]")].find((b) => b.textContent === "Cancel").click();
+  window.SB.setTab("board");
+  await wait(50);
+  $('#revsubs [data-rclose="r1"]').click();
+  await wait(80);
+  check("the rail close button opens the review and asks", window.SB.S.tab === "r1" && !$("#rfinish").hidden && !called("review_close").length, window.SB.S.tab);
+  [...$$("#rfinish [data-b]")].find((b) => b.textContent === "Cancel").click();
+  await wait(50);
+  check("Cancel keeps the review", $("#rfinish").hidden && !called("review_close").length && window.SB.S.reviews.has("r1"));
 
   // Close: a worktree with changes asks first, and nothing closes before the choice.
   window.SBInsp.open();
