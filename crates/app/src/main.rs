@@ -316,6 +316,44 @@ fn open_url(url: &str) -> Res<()> {
         .map_err(|e| e.to_string())
 }
 
+/// Writes text to the clipboard of this computer, for a copy of a program in a pane
+/// (OSC 52, SPEC 29.11). It runs here, in remote mode too. A pane can only write
+/// the clipboard, never read it.
+fn clip_write(text: &str) -> Res<()> {
+    use std::io::Write;
+    if text.len() > 1 << 20 {
+        return Err("the copy is over 1 MB".into());
+    }
+    #[cfg(target_os = "macos")]
+    let tools: &[&[&str]] = &[&["pbcopy"]];
+    #[cfg(not(target_os = "macos"))]
+    let tools: &[&[&str]] = if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        &[&["wl-copy"], &["xclip", "-selection", "clipboard"], &["xsel", "-ib"]]
+    } else {
+        &[&["xclip", "-selection", "clipboard"], &["xsel", "-ib"], &["wl-copy"]]
+    };
+    for argv in tools {
+        let Ok(mut child) = std::process::Command::new(argv[0])
+            .args(&argv[1..])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        else {
+            continue;
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        // wl-copy and xclip stay to serve the clipboard: wait only for the copy to start.
+        if child.wait().map(|s| s.success()).unwrap_or(false) {
+            tracing::debug!(target: "sb::app", bytes = text.len(), tool = argv[0], "copy");
+            return Ok(());
+        }
+    }
+    Err("no clipboard tool: install pbcopy, wl-copy or xclip".into())
+}
+
 /// Log lines from the window.
 fn log(level: &str, message: &str) {
     match level {
@@ -352,7 +390,7 @@ fn link_mode(remote: bool) -> Res<()> {
 
 /// The commands that run in the app, in remote mode too. Every other command goes
 /// to the backend. A test keeps this list short (SPEC 29).
-const LOCAL: &[&str] = &["log", "open_url", "link_state", "link_reconnect", "link_mode"];
+const LOCAL: &[&str] = &["log", "open_url", "clip_write", "link_state", "link_reconnect", "link_mode"];
 
 /// The one handler of every `invoke` of the window.
 fn handle(invoke: tauri::ipc::Invoke) -> bool {
@@ -387,6 +425,12 @@ fn handle(invoke: tauri::ipc::Invoke) -> bool {
             invoke.resolver.resolve(Value::Null);
         }
         "open_url" => invoke.resolver.respond(open_url(&text("url")).map(|_| Value::Null).map_err(Into::into)),
+        "clip_write" => {
+            let t = text("text");
+            invoke.resolver.respond_async(async move {
+                tauri::async_runtime::spawn_blocking(move || clip_write(&t)).await.map_err(|e| e.to_string()).and_then(|r| r).map(|_| Value::Null).map_err(Into::into)
+            });
+        }
         "link_state" => {
             let mut v = backend.link_state();
             if let Some(err) = CONFIG_ERROR.get() {
@@ -561,7 +605,7 @@ mod tests {
     /// nothing else here (SPEC 29).
     #[test]
     fn the_local_commands_stay_few() {
-        assert_eq!(LOCAL, &["log", "open_url", "link_state", "link_reconnect", "link_mode"]);
+        assert_eq!(LOCAL, &["log", "open_url", "clip_write", "link_state", "link_reconnect", "link_mode"]);
         for c in LOCAL {
             assert!(!dispatch::COMMANDS.contains(c), "{c} is a hub command too");
         }

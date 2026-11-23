@@ -1692,7 +1692,7 @@ One JSON object per line, on the window socket. `sb attach` copies its stdin and
 - A command: `{"id":7,"cmd":"pane_open","args":{...}}`. Its answer: `{"id":7,"ok":<value>}` or `{"id":7,"err":"..."}`. Answers can come out of order.
 - News: `{"event":"panes","payload":...}`. Pane bytes: `{"event":"pane_output","payload":{"pane":"p3","data":"<base64>"}}`.
 - One table in `crates/core/src/dispatch.rs` holds every command, for the app and for `sb serve`.
-- In remote mode only `log`, `open_url`, `link_state`, `link_reconnect` and `link_mode` run on your computer. A test keeps that list short. So a server can make the app do nothing else on your computer.
+- In remote mode only `log`, `open_url`, `clip_write` (29.11), `link_state`, `link_reconnect` and `link_mode` run on your computer. A test keeps that list short. So a server can make the app do nothing else on your computer: it can write your clipboard, never read it.
 
 ### 29.3 One window at a time
 
@@ -1782,6 +1782,16 @@ A review by a second agent found these. All are fixed:
 - Any process of your user on the server can run `sb attach` and answer a permit. The tmux socket gives the same power already.
 - A server can send one very long line. The window reads it all.
 - A file dropped on the terminal does not go to a remote hub. Paste it instead.
+
+### 29.11 Copy
+
+A program in a pane copies with OSC 52. Claude Code does so over ssh, and nvim too. On a remote hub, OSC 52 is the only way such a copy reaches your computer.
+
+- Every terminal of the window (the live pane and the parts) reads OSC 52, and also OSC 52 in tmux's wrap (`ESC P tmux; … ESC \`). Claude Code adds that wrap inside tmux, and tmux gives the hub the raw bytes.
+- The window sends the text to `clip_write`, a command of the app (29.2): it runs on your computer, in remote mode too. It writes the clipboard with `pbcopy` on macOS, and with `wl-copy`, `xclip` or `xsel` on Linux. Up to 1 MB.
+- A query (`?`) gets no answer: a pane can write your clipboard, never read it.
+- Claude Code takes the mouse. Option+drag on macOS still makes a selection in the terminal, for Cmd+C.
+- Window checks: an OSC 52 calls `clip_write` with the text; a query does not; the tmux wrap does too.
 
 ### 29.10 Images
 

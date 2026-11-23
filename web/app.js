@@ -580,6 +580,8 @@ const term = new Terminal({
   fontSize: 13,
   cursorBlink: true,
   scrollback: 50000,
+  // Claude Code takes the mouse: Option+drag still selects text for Cmd+C.
+  macOptionClickForcesSelection: true,
   allowProposedApi: true,
   theme: { background: css.getPropertyValue("--bg").trim(), foreground: css.getPropertyValue("--fg").trim(), cursor: css.getPropertyValue("--accent").trim(), selectionBackground: "#d9b56c44" },
 });
@@ -612,6 +614,37 @@ const URL_RE = /https?:\/\/[^\s"'<>`]+/g;
 function openWeb(url) {
   invoke("open_url", { url }).catch((e) => toast(e));
 }
+// OSC 52: a program in the pane copies text (SPEC 29.11). Claude Code and nvim copy
+// this way over ssh, so on a remote hub it is the only way their copies reach this
+// computer. The app writes the text to the clipboard here. A query ("?") gets no
+// answer: a pane never reads the clipboard.
+const CLIP_MAX = 1 << 20;
+// The body of an OSC 52: "c;<base64>".
+function copy52(data) {
+  const at = data.indexOf(";");
+  const b64 = data.slice(at + 1);
+  if (at < 0 || !b64 || b64 === "?" || b64.length > CLIP_MAX * 4 / 3 + 4) return;
+  let text;
+  try {
+    text = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
+  } catch (_) {
+    return;
+  }
+  invoke("clip_write", { text }).catch((e) => log("warn", "clip_write failed:", e));
+}
+function clip52(t) {
+  t.parser.registerOscHandler(52, (data) => { copy52(data); return true; });
+  // Inside tmux, Claude Code wraps the OSC 52 for tmux: ESC P tmux; <the OSC, each
+  // ESC doubled> ESC \. tmux gives the hub the raw bytes, so the wrap arrives here.
+  // xterm reads "t" as the final byte of the DCS, and "mux;..." as its data.
+  t.parser.registerDcsHandler({ final: "t" }, (data) => {
+    const inner = data.startsWith("mux;") ? data.slice(4).replaceAll("\x1b\x1b", "\x1b") : "";
+    const m = /^\x1b\]52;([^\x07\x1b]*)(\x07|\x1b\\)?$/.exec(inner);
+    if (m) copy52(m[1]);
+    return true;
+  });
+}
+
 function webLinks(t) {
   t.options.linkHandler = { activate: (_e, uri) => { if (/^https?:\/\//.test(uri)) openWeb(uri); }, allowNonHttpProtocols: false };
   const provider = {
@@ -647,6 +680,7 @@ function webLinks(t) {
   return provider;
 }
 webLinks(term);
+clip52(term);
 // Keys go in order. While one send is on its way, new keys wait in a buffer,
 // and the next send takes them all at once. So fast typing costs one round trip.
 let pendingKeys = "";
@@ -1611,7 +1645,7 @@ function copyText(text) {
   return ok;
 }
 
-window.SB = { S, LINK, invoke, call, listen, esc, setHTML, toast, setTab, WORK_TITLE, workOf, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, drawTabs, openLauncher, paneName, copyText, LABEL, term, isLeader, webLinks, bytes, webLinks, $,
+window.SB = { S, LINK, invoke, call, listen, esc, setHTML, toast, setTab, WORK_TITLE, workOf, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, drawTabs, openLauncher, paneName, copyText, LABEL, term, isLeader, webLinks, clip52, bytes, $,
   lampIcon, actions, stateAct, stateWord, gb, home, ICON, startRename, remeasure };
 
 (async function start() {

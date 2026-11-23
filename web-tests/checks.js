@@ -187,6 +187,21 @@
   check("pane_resize before expand", window.__calls.findIndex((c) => c[0] === "pane_resize") < window.__calls.findIndex((c) => c[0] === "pane_expand"));
   await wait(100);
   check("terminal drew the screen", screen().includes("hello from the live pane"), screen().slice(0, 80));
+  // A copy of a program in the pane (OSC 52) goes to the clipboard here (SPEC 29.11).
+  {
+    const t = window.SB.term;
+    const n = called("clip_write").length;
+    const text = "copied ✓ line";
+    const b64 = btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+    await new Promise((ok) => t.write(`\x1b]52;c;${b64}\x07`, ok));
+    await new Promise((ok) => t.write("\x1b]52;c;?\x07", ok));
+    await wait(20);
+    check("an OSC 52 copy in the pane writes the clipboard here, and a query writes nothing", called("clip_write").length === n + 1 && called("clip_write").at(-1)[1].text === text, JSON.stringify(called("clip_write")));
+    // Claude Code in tmux wraps it: ESC P tmux; ESC ESC ] 52 ; c ; <b64> BEL ESC \.
+    await new Promise((ok) => t.write(`\x1bPtmux;\x1b\x1b]52;c;${btoa("in tmux")}\x07\x1b\\`, ok));
+    await wait(20);
+    check("an OSC 52 in tmux's wrap writes the clipboard too", called("clip_write").length === n + 2 && called("clip_write").at(-1)[1].text === "in tmux", JSON.stringify(called("clip_write").at(-1)));
+  }
   // An image on the clipboard goes to the hub as a file (SPEC 29.10); text pastes as text.
   {
     const paste = (files, text) => {

@@ -25,6 +25,8 @@
       fontSize: 13,
       cursorBlink: true,
       scrollback: 10000,
+      // Claude Code takes the mouse: Option+drag still selects text for Cmd+C.
+      macOptionClickForcesSelection: true,
       allowProposedApi: true,
       theme: { background: css.getPropertyValue("--bg").trim(), foreground: css.getPropertyValue("--fg").trim(), cursor: css.getPropertyValue("--accent").trim(), selectionBackground: "#d9b56c44" },
     });
@@ -34,6 +36,7 @@
     window.SB.remeasure(term);
     term.attachCustomKeyEventHandler((e) => !window.SB.isLeader(e));
     window.SB.webLinks(term);
+    window.SB.clip52(term);
     const t = { term, fit, id: null, drawn: false, held: [], keys: "", sending: false };
     const flush = async () => {
       if (t.sending || !t.keys || !t.id) return;
