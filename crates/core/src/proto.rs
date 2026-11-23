@@ -49,6 +49,18 @@ pub enum Request {
         #[serde(default)]
         pane: Option<String>,
     },
+    /// `sb today` and the Today pane tools (SPEC 39.8): the list of a job, or one
+    /// item with `repo` and `number`. With a pane and no job, the job of its repo.
+    Today {
+        #[serde(default)]
+        pane: Option<String>,
+        #[serde(default)]
+        job: Option<String>,
+        #[serde(default)]
+        repo: Option<String>,
+        #[serde(default)]
+        number: Option<u64>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

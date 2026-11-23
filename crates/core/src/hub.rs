@@ -213,6 +213,8 @@ pub struct Hub {
     pub(crate) me: Weak<Hub>,
     /// GitHub for a send and for the pending review (SPEC 11.8.1). A test swaps it.
     pub(crate) gh: RwLock<Arc<dyn crate::gh::Gh>>,
+    /// Today (SPEC 39): the last refresh.
+    pub(crate) today: Mutex<crate::hub_today::TodayState>,
     /// The pending review sync runs. Off with `SB_HOME` set (tests), until a test
     /// gives a fake GitHub: a test never writes to GitHub.
     pub(crate) gh_sync: std::sync::atomic::AtomicBool,
@@ -366,6 +368,7 @@ impl Hub {
             nvim_polling: Arc::default(),
             me: me.clone(),
             gh: RwLock::new(Arc::new(crate::gh::RealGh)),
+            today: Mutex::default(),
             gh_sync: std::sync::atomic::AtomicBool::new(std::env::var_os("SB_HOME").is_none()),
             _lock: lock,
         });
@@ -1896,6 +1899,10 @@ impl Hub {
             }),
             Request::Task { pane, op } => self.task_socket(pane.as_deref(), op),
             Request::Board { pane } => self.board_socket(pane.as_deref()),
+            Request::Today { pane, job, repo, number } => {
+                let item = repo.zip(number);
+                self.today_socket(pane.as_deref(), job.as_deref(), item)
+            }
         };
         let mut w = &conn;
         let _ = writeln!(w, "{reply}");
@@ -1914,6 +1921,9 @@ impl Hub {
                     let Some(hub) = me.upgrade() else { break };
                     let t0 = std::time::Instant::now();
                     hub.tick(n);
+                    if n.is_multiple_of(30) {
+                        hub.today_tick();
+                    }
                     let ms = t0.elapsed().as_millis() as u64;
                     if ms > 800 {
                         tracing::warn!(target: "sb::tick", ms, "slow tick");
@@ -2161,6 +2171,7 @@ fn request_kind(r: &Request) -> &'static str {
         Request::ReviewShow { .. } => "review_show",
         Request::Task { .. } => "task",
         Request::Board { .. } => "board",
+        Request::Today { .. } => "today",
     }
 }
 

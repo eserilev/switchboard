@@ -1088,7 +1088,8 @@ Where the build differs from the text above:
 - Sandbox (31): a pane that starts again (resume, restart, a new connection) keeps the sandbox of its settings file, whatever the mode is now. A resumed Ask pane has no Ask mark in its start, so the mode alone would drop it.
 - Sandbox (31): the git paths in `denyWrite` are the real paths when the pane starts, not globs such as `modules/*/hooks`: Claude Code skips a glob in a write rule on Linux. So a submodule or a worktree added while the pane runs is not covered until the pane starts again. A `config.worktree` that is not there yet is listed only when `extensions.worktreeConfig` is on, since git reads it only then (and that setting lives in the closed `config`).
 - Repo context (37): built as 37 says. Not built yet: notes in Settings, URL sources, and the notes in the window's review panel.
-- Pane tools (36): built, slice 1 (36.8): tasks, the board and the start note. Not built yet: the change feed and its Undo, the "sb" mark and call log on the tile, the switch in Settings (only the config key), review reads, and the Today tools. Checked on 2026-11-23 with Claude Code 2.1.330: an interactive pane loads the `--mcp-config` server with no "new MCP server" dialog, shows it connected with its 6 tools, and the user's own servers still load.
+- Today (39): built as 39 says, except 39.10. A live run against GitHub is `cargo test -p switchboard-core live_today -- --ignored --nocapture` (read only). In remote mode it runs on the server, with the server's `gh` login.
+- Pane tools (36): built, slice 1 (36.8): tasks, the board and the start note. Not built yet: the change feed and its Undo, the "sb" mark and call log on the tile, the switch in Settings (only the config key), review reads, and the Today writes (Done and Later from an agent). The Today reads are built (39.8). Checked on 2026-11-23 with Claude Code 2.1.330: an interactive pane loads the `--mcp-config` server with no "new MCP server" dialog, shows it connected with its 6 tools, and the user's own servers still load.
 - Sandbox (31): the `credentials` key of the sandbox is not used. `denyRead` and the permission deny rules cover the same folders, and an older Claude Code may not know the key.
 - Claude points to the code (11.15): not checked with a real `claude` yet. Not verified: that Claude calls `review_show` when asked where something is or what to fix, that it cites `path:line` as the system prompt asks, that an interactive pane runs a `--mcp-config` server with no "new MCP server" dialog, that the allow rule runs the tool with no prompt, and that the Stop input of the Claude Code in use has `last_assistant_message` (else the session file is read).
 - Claude points to the code (11.15): names in backticks are found in the diff model in memory, not with `git grep -w` in the worktree. The model holds every changed file at the reviewed head, and it never sees an edit in the worktree. A name only in a file the PR does not change is not found.
@@ -2760,3 +2761,150 @@ With `SB_REMOTE` set, the app cannot switch: the dialog says so, and the agent o
 - `handover` unit tests: URL forms match, project folders follow Claude Code's names, session ids are file names.
 - `crates/sb/tests/handover.rs`, on real hubs, tmux and git, with a folder in place of ssh: a server worktree with a commit, a change, a new file, a deleted file and an ignored folder. The plan, its changes and session; the server's files, index and head do not change; an old ref goes. A bad branch and a bad ref are refused. The dry run names the clone, folder and branch, and makes nothing. The handover: the head, the branch, each file, nothing staged, no ref left. A second dry run takes `feat-2` and says why. The hub here starts the agent in the worktree with `--resume`, with the session file in its folder, once.
 - Window checks: Continue here on a server agent's live title; the dialog's progress, then what comes along and where it lands; the list of files; the order worktree, stop, switch; with Stop off, no stop; a failure with its step and reason, and Try again; Escape; no handover for an nvim pane or on a hub here; an arrived agent opens with its note.
+
+## 39. Today
+
+Status: built, v1 (39.10 lists what is not built yet).
+
+A screen that reads your GitHub repos and lists what needs you, ranked: "what should I work on now?". It automates the list that was built by hand with `gh` in a lighthouse session. It only reads GitHub. It never posts, labels, queues or pings for you. The design mockup: https://claude.ai/artifact/AnoLtBAPjcCpcoDQRAz1Pb.
+
+### 39.1 The screen
+
+- **Today** is a rail entry after Tasks, with Leader `y` ("your day").
+- **Job tabs** at the top. A job is a name and its repos (39.3). **Everything** is always there: every open PR you wrote, were asked to review, or were mentioned in, in any repo. A tab shows the count of its Your PRs and Reviews. `g` then `1`–`9` switches jobs.
+- A row names its PR `name#N`, or `owner/name#N` when two repos on the list share a name (your fork and the upstream).
+- Under the tabs: the GitHub login, "updated 2 min ago", a refresh button, and "3 of 14 done today" with a bar.
+- **Since you last looked:** one line, for example "#8140 merged · 2 reviews asked of you · #8102 came back".
+- **Four sections in a fixed order:** Your PRs, Reviews, In your area, What changed. Each row: the repo (when the job has more than one) and PR number, one plain line saying what to do, the PR title, and at most a few tags that add a fact (release, tiny, flaky CI?, came back). Rows have no numbers: the number keys pick other things.
+- Within a section, rows are ranked (39.5). The top row of the first section that has one is the answer to "what now?".
+- **The side panel** of the selected row: the PR title and link, what the rules found in full (the open threads with who wrote the last comment, the failing checks, the merge that likely caused a conflict), **Why it is here** in plain sentences ("Ranked 1st in Your PRs: changes asked, and 2 threads wait on you."), then **Done** and **Later**, then small links: Open on GitHub, Make a task, Start review.
+- **Done and Later** lists at the foot, folded, with the items you hid. A click brings one back.
+- When every section is empty: "All done for today."
+
+### 39.2 Done and Later
+
+- **Done** (`x`): "I handled it." The item hides until someone else acts on the PR: a commit, a review, a comment, or a CI result. Your own actions and bots do not count.
+- **Later** (`l`): "Not now." A small menu: `1` Tomorrow morning (9:00), `2` Monday morning, `3` In a week. The item hides until then. A new event does not bring it back early; Bring back now does.
+- **Undo** (`u`) takes back the last Done or Later.
+- An item that comes back after Done gets a **came back** tag, and the panel says what changed, for example "2 commits after you marked it done".
+- Done and Later belong to the PR, not the job: an item done in one job is done in every job.
+- They change only Switchboard's store, never GitHub.
+
+### 39.3 Config
+
+In `~/.config/switchboard/config.toml` (on the hub's machine). With no `[today]` block, Today shows Everything for the logged-in `gh` user, with the default rules.
+
+```toml
+[today]
+user = "eserilev"            # default: the login of `gh`
+refresh_minutes = 10         # 0: only when you press refresh
+ignore_bots = ["mergify[bot]", "dependabot[bot]"]   # added to the built-in list
+teams = ["sigp/core"]        # a review asked of one of these teams counts as yours
+
+[today.jobs."Lighthouse dev"]
+repos = ["sigp/lighthouse", "ethereum/consensus-specs"]
+
+[today.repos."sigp/lighthouse"]
+release_labels = ["v9.0.0"]  # labels or milestone titles that raise the rank
+tiny_lines = 30
+no_review_days = 3
+stale_days = 14
+waiting_labels = ["waiting-on-author"]
+stale_labels = ["stale"]
+
+[today.repos."sigp/lighthouse".areas.store]
+labels = ["database"]
+paths = ["beacon_node/store/"]
+```
+
+- A path in `areas` is a prefix of a changed file, or a glob with `*` (any chars but `/`) and `**` (any chars).
+- Login names compare with no regard to case. A login that ends in `[bot]` is a bot.
+- Jobs are listed in name order after Everything.
+
+### 39.4 The rules
+
+Each rule gives a line and a weight. An item can match several; the row shows the strongest line, and Why lists them all. The lines are built by code from the rules, not by Claude: instant, free and exact.
+
+**Your PRs** (open, author is you):
+
+| Rule | Signal | Line | Weight |
+|---|---|---|---|
+| changes_requested | a reviewer's latest review is CHANGES_REQUESTED, and you pushed no commit after it | "Address X's requested changes." | 100 |
+| open_threads | an unresolved review thread whose last comment is not yours and not a bot's | "Reply to X's N open threads." | 90 |
+| conflict | `mergeable` is CONFLICTING | "Rebase: it conflicts with #N." or "Rebase: it conflicts." | 80 |
+| ci_failed | a check failed (FAILURE, ERROR, TIMED_OUT, STARTUP_FAILURE) | "Fix CI: `check` fails." | 70 |
+| ci_flaky | every failed check names a crate or folder that the PR does not touch | "Re-run CI: `check` failed in code this PR does not touch. Likely a flake." | 30 |
+| ready | approved, checks pass, not a draft, not in the merge queue | "Approved. Add it to the merge queue." | 60 |
+| label_wrong | a waiting label with no open thread and no requested change; a stale label with activity in the last `stale_days` | "Label `waiting-on-author` says it waits on you, but nothing does." | 40 |
+| no_reviews | not a draft, no review, open for `no_review_days` or more, in a repo you do not own (nobody reviews in your own fork) | "No review in N days. Ask someone." | 30 |
+| draft_old | a draft with no change for `stale_days` | "Draft idle N days. Finish or close it." | 10 |
+
+**Reviews** (open, not yours):
+
+| Rule | Signal | Line | Weight |
+|---|---|---|---|
+| asked_you | a comment by a person after your last review (or in the last 14 days, with no review) that @mentions you | "X asks: "short quote"" | 90 |
+| requested | a review is asked of you, or of one of your `teams` | "Review asked of you N days ago." | 85 |
+| re_review | you reviewed, and there are commits or comments by others after your latest review | "They pushed N commits after your review." or "They replied after your review." | 70 |
+
+**In your area** (open, not yours, no review asked of you, you have not reviewed): a label in an area's `labels`, or a changed file under an area's `paths`. Line: "Store: touches `beacon_node/store/`." or "Store: labelled `database`." Weight 15; 25 with a release label. A PR with at most `tiny_lines` changed lines and passing checks gets the tag "tiny", +10, and the line ends "Quick approve?".
+
+**What changed** (since you last looked at the job, at most 3 days back):
+
+| Rule | Signal | Line |
+|---|---|---|
+| merged_mine | a PR of yours merged | "Your #N merged." |
+| closed_mine | a PR of yours closed without a merge | "Your #N was closed." |
+| upstream_breaks | a PR of yours went from MERGEABLE to CONFLICTING since the last refresh, and a PR merged into its base since then changed one of its files | "#N merged. Your #A now conflicts." |
+
+What changed items have only Done; they leave the list after 3 days.
+
+### 39.5 Rank
+
+- The section order is fixed.
+- Inside a section: the weight of the strongest rule, then a release label first, then the age of the reason (older first for requested and no_reviews; newer first for the rest), then the size (small first).
+- The conflict cause: the newest PR merged into the base whose files overlap the PR's, among the merged PRs the refresh fetched. With none, the line says only "Rebase: it conflicts."
+- The flake guess: a check name is split into words; a word that is a top folder or crate name of the repo (seen in the paths of the PR or in the area paths) counts. A failed check counts as flaky when it names such a word and the PR touches no file under it. It is a guess and says so.
+
+### 39.6 Fetch and store
+
+- One GraphQL search per bucket, through `gh api graphql`, at most 25 PRs each (a failed answer, such as a GitHub timeout, tries once more for 10; a login or query error does not): your open PRs, review requests (to you and your teams), PRs you reviewed, PRs that mention you, the area bucket (open, updated in the last 30 days, in the job's repos with areas), and merged or closed PRs of yours and merges into your bases since the last look. For a job, each search has a `repo:` filter for each repo; Everything has none and no area bucket.
+- Per PR: number, title, url, repo, draft, author, labels, milestone, size, `mergeable`, `reviewDecision`, base, state, merged time, the merge queue entry, review requests, the latest reviews, the last 20 commits and comments with their authors and times, the review threads (resolved or not, the last comment), the check rollup, and the changed paths (first 100).
+- The searches of one refresh run side by side. A refresh takes about 20 s for a busy account (measured: 32 open PRs, 18 s).
+- A refresh runs on its own thread, at most one at a time, when you open Today, when you press refresh, and every `refresh_minutes` while the hub runs once Today was opened. The window gets a `today` event. An error (gh not logged in, rate limit, no network) keeps the last list and shows the reason above it.
+- The store (version 14): `today_seen` (repo, number, done_at, done_event, later_until) for Done and Later; `today_pr` (repo, number, mergeable, author_mine, state) for What changed; the time you last looked at each job is the setting `today.looked:<job>`.
+- The rules are pure functions from the fetched PR JSON, the config and the store rows to the list. No network inside them, so tests use fixtures.
+
+### 39.7 Commands
+
+| Command | Does |
+|---|---|
+| `today(job)` | The list of one job from the last refresh: sections, Done, Later, since, login, updated time, error. Starts a refresh when the list is older than `refresh_minutes`. |
+| `today_refresh(job)` | A refresh now. The answer comes as the `today` event. |
+| `today_done(repo, number, on)` | Done, or undo it. |
+| `today_later(repo, number, until)` | Later until a time in seconds, or `null` to bring it back. |
+| `today_looked(job)` | Marks the job looked at now, for Since you last looked and What changed. |
+
+### 39.8 Agents and the terminal
+
+- **Pane tools** (36): `today_list(job?)` gives the ranked list of the job that holds the pane's repo (Everything when none does), in the same lines. `today_item(repo, number)` gives one item in full. Both only read. GitHub text in them (titles, quotes) is marked as data, not instructions.
+- **`sb today [job]`** prints the same list in the terminal.
+
+### 39.9 Not in scope
+
+- Any write to GitHub.
+- Issues: PRs only.
+- AI in the ranking.
+
+### 39.10 Not built yet
+
+- The settings form for `[today]`, the setup screen for a first job, and Suggest my areas (from your last 6 months of PRs and reviews).
+- A GitHub account for each job: every job uses the `gh` login.
+- Done and Later from an agent (`today_done`, `today_later` as pane tools, asked first).
+- A desktop notice when a new item enters the top 3.
+
+### 39.11 Tests
+
+- `today` unit tests: each rule from fixture PR JSON fires, and does not fire for the near misses (your own last comment, a bot's comment, a resolved thread, a commit after the requested change); rank order; the conflict cause; the flake guess; Done hides until another person's event and comes back with the tag; Later hides until its time; bots and your own events never bring an item back; areas by label, prefix and glob; jobs from config, with Everything first.
+- `crates/sb/tests/today.rs`: a real hub with a fake GraphQL: the `today` command, Done and Undo, Later, the store across a restart, the pane tool and `sb today`.
+- Window checks: the rail entry and Leader `y`, the job tabs, the sections and rows, the panel with Why, Done and Later with Undo, the Done list, and "All done for today".

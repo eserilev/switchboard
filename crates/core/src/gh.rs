@@ -61,6 +61,10 @@ pub trait Gh: Send + Sync {
     fn delete_review(&self, review: &str) -> Res<()>;
     /// Sends a pending review. Returns its link.
     fn submit(&self, review: &str, event: &str, body: &str) -> Res<String>;
+    /// One GraphQL read, for Today (SPEC 39.6). A fake without it has no GitHub.
+    fn graphql(&self, _query: &str, _vars: Value) -> Res<Option<Value>> {
+        Err("no GitHub here".into())
+    }
 }
 
 /// GitHub through the `gh` CLI.
@@ -120,6 +124,10 @@ fn comments_of(conn: &Value) -> Vec<GhComment> {
 const COMMENTS: &str = "comments(first: 100, after: $after) { nodes { id body replyTo { id } } pageInfo { hasNextPage endCursor } }";
 
 impl Gh for RealGh {
+    fn graphql(&self, query: &str, vars: Value) -> Res<Option<Value>> {
+        graphql(query, vars)
+    }
+
     fn view(&self, url: &str) -> Res<PrInfo> {
         review::gh_view(url)
     }

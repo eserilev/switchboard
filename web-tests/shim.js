@@ -167,6 +167,8 @@ window.__TAURI__ = {
       const d = window.__data;
       switch (cmd) {
         case "panes": return structuredClone(d.panes);
+        // Today (SPEC 39): a check sets the hub's answer.
+        case "today": return window.__today ? structuredClone(window.__today) : null;
         case "connections": return d.connections;
         // A copy, as from the hub: the window never shares an object with the hub.
         // The app puts the leader of this computer's config in (main.rs), as in remote mode.

@@ -46,6 +46,7 @@ fn main() {
         Some("permit") => permit(),
         Some("open") => open(&args[1..]),
         Some("task") => task(&args[1..]),
+        Some("today") => today(args.get(1).map(String::as_str)),
         Some("context") => context(args.get(1).map(String::as_str)),
         Some("mcp") => match args.get(1).map(String::as_str) {
             Some("--pane") => mcp::serve_pane(),
@@ -61,7 +62,7 @@ fn main() {
             0
         }
         _ => {
-            eprintln!("usage: sb open [path] [-w branch] [--nvim|--shell]\n       sb context [path]   (the repo notes an agent here gets)\n       {TASK_USAGE}\n       sb connect add <name> [--endpoint <url> --model <m> --token <keyring:name>]\n       sb serve      (the hub for remote windows)\n       sb attach     (a remote window's link; starts sb serve when none runs)");
+            eprintln!("usage: sb open [path] [-w branch] [--nvim|--shell]\n       sb context [path]   (the repo notes an agent here gets)\n       sb today [job]      (what needs you on GitHub, ranked)\n       {TASK_USAGE}\n       sb connect add <name> [--endpoint <url> --model <m> --token <keyring:name>]\n       sb serve      (the hub for remote windows)\n       sb attach     (a remote window's link; starts sb serve when none runs)");
             2
         }
     };
@@ -633,3 +634,22 @@ fn connect_add(args: &[String]) -> i32 {
     0
 }
 
+
+/// `sb today [job]` (SPEC 39.8): the Today list in the terminal.
+fn today(job: Option<&str>) -> i32 {
+    let req = Request::Today { pane: None, job: job.map(str::to_owned), repo: None, number: None };
+    let line = match send(&req, true) {
+        Ok(Some(line)) => line,
+        _ => {
+            eprintln!("sb today: Switchboard is not running");
+            return 1;
+        }
+    };
+    let v: Value = serde_json::from_str(&line).unwrap_or(json!({ "ok": false, "error": "bad reply" }));
+    if v["ok"] != json!(true) {
+        eprintln!("sb today: {}", v["error"].as_str().unwrap_or("failed"));
+        return 1;
+    }
+    print!("{}", v["text"].as_str().unwrap_or(""));
+    0
+}

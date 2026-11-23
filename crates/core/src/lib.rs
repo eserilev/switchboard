@@ -1,4 +1,5 @@
 //! Switchboard core: everything below the window.
+#![recursion_limit = "256"]
 
 pub mod cleanup;
 pub mod base;
@@ -18,6 +19,7 @@ pub mod hub_review;
 pub mod hub_show;
 pub mod hub_sync;
 pub mod hub_tasks;
+pub mod hub_today;
 pub mod lamp;
 pub mod memory;
 pub mod mentions;
@@ -35,6 +37,7 @@ pub mod store;
 pub mod take;
 pub mod tasks;
 pub mod tmux;
+pub mod today;
 
 /// Seconds since the Unix epoch.
 pub fn now() -> u64 {

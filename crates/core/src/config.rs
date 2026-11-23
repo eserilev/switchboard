@@ -19,6 +19,8 @@ pub struct Config {
     pub pane_tools: PaneToolsCfg,
     /// Your own notes for each repo, by `owner/name` (SPEC 37).
     pub repos: BTreeMap<String, RepoCfg>,
+    /// Today (SPEC 39): what needs you on GitHub.
+    pub today: crate::today::TodayCfg,
     /// Remote mode (SPEC 29): the ssh host of the hub, for example `me@box`. With
     /// none, the hub runs here.
     pub remote: Option<String>,
@@ -245,6 +247,7 @@ impl Default for Config {
             sandbox: SandboxCfg::default(),
             pane_tools: PaneToolsCfg::default(),
             repos: BTreeMap::new(),
+            today: crate::today::TodayCfg::default(),
             remote: None,
             remote_off: false,
             remote_command: None,

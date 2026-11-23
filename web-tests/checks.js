@@ -2553,6 +2553,57 @@
     await wait(100);
     window.SB.collapse();
   }
+  // Today (SPEC 39): the rail entry, the job tabs, the rows, the panel, Done, Later and Undo.
+  {
+    const it = (n, section, line, extra = {}) => ({ repo: "sigp/lighthouse", number: n, title: `PR ${n}`, url: `https://github.com/sigp/lighthouse/pull/${n}`, section, line, tags: [], reasons: [{ rule: "x", line, weight: 50, at: 0 }], detail: [], size: 3, release: false, last_event: 0, came_back: null, done_at: null, later_until: null, why: `Ranked 1st in X: ${line}`, ...extra });
+    const sec = (key, title, items) => ({ key, title, items });
+    window.__today = {
+      job: "Everything", jobs: [{ name: "Everything", count: 2 }, { name: "Lighthouse dev", count: 1 }], repos: [], many_repos: false,
+      sections: [sec("mine", "Your PRs", [it(8123, "mine", "Reply to michael's 2 open threads.", { detail: ["Open thread on `a.rs` waits on you: last comment by michael."], tags: ["came back"], came_back: "Someone acted on it after you marked it done." })]),
+        sec("reviews", "Reviews", [it(8155, "reviews", "Review asked of you 2 days ago.")]), sec("area", "In your area", []), sec("changed", "What changed", [])],
+      done: [it(8030, "mine", "Your #8030 merged.", { done_at: Math.floor(Date.now() / 1000) })], later: [],
+      since: "#8140 merged · 1 item with news", login: "eserilev", updated: Math.floor(Date.now() / 1000) - 120, refreshing: false, error: null, loaded: true,
+    };
+    const all = (s) => [...document.querySelectorAll(s)];
+    const upto = async (ok) => { for (let i = 0; i < 40 && !ok(); i++) await wait(50); };
+    window.SB.setTab("board");
+    key(" ", { ctrl: true }); key("y");
+    await upto(() => $("#view-today .tdrow"));
+    check("Leader y opens Today, with its rail entry marked", window.SB.S.tab === "today" && !$("#view-today").hidden && $('#tabs [data-tab="today"]').getAttribute("aria-current") === "page");
+    check("Today shows the job tabs with counts", all("#view-today .tdjob").map((b) => b.textContent).join("|") === "Everything2|Lighthouse dev1", all("#view-today .tdjob").map((b) => b.textContent).join("|"));
+    check("Today shows sections with rows, and skips empty ones", all("#view-today .tdsec h2").map((h) => h.textContent).join("|") === "Your PRs 1|Reviews 1" && all("#view-today .tdsec .tdrow").length === 2);
+    check("the top row is selected and the panel says why", $("#view-today .tdrow.sel")?.dataset.k === "sigp/lighthouse#8123#" && $(".tdpanel .tdwhy").textContent.includes("Ranked 1st") && $(".tdpanel").textContent.includes("last comment by michael"));
+    check("a row that came back says so", $(".tdpanel .tdback")?.textContent.includes("after you marked it done") && !!$("#view-today .tdtag.back"));
+    check("the progress counts what was done today", $(".tdprog span").textContent === "1 of 3 done today" && $(".tdsince").textContent.includes("#8140 merged"));
+    key("j");
+    await wait(30);
+    check("j moves to the next row", $("#view-today .tdrow.sel")?.dataset.k === "sigp/lighthouse#8155#");
+    key("x");
+    await wait(60);
+    const d = called("today_done").at(-1)?.[1];
+    check("x marks the row done", d && d.number === 8155 && d.on === true && d.changed === false, JSON.stringify(d));
+    key("u");
+    await wait(60);
+    const u = called("today_done").at(-1)?.[1];
+    check("u takes it back", u && u.number === 8155 && u.on === false);
+    key("l");
+    await wait(30);
+    check("l opens the Later choices with keys", all(".tdlater [data-later]").length === 3);
+    key("2");
+    await wait(60);
+    const l = called("today_later").at(-1)?.[1];
+    const mon = new Date((l?.until || 0) * 1000);
+    check("2 sets Later to Monday morning", l && l.number === 8155 && mon.getDay() === 1 && mon.getHours() === 9 && l.until * 1000 > Date.now(), JSON.stringify(l));
+    $('#view-today [data-job="Lighthouse dev"]').click();
+    await wait(60);
+    check("a job tab asks for that job and marks the last one looked at", called("today").at(-1)?.[1].job === "Lighthouse dev" && called("today_looked").some((c) => c[1].job === "Everything"));
+    window.__today = { ...window.__today, sections: window.__today.sections.map((s) => ({ ...s, items: [] })), done: [], since: null };
+    window.__emit("today", { refreshing: false });
+    await upto(() => $(".tdall"));
+    check("an empty list says all done", $(".tdall")?.textContent === "All done for today.");
+    window.SB.setTab("board");
+    await wait(50);
+  }
   check("no script errors", window.__errors.length === 0, window.__errors);
   show(true);
 })().catch((e) => {

@@ -103,6 +103,12 @@ const SCHEMA: &[&str] = &[
      ALTER TABLE review ADD COLUMN gh_pending TEXT;
      ALTER TABLE review ADD COLUMN gh_pending_head TEXT;
      CREATE TABLE gh_gone (review TEXT NOT NULL, gh_id TEXT NOT NULL, PRIMARY KEY (review, gh_id));",
+    // Version 14: Today (SPEC 39.6). Done and Later of each PR, and the last
+    // `mergeable` of your PRs, so a new conflict shows in What changed.
+    "CREATE TABLE today_seen (repo TEXT NOT NULL, number INTEGER NOT NULL, done_at INTEGER,
+       done_event INTEGER, later_until INTEGER, PRIMARY KEY (repo, number));
+     CREATE TABLE today_pr (repo TEXT NOT NULL, number INTEGER NOT NULL, mergeable TEXT NOT NULL,
+       broke_at INTEGER, cause INTEGER, PRIMARY KEY (repo, number));",
 ];
 
 pub struct Store {
@@ -268,6 +274,9 @@ pub struct PostedRow {
 
 type R<T> = rusqlite::Result<T>;
 
+/// One row of `today_pr`: the last `mergeable`, when it broke, and the likely cause.
+pub type TodayPr = (String, Option<u64>, Option<u64>);
+
 /// The error for a store that a newer Switchboard wrote.
 fn newer_message(version: usize) -> String {
     format!(
@@ -324,6 +333,54 @@ impl Store {
 
     pub fn set(&self, key: &str, value: &str) -> R<()> {
         self.db.execute("INSERT INTO setting (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2", [key, value])?;
+        Ok(())
+    }
+
+    // ---- Today (SPEC 39) ----
+
+    pub fn today_seen(&self) -> R<std::collections::HashMap<(String, u64), crate::today::Seen>> {
+        let mut st = self.db.prepare("SELECT repo, number, done_at, done_event, later_until FROM today_seen")?;
+        let rows = st.query_map([], |r| {
+            let n: i64 = r.get(1)?;
+            let t = |i: usize| -> rusqlite::Result<Option<u64>> { Ok(r.get::<_, Option<i64>>(i)?.map(|v| v.max(0) as u64)) };
+            Ok(((r.get::<_, String>(0)?, n.max(0) as u64), crate::today::Seen { done_at: t(2)?, done_event: t(3)?, later_until: t(4)? }))
+        })?;
+        rows.collect()
+    }
+
+    /// Writes Done and Later of one PR. A row with neither goes.
+    pub fn today_set(&self, repo: &str, number: u64, seen: &crate::today::Seen) -> R<()> {
+        let repo = repo.to_lowercase();
+        if seen.done_at.is_none() && seen.later_until.is_none() {
+            self.db.execute("DELETE FROM today_seen WHERE repo = ?1 AND number = ?2", rusqlite::params![repo, number as i64])?;
+            return Ok(());
+        }
+        let t = |v: Option<u64>| v.map(|x| x as i64);
+        self.db.execute(
+            "INSERT INTO today_seen (repo, number, done_at, done_event, later_until) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(repo, number) DO UPDATE SET done_at = ?3, done_event = ?4, later_until = ?5",
+            rusqlite::params![repo, number as i64, t(seen.done_at), t(seen.done_event), t(seen.later_until)],
+        )?;
+        Ok(())
+    }
+
+    /// The last `mergeable` of each of your PRs, and when it broke: (mergeable, broke_at, cause).
+    pub fn today_prs(&self) -> R<std::collections::HashMap<(String, u64), TodayPr>> {
+        let mut st = self.db.prepare("SELECT repo, number, mergeable, broke_at, cause FROM today_pr")?;
+        let rows = st.query_map([], |r| {
+            let n: i64 = r.get(1)?;
+            let t = |i: usize| -> rusqlite::Result<Option<u64>> { Ok(r.get::<_, Option<i64>>(i)?.map(|v| v.max(0) as u64)) };
+            Ok(((r.get::<_, String>(0)?, n.max(0) as u64), (r.get::<_, String>(2)?, t(3)?, t(4)?)))
+        })?;
+        rows.collect()
+    }
+
+    pub fn today_pr_set(&self, repo: &str, number: u64, mergeable: &str, broke_at: Option<u64>, cause: Option<u64>) -> R<()> {
+        self.db.execute(
+            "INSERT INTO today_pr (repo, number, mergeable, broke_at, cause) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(repo, number) DO UPDATE SET mergeable = ?3, broke_at = ?4, cause = ?5",
+            rusqlite::params![repo.to_lowercase(), number as i64, mergeable, broke_at.map(|v| v as i64), cause.map(|v| v as i64)],
+        )?;
         Ok(())
     }
 
@@ -1154,13 +1211,28 @@ mod tests {
     }
 
     #[test]
+    fn today_seen_keeps_done_and_later_and_drops_empty_rows() {
+        let s = Store::memory().unwrap();
+        let done = crate::today::Seen { done_at: Some(5), done_event: Some(4), later_until: None };
+        s.today_set("Sigp/Lighthouse", 8123, &done).unwrap();
+        s.today_set("o/r", 1, &crate::today::Seen { later_until: Some(9), ..Default::default() }).unwrap();
+        let m = s.today_seen().unwrap();
+        assert_eq!(m[&("sigp/lighthouse".to_owned(), 8123)], done);
+        assert_eq!(m[&("o/r".to_owned(), 1)].later_until, Some(9));
+        s.today_set("o/r", 1, &crate::today::Seen::default()).unwrap();
+        assert_eq!(s.today_seen().unwrap().len(), 1);
+        s.today_pr_set("o/r", 2, "CONFLICTING", Some(7), Some(3)).unwrap();
+        assert_eq!(s.today_prs().unwrap()[&("o/r".to_owned(), 2)], ("CONFLICTING".to_owned(), Some(7), Some(3)));
+    }
+
+    #[test]
     fn version_12_drafts_get_no_github_comment() {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch(&format!("{}; PRAGMA user_version = 12;", SCHEMA[..12].join(";"))).unwrap();
         db.execute("INSERT INTO review (id, url, repo, number, title, head, base, tree, opened) VALUES ('r1', 'u', 'o/r', 1, 't', 'h', 'b', '/w', 1)", []).unwrap();
         db.execute("INSERT INTO draft (review, path, side, line, text, head) VALUES ('r1', 'a.rs', 'new', 3, 'nit', 'h')", []).unwrap();
         let s = Store::init(db).unwrap();
-        assert_eq!(s.version().unwrap(), 13);
+        assert_eq!(s.version().unwrap(), SCHEMA.len());
         let d = &s.draft_sync("r1").unwrap()[0];
         assert_eq!((d.gh_id.as_deref(), d.gh_sig.as_deref(), d.gh_error.as_deref()), (None, None, None));
         assert_eq!(s.gh_pending("r1").unwrap(), (None, None));

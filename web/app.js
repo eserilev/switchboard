@@ -29,6 +29,7 @@ const svg = (w, body, sw = 1.5) => `<svg width="${w}" height="${w}" viewBox="0 0
 const ICON = {
   board: svg(18, '<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>'),
   tasks: svg(18, '<path d="M2 4l1.5 1.5L6 3M2 10l1.5 1.5L6 9M8 4.5h6M8 10.5h6"/>'),
+  today: svg(18, '<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/>'),
   work: svg(18, '<rect x="2" y="2.5" width="12" height="11" rx="1"/><path d="M8 2.5v11M8 8h6"/>'),
   reviews: svg(18, '<circle cx="4" cy="4" r="1.6"/><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="9" r="1.6"/><path d="M4 5.6v4.8M12 7.4V6a2 2 0 0 0-2-2H7"/>'),
   plug: svg(16, '<path d="M6 2v3M10 2v3M4.5 5h7v2.5a3.5 3.5 0 0 1-7 0zM8 11v3"/>').replace("<svg", '<svg class="plug"'),
@@ -155,6 +156,7 @@ async function resync() {
 function setTab(tab, quiet) {
   if (tab !== "board") window.SB?.term?.blur();
   if (tab !== "tasks") window.SBTasks?.leave();
+  if (tab !== "today" && S.tab === "today") window.SBToday?.leave();
   // The terminal lives in a review's Claude column while that review shows.
   if (S.termHost && S.termHost !== tab) {
     S.termHost = null;
@@ -165,7 +167,8 @@ function setTab(tab, quiet) {
   $("#view-board").hidden = tab !== "board";
   $("#view-tasks").hidden = tab !== "tasks";
   $("#view-work").hidden = tab !== "work";
-  $("#view-review").hidden = tab === "board" || tab === "tasks" || tab === "work";
+  $("#view-today").hidden = tab !== "today";
+  $("#view-review").hidden = FIXED.includes(tab);
   // The rail has names on the Board, and only icons on the other screens.
   document.body.classList.toggle("rail-wide", tab === "board");
   drawTabs();
@@ -176,6 +179,7 @@ function setTab(tab, quiet) {
     if (!quiet && back && !S.live && paneById(back)) expand(back);
     else requestAnimationFrame(fitLive);
   } else if (tab === "tasks") window.SBTasks?.draw();
+  else if (tab === "today") window.SBToday?.draw();
   else if (tab === "work") window.SBWork?.draw();
   else window.SBReview?.draw(tab);
   drawInspFrame();
@@ -197,6 +201,8 @@ function setHTML(el, html) {
 // review…; on the wide rail the open reviews also show under it. A count or a
 // badge shows what waits, and a dot shows while a review works. The rail is
 // built once and then changed in place.
+// The screens that are not a review.
+const FIXED = ["board", "tasks", "today", "work"];
 function railItem(tab, label) {
   return `<button class="nav" type="button" data-tab="${tab}">${ICON[tab]}<span class="nl">${label}</span><span class="nc"></span><span class="rbadge"></span></button>`;
 }
@@ -216,7 +222,7 @@ function waiting() {
 }
 function drawTabs() {
   if (!$("#revtab")) {
-    $("#tabs").innerHTML = railItem("board", "Board") + railItem("tasks", "Tasks") + railItem("work", "Work") +
+    $("#tabs").innerHTML = railItem("board", "Board") + railItem("tasks", "Tasks") + railItem("today", "Today") + railItem("work", "Work") +
       `<div class="revtab"><button class="nav" type="button" id="revtab" aria-haspopup="menu" aria-expanded="false">${ICON.reviews}<span class="nl">Reviews</span><i class="busy" hidden></i><span class="nc"></span><span class="rbadge"></span></button>` +
       '<div class="menu revmenu" id="revmenu" role="menu" hidden></div><div class="revsubs" id="revsubs"></div></div>';
   }
@@ -231,6 +237,8 @@ function drawTabs() {
     tip: `Board${wait ? ` · ${wait} wait${wait > 1 ? "" : "s"} on you` : ""}${hidden ? ` · ${hidden} part${hidden > 1 ? "s run" : " runs"} hidden` : ""} (Leader b)` });
   const tasks = window.SBTasks?.count?.() || 0;
   setRail($('#tabs [data-tab="tasks"]'), { count: tasks || "", badge: tasks || "", tip: `Tasks${tasks ? ` · ${tasks} open in the sprint` : ""} (Leader t)` });
+  const today = window.SBToday?.count?.() || 0;
+  setRail($('#tabs [data-tab="today"]'), { count: today || "", badge: today || "", tip: `Today${today ? ` · ${today} of your PRs and reviews need you` : ""}: what needs you on GitHub (Leader y)` });
   const repo = window.SBWork?.W.repo ? window.SBWork.W.repo.split("/").filter(Boolean).pop() : "";
   setRail($('#tabs [data-tab="work"]'), { count: repo, tip: `Work${repo ? ` · ${repo}` : ""}: nvim, Claude and a terminal in one repo (Leader w)` });
   const list = [...S.reviews.values()];
@@ -1001,7 +1009,7 @@ function moveFocus(d) {
 const INSP = { providers: {}, open: {}, spec: null, drawn: null, queued: false };
 // A review of local work is a screen of its own: its controls live in the
 // inspector, so it starts open there (SPEC 11.11). Every other screen starts closed.
-const screenOf = (tab) => (tab === "board" || tab === "tasks" || tab === "work" ? tab : S.reviews.get(tab)?.kind === "local" ? "local" : "review");
+const screenOf = (tab) => (FIXED.includes(tab) ? tab : S.reviews.get(tab)?.kind === "local" ? "local" : "review");
 function inspIsOpen(screen = screenOf(S.tab)) {
   if (!(screen in INSP.open)) {
     try {
@@ -1196,6 +1204,7 @@ window.addEventListener("keydown", (e) => {
     case "i": return toggleInsp();
     case "b": return setTab("board");
     case "t": return setTab("tasks");
+    case "y": return setTab("today");
     case "w": return setTab("work");
     case "r": { const ids = [...S.reviews.keys()]; return ids.length && setTab(ids[(ids.indexOf(S.tab) + 1) % ids.length]); }
     case "a": return cycleConnection();
@@ -1651,7 +1660,7 @@ function copyText(text) {
   return ok;
 }
 
-window.SB = { S, LINK, invoke, call, listen, esc, setHTML, toast, setTab, WORK_TITLE, workOf, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, drawTabs, openLauncher, paneName, copyText, LABEL, term, isLeader, webLinks, clip52, bytes, $,
+window.SB = { S, LINK, refreshReviews, invoke, call, listen, esc, setHTML, toast, setTab, WORK_TITLE, workOf, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, drawTabs, openLauncher, paneName, copyText, LABEL, term, isLeader, webLinks, clip52, bytes, $,
   lampIcon, actions, stateAct, stateWord, gb, home, ICON, startRename, remeasure };
 
 (async function start() {
