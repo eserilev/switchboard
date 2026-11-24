@@ -192,6 +192,11 @@ fn start_an_agent_from_a_task() {
     std::process::Command::new("tmux").args(["-L", &sock, "kill-pane", "-t", &tid]).status().unwrap();
     let lamp = |id: &str| hub.views().into_iter().find(|p| p.id == id).map(|p| p.lamp.as_str().to_owned());
     wait_for("the ended tile", || lamp(&again).as_deref() == Some("ended"));
+    // Its conversation is on disk: a resume needs it (a session with none starts new).
+    let tree = hub.views().into_iter().find(|p| p.id == again).unwrap().tree;
+    let proj = switchboard_core::handover::project_dir(&root.join("claude"), std::path::Path::new(&tree));
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("sess-1.jsonl"), "{}\n").unwrap();
     hub.expand(&again).unwrap();
     assert_ne!(lamp(&again).as_deref(), Some("ended"));
     wait_for("the agent after the click", || std::fs::read_to_string(root.join("args.txt")).unwrap_or_default().lines().filter(|l| l.starts_with(&again) && l.contains("--resume sess-1")).count() == 2);

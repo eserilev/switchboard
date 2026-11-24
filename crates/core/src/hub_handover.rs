@@ -22,7 +22,7 @@ type Res<T> = Result<T, String>;
 
 impl Hub {
     /// The Claude folder of a connection: its `dir`, or your own `~/.claude`.
-    fn claude_dir(&self, connection: Option<&str>) -> PathBuf {
+    pub(crate) fn claude_dir(&self, connection: Option<&str>) -> PathBuf {
         let config = self.config();
         connection
             .and_then(|c| config.connections.get(c))

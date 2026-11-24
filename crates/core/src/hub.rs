@@ -1360,6 +1360,11 @@ impl Hub {
             )
         };
         let connection = connection.unwrap_or_else(|| self.active_connection());
+        // A folder that is gone (a closed review's worktree): Claude would start in
+        // the home folder and ask to trust it.
+        if !Path::new(&tree).is_dir() {
+            return Err(format!("{tree} is gone, so the agent cannot start there again. Close the pane."));
+        }
         self.respawn_claude(id, tid, Path::new(&tree), &connection, &session)
     }
 
@@ -1377,8 +1382,15 @@ impl Hub {
         // (SPEC 11.15): it runs in the PR's files.
         let (mcp, system, allow) = self.ask_extras(id);
         let ask = mcp.is_some();
+        // A session with no conversation (an agent that never got a message) has no
+        // file, and `--resume` fails: start a new one then.
+        let file = crate::handover::project_dir(&self.claude_dir(Some(connection)), tree).join(format!("{session}.jsonl"));
+        let has_talk = crate::handover::session_ok(session) && file.is_file();
+        if !has_talk {
+            tracing::info!(target: "sb::hub", pane = id, session, "no conversation to resume; a new session");
+        }
         let start = Start {
-            resume: Some(session.to_owned()),
+            resume: has_talk.then(|| session.to_owned()),
             mcp,
             system,
             allow,
