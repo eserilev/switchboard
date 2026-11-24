@@ -3449,6 +3449,8 @@ The hub's name and link state sit at the top of every tab: a green dot when link
 - One thin bar on top: the file name, and **Unified** or **Split** (old and new side by side, long lines wrapped).
 - Nothing else: no step text, no notes, no buttons. Scroll and pinch work as in portrait.
 - Turn the phone back to act (Ask, Comment, Reviewed). Your place in the lines carries over both ways.
+- **How you learn it:** the code box on a portrait step has a chip in its header, with a rotate icon: "Turn sideways for the full code". It shows on the first 3 steps you open. After that only the icon stays. A tap on the chip or the icon opens the wide view too, for a phone with rotation lock on; a tap on **✕** in its bar closes it.
+- The lines run edge to edge; only the line numbers keep a small margin, and the bar keeps clear of the camera notch.
 
 **Claude's notes as cards:**
 - Each note is a card: its kind (must, should, nit, question), the line, and the text.
