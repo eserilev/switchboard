@@ -351,6 +351,8 @@ The rail (33) has four entries: Board, Tasks, Work (30), and Reviews. More than 
 - The `result` event lists the refused tool calls (`permission_denials`). When the guide is ready, the review header has a short line that names the refused `WebFetch` and `WebSearch` calls (all of it in its tooltip and in the inspector), so a spec page that did not load is not a silent gap. A thread answer gets the same line at its end. Other refused calls, such as a Bash command that is not on the list, are only in the log: the agent tries another way, and the config cannot fix them.
 - The guide session ends after one turn. The store keeps its session id.
 
+- **A restart of the hub** stops a guide run. At the next start, an open PR review with no guide starts again on its own, 2 s after the start. Its banner says "The guide was cut off by a restart. It starts again now." A review that fails for a lasting reason (no clone, no access) fails fast, before Claude runs.
+
 ### 11.3 Review prompt
 
 The prompt has these parts:

@@ -419,7 +419,7 @@ impl Hub {
             let done = if row.is_local() { !row.head.is_empty() } else { row.guide.is_some() };
             let status = if done { "ready" } else { "error" };
             let error = (!done).then(|| {
-                if row.is_local() { "The commits did not load. Use Retry." } else { "The guide was not finished. Use Retry." }.to_owned()
+                if row.is_local() { "The commits did not load. Use Retry." } else { "The guide was cut off by a restart. It starts again now." }.to_owned()
             });
             let mut st = ReviewState::new(row, status, error);
             st.last_poll = 0;
@@ -430,7 +430,23 @@ impl Hub {
             st.base_pick = pick;
             reviews.insert(st.row.id.clone(), st);
         }
+        // A PR review with no guide was cut off: a restart of the hub stopped its
+        // run. It starts again on its own, a moment after the start (SPEC 11.2).
+        let cut: Vec<String> = reviews.values().filter(|r| !r.row.is_local() && r.row.guide.is_none() && r.status == "error").map(|r| r.row.id.clone()).collect();
         drop(reviews);
+        if !cut.is_empty() {
+            let me = self.me.clone();
+            let _ = std::thread::Builder::new().name("sb-review-again".into()).spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                let Some(hub) = me.upgrade() else { return };
+                for id in cut {
+                    tracing::info!(target: "sb::review", review = %id, "the guide starts again after a restart");
+                    if let Err(err) = hub.review_retry(&id) {
+                        tracing::warn!(target: "sb::review", review = %id, %err, "it did not start again");
+                    }
+                }
+            });
+        }
         // Once at start: a PR review with drafts or a pending review syncs, so the
         // comments that you wrote before this build go to GitHub too (SPEC 11.8.1).
         let due: Vec<String> = self
