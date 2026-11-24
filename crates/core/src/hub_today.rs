@@ -44,14 +44,16 @@ pub fn ymd(secs: u64) -> String {
 /// and the closed one. One fetch serves every job: a job is a filter on it.
 pub fn searches(me: &str, cfg: &today::TodayCfg, now: u64) -> (Vec<String>, Vec<String>, String) {
     let d = |n: u64| ymd(now.saturating_sub(n * 86400));
+    // With `only`, each search names its repos: GitHub reads several `repo:` as "any of".
+    let only: String = cfg.only.iter().map(|r| r.trim()).filter(|r| !r.is_empty()).map(|r| format!(" repo:{r}")).collect();
     let open = vec![
-        format!("is:pr is:open archived:false author:{me}"),
-        format!("is:pr is:open archived:false review-requested:{me}"),
-        format!("is:pr is:open archived:false reviewed-by:{me} -author:{me} updated:>={}", d(30)),
-        format!("is:pr is:open archived:false mentions:{me} -author:{me} updated:>={}", d(14)),
+        format!("is:pr is:open archived:false author:{me}{only}"),
+        format!("is:pr is:open archived:false review-requested:{me}{only}"),
+        format!("is:pr is:open archived:false reviewed-by:{me} -author:{me} updated:>={}{only}", d(30)),
+        format!("is:pr is:open archived:false mentions:{me} -author:{me} updated:>={}{only}", d(14)),
     ];
     let area = cfg.area_repos().iter().map(|r| format!("repo:{r} is:pr is:open -author:{me} updated:>={}", d(30))).collect();
-    (open, area, format!("is:pr author:{me} is:closed closed:>={}", d(3)))
+    (open, area, format!("is:pr author:{me} is:closed closed:>={}{only}", d(3)))
 }
 
 /// One search. A failed answer (a GitHub timeout, a cut-off reply) tries once
@@ -83,8 +85,9 @@ pub fn fetch(gh: &dyn Gh, me: &str, cfg: &today::TodayCfg, t: u64) -> (Option<Da
     let mut got = 0;
     for (i, r) in results.into_iter().enumerate() {
         match r {
-            Ok(prs) => {
+            Ok(mut prs) => {
                 got += 1;
+                prs.retain(|p| cfg.reads(&p.repo));
                 if i < open_q.len() {
                     data.open.extend(prs);
                 } else if i < open_q.len() + area_q.len() {
@@ -407,5 +410,19 @@ mod tests {
         assert!(open[2].ends_with("updated:>=2026-10-24"));
         assert_eq!(area, ["repo:sigp/lighthouse is:pr is:open -author:eserilev updated:>=2026-10-24"]);
         assert_eq!(closed, "is:pr author:eserilev is:closed closed:>=2026-11-20");
+    }
+
+    #[test]
+    fn only_limits_every_search_to_its_repos() {
+        let mut cfg = today::TodayCfg { only: vec!["sigp/lighthouse".into()], ..Default::default() };
+        cfg.repos.insert("sigp/lighthouse".into(), today::RepoRules { areas: [("store".into(), today::AreaCfg::default())].into(), ..Default::default() });
+        cfg.repos.insert("eserilev/lighthouse".into(), today::RepoRules { areas: [("store".into(), today::AreaCfg::default())].into(), ..Default::default() });
+        let t = crate::chat::epoch("2026-11-23T12:00:00Z").unwrap();
+        let (open, area, closed) = searches("eserilev", &cfg, t);
+        assert!(open.iter().all(|q| q.ends_with(" repo:sigp/lighthouse")), "{open:?}");
+        assert_eq!(area, ["repo:sigp/lighthouse is:pr is:open -author:eserilev updated:>=2026-10-24"]);
+        assert!(closed.ends_with(" repo:sigp/lighthouse"));
+        assert!(cfg.reads("SIGP/Lighthouse") && !cfg.reads("eserilev/lighthouse"));
+        assert!(today::TodayCfg::default().reads("eserilev/lighthouse"));
     }
 }

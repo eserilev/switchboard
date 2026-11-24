@@ -17,13 +17,16 @@ pub struct TodayCfg {
     pub ignore_bots: Vec<String>,
     /// A review asked of one of these teams (`org/team`) counts as yours.
     pub teams: Vec<String>,
+    /// `owner/name` of each repo Today reads. Empty: every repo. Your fork is a
+    /// different repo: leave it out to see only the upstream.
+    pub only: Vec<String>,
     pub jobs: BTreeMap<String, JobCfg>,
     pub repos: BTreeMap<String, RepoRules>,
 }
 
 impl Default for TodayCfg {
     fn default() -> Self {
-        TodayCfg { user: None, refresh_minutes: 10, ignore_bots: vec![], teams: vec![], jobs: BTreeMap::new(), repos: BTreeMap::new() }
+        TodayCfg { user: None, refresh_minutes: 10, ignore_bots: vec![], teams: vec![], only: vec![], jobs: BTreeMap::new(), repos: BTreeMap::new() }
     }
 }
 
@@ -91,9 +94,14 @@ impl TodayCfg {
         self.jobs.get(job).map(|j| j.repos.iter().map(|r| r.to_lowercase()).collect()).unwrap_or_default()
     }
 
-    /// The repos that have areas, for the area search.
+    /// The repos that have areas, for the area search. With `only`, only those in it.
     pub fn area_repos(&self) -> Vec<String> {
-        self.repos.iter().filter(|(_, r)| !r.areas.is_empty()).map(|(k, _)| k.clone()).collect()
+        self.repos.iter().filter(|(k, r)| !r.areas.is_empty() && self.reads(k)).map(|(k, _)| k.clone()).collect()
+    }
+
+    /// True when Today reads this repo: `only` is empty or holds it.
+    pub fn reads(&self, repo: &str) -> bool {
+        self.only.is_empty() || self.only.iter().any(|r| r.trim().eq_ignore_ascii_case(repo))
     }
 
     pub fn is_bot(&self, login: &str) -> bool {
@@ -828,6 +836,8 @@ pub fn items(data: &Data, breaks: &[Break], ctx: &Ctx) -> Vec<Item> {
         it.number = pr.number;
         out.push(it);
     }
+    // A list fetched before `only` changed: drop the repos it leaves out now.
+    out.retain(|i| ctx.cfg.reads(&i.repo));
     out
 }
 

@@ -2803,6 +2803,7 @@ user = "eserilev"            # default: the login of `gh`
 refresh_minutes = 10         # 0: only when you press refresh
 ignore_bots = ["mergify[bot]", "dependabot[bot]"]   # added to the built-in list
 teams = ["sigp/core"]        # a review asked of one of these teams counts as yours
+only = ["sigp/lighthouse"]   # read only these repos; default: every repo. A fork is its own repo.
 
 [today.jobs."Lighthouse dev"]
 repos = ["sigp/lighthouse", "ethereum/consensus-specs"]
@@ -2823,6 +2824,7 @@ paths = ["beacon_node/store/"]
 - A path in `areas` is a prefix of a changed file, or a glob with `*` (any chars but `/`) and `**` (any chars).
 - Login names compare with no regard to case. A login that ends in `[bot]` is a bot.
 - Jobs are listed in name order after Everything.
+- `only` limits every search and every job, Everything too, to its repos. Each search gets a `repo:` for each one, and a PR from another repo is dropped. Leave your fork out to see only the upstream.
 
 ### 39.4 The rules
 
