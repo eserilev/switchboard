@@ -101,6 +101,26 @@ impl Hub {
         Some([v.repo, v.branch, v.title.unwrap_or_default()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "))
     }
 
+    /// The address of `to`: an address as it is, else the one agent with that name
+    /// (its title, else its branch, in any case) on either machine (SPEC 40.2).
+    fn mail_resolve(&self, from: &str, to: &str) -> Res<String> {
+        let to = to.trim();
+        if mail::parse(to).is_some() {
+            return Ok(to.to_owned());
+        }
+        let agents: Vec<Agent> = self.mail_agents().into_iter().filter(|a| a.address != from).collect();
+        let by = |f: fn(&Agent) -> &str| -> Vec<&Agent> { agents.iter().filter(|a| !f(a).is_empty() && f(a).eq_ignore_ascii_case(to)).collect() };
+        let mut hits = by(|a| a.title.as_str());
+        if hits.is_empty() {
+            hits = by(|a| a.branch.as_str());
+        }
+        match hits.as_slice() {
+            [one] => Ok(one.address.clone()),
+            [] => Err(format!("No agent is named {to}. agents_list shows the names.")),
+            many => Err(format!("{} agents are named {to}: {}. Send to one address.", many.len(), many.iter().map(|a| a.address.as_str()).collect::<Vec<_>>().join(", "))),
+        }
+    }
+
     /// Saves a message on the mailbox hub and starts its way to the agent.
     pub fn mail_send(&self, from: &str, label: &str, to: &str, text: &str) -> Res<Msg> {
         if !self.mail_on() {
@@ -109,6 +129,8 @@ impl Hub {
         if !self.mailbox_here() {
             return Err("The mailbox is on the server: send with sb msg there.".into());
         }
+        let to = self.mail_resolve(from, to)?;
+        let to = to.as_str();
         let (pane, machine) = mail::parse(to).ok_or(format!("{to} is not an agent address. Use one from agents_list, like p7@box."))?;
         mail::parse(from).ok_or(format!("{from} is not an agent address"))?;
         if from == to {

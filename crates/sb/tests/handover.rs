@@ -53,7 +53,8 @@ fn start_hub(root: &Path, socket: &str) -> Arc<Hub> {
 #[test]
 fn an_agent_on_the_server_continues_here_with_its_work_and_its_conversation() {
     let pid = std::process::id();
-    let root = std::env::temp_dir().join(format!("sb-handover-{pid}"));
+    // The real path: on macOS the temp folder is a link (/var to /private/var), and git gives real paths.
+    let root = std::env::temp_dir().canonicalize().unwrap().join(format!("sb-handover-{pid}"));
     let _ = std::fs::remove_dir_all(&root);
     let (sa, sb) = (format!("sb-test-hand-a-{pid}"), format!("sb-test-hand-b-{pid}"));
     let _clean = Clean(vec![sa.clone(), sb.clone()], root.clone());

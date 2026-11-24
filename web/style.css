@@ -796,6 +796,18 @@ body:not(.rail-wide) .host::before { margin: 0; }
 .host.here::before { color: var(--muted); }
 button.host { border: 0; background: transparent; padding: 4px 0; cursor: pointer; text-align: left; }
 button.host:hover { color: var(--fg); }
+/* The two machines, when both run (SPEC 29.13). The one shown is lit. */
+.machines { display: flex; flex-direction: column; gap: 2px; width: 100%; }
+.machine { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; border-radius: 6px; background: transparent; padding: 5px 8px; cursor: pointer; text-align: left; font: 600 11px/1 var(--mono); color: var(--muted); }
+.machine::before { content: "●"; color: var(--done); font-size: 11px; }
+.machine.down::before { color: var(--error); }
+.machine:hover { color: var(--fg); }
+.machine.on { background: var(--panel-2); color: var(--fg); }
+.machine .mname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.machine .mn { color: var(--needs-fg); }
+/* On the icon rail a machine is its dot and its count; the name is in the tooltip. */
+body:not(.rail-wide) .machine { justify-content: center; padding: 5px 0; }
+body:not(.rail-wide) .machine .mname { display: none; }
 #hostmenu .note { padding: 6px 10px 4px; color: var(--muted); font-size: 11px; max-width: 240px; }
 .link { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: color-mix(in srgb, var(--error) 18%, var(--panel)); border-bottom: 1px solid var(--line); font-size: 13px; }
 .link span { flex: 1; min-width: 0; }

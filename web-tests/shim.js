@@ -220,6 +220,9 @@ window.__TAURI__ = {
           return { repo: "/home/me/code/lighthouse", tree: "/home/me/code/lighthouse-feat-2", branch: "feat-2", note: "feat here has commits that the server does not have" };
         case "handover_in": return { repo: "/home/me/code/lighthouse", tree: "/home/me/code/lighthouse-feat-2", branch: "feat-2", session: "sess-1", title: "", from: "box", changes: 3 };
         case "handover_take": { const a = window.__arrive; window.__arrive = null; return a || null; }
+        // Both machines at once (SPEC 29.13): the window shows the one asked for.
+        case "machine_show": return { remote: !!args.remote, host: args.remote ? "box" : undefined, up: args.remote ? !!window.__boxUp : true, why: null, both: true, here: "mac", box: { host: "box", up: !!window.__boxUp } };
+        case "machine_other": return structuredClone(window.__other || []);
         case "link_reconnect": if (window.__linkFail) throw window.__linkFail; return { remote: true, host: "box", up: true, why: null };
         case "review_nvim": return "p3";
         // One nvim and one shell for each worktree (SPEC 28).

@@ -65,7 +65,7 @@
           <dt>Branch</dt><dd><code>${esc(t.branch)}</code>${t.note ? `<span class="hwarn"> · ${esc(t.note)}</span>` : ""}</dd>
         </dl></section>
         <label class="hcheck"><input type="checkbox" id="hstop"${H.stop ? " checked" : ""}><span><b>Stop the agent on the server</b><small>Two agents on one piece of work drift apart. The conversation stays on the server too.</small></span></label>
-        <p class="hnote">${LINK.switch ? "The app then switches to this computer and restarts. The other agents on the server keep running." : "The app cannot switch by itself while SB_REMOTE is set. After this, start the app without SB_REMOTE: the agent opens then."}</p>`;
+        <p class="hnote">${LINK.both ? "Then the window shows this computer, where the agent opens. The other agents on the server keep running." : "The app cannot switch by itself while SB_REMOTE is set. After this, start the app without SB_REMOTE: the agent opens then."}</p>`;
     }
     box.innerHTML = html;
     const go = $("#hgo");
@@ -133,11 +133,16 @@
       }
       H.step = "switch";
       draw();
-      if (!LINK.switch) {
+      if (!LINK.both) {
+        H.phase = "idle";
         close();
         return toast(`The work is in ${home(H.target.tree)}. Start the app without SB_REMOTE: the agent opens then.`);
       }
-      await invoke("link_mode", { remote: false });
+      // No restart (SPEC 29.13): the window shows this computer, and the agent opens.
+      H.phase = "idle";
+      close();
+      await window.SB.showMachine(false);
+      await arrive();
     } catch (e) {
       H.phase = "error";
       H.err = String(e);

@@ -2107,7 +2107,7 @@
     await wait(30);
     check("a lost link shows a banner with the host and the reason", !$("#link").hidden && $("#linktext").textContent.includes("box") && $("#linktext").textContent.includes("timed out") && $("#linkgo").textContent === "Reconnect");
     check("the top bar names the host, marked down", !$("#hostsw").hidden && $("#host").textContent === "box" && $("#host").classList.contains("down"));
-    check("with no server in this computer's config, no switch", $("#linklocal").hidden && !$("#hostmenu [data-mode]"));
+    check("with no server in this computer's config, no machine rows", $("#linklocal").hidden && $("#machines").hidden);
     window.__emit("link", { up: false, host: "box", why: "the hub on the server stopped", taken: false, retry: true });
     await wait(30);
     check("a lost link says it reconnects on its own (SPEC 29.12)", $("#linktext").textContent.includes("Reconnecting on its own") && $("#linkgo").textContent === "Reconnect");
@@ -2155,27 +2155,35 @@
     await wait(200);
     window.SB.collapse();
     {
-      // The switch between here and the server (SPEC 29.1): the app restarts.
-      window.SB.LINK.switch = "box";
+      // Both machines at once (SPEC 29.13): a click on a machine shows it, with no restart.
+      Object.assign(window.SB.LINK, { both: true, here: "mac" });
       window.__emit("link", { up: false, host: "box", why: "ssh: Host key verification failed.", taken: false });
       await wait(30);
-      check("a lost link offers this computer", !$("#linklocal").hidden && !$("#host").disabled);
+      const rows = () => $$("#machines .machine");
+      check("the rail lists both machines, the server shown and marked down", !$("#machines").hidden && $("#host").hidden && rows().length === 2
+        && rows()[0].textContent.includes("mac") && rows()[1].textContent.includes("box") && rows()[1].classList.contains("on") && rows()[1].classList.contains("down"), $("#machines").innerHTML);
+      check("a lost link offers this computer", !$("#linklocal").hidden);
+      const restarts = called("app_restart").length;
+      window.__other = [{ id: "p9", lamp: "needs", unseen: true }];
       $("#linklocal").click();
-      await wait(30);
-      let m = called("link_mode");
-      check("Use this computer switches to a hub here", m.length === 1 && m[0][1].remote === false, JSON.stringify(m));
-      $("#host").click();
+      await wait(100);
+      let m = called("machine_show");
+      check("Use this computer shows this computer's agents, with no restart", m.length === 1 && m[0][1].remote === false && called("app_restart").length === restarts && !window.SB.LINK.remote, JSON.stringify(m));
+      check("the banner goes, and the board loads this computer's panes", $("#link").hidden && rows()[0].classList.contains("on") && called("panes").length > 0);
+      check("the server's row counts the agents that wait on you there", rows()[1].querySelector(".mn")?.textContent === "1", $("#machines").innerHTML);
+      window.__emit("other_pane", { id: "p8", lamp: "turn", unseen: true });
+      await wait(20);
+      check("the other machine's panes update its count", rows()[1].querySelector(".mn")?.textContent === "2");
+      rows()[0].click();
       await wait(10);
-      const items = $$("#hostmenu [data-mode]");
-      check("the host menu has this computer and the server, the server marked", !$("#hostmenu").hidden && items.length === 2 && items[1].textContent === "box" && items[1].getAttribute("aria-checked") === "true");
-      items[1].click();
-      await wait(30);
-      check("a click on the mode in use does nothing", called("link_mode").length === 1 && $("#hostmenu").hidden);
-      $("#host").click();
-      $$("#hostmenu [data-mode]")[0].click();
-      await wait(30);
-      m = called("link_mode");
-      check("the menu switches to this computer", m.length === 2 && m[1][1].remote === false);
+      check("a click on the machine shown opens its menu, with Restart", !$("#hostmenu").hidden && !!$("#hostmenu [data-restart]") && called("machine_show").length === 1);
+      $("#hostmenu").hidden = true;
+      window.__boxUp = true;
+      rows()[1].click();
+      await wait(100);
+      m = called("machine_show");
+      check("a click on the server shows it again", m.length === 2 && m[1][1].remote === true && window.SB.LINK.remote && rows()[1].classList.contains("on") && $("#link").hidden);
+      window.__other = null;
       window.__emit("link", { up: true, host: "box" });
       await wait(200);
     }
@@ -2205,21 +2213,23 @@
       const n0 = window.__calls.length;
       $("#hgo").click();
       await wait(60);
-      const after = window.__calls.slice(n0).map((c) => c[0]).filter((c) => ["handover_in", "pane_close", "link_mode"].includes(c));
-      check("Continue here makes the worktree, stops the agent there, then switches", JSON.stringify(after) === '["handover_in","pane_close","link_mode"]'
-        && called("handover_in").at(-1)[1].plan.snap === "5a5a5a5a5a5a" && called("pane_close").at(-1)[1].id === "p1" && called("link_mode").at(-1)[1].remote === false, JSON.stringify(after));
-      check("the dialog shows the switch step while the app restarts", hand() && $("#handover .hs-now")?.textContent.includes("Switch") && $("#hcancel").hidden && $("#hgo").hidden);
-      // A restart that does not come: the shim keeps the window. Close it for the next case.
-      $("#handover").hidden = true;
+      const after = window.__calls.slice(n0).map((c) => c[0]).filter((c) => ["handover_in", "pane_close", "machine_show"].includes(c));
+      check("Continue here makes the worktree, stops the agent there, then shows this computer", JSON.stringify(after) === '["handover_in","pane_close","machine_show"]'
+        && called("handover_in").at(-1)[1].plan.snap === "5a5a5a5a5a5a" && called("pane_close").at(-1)[1].id === "p1" && called("machine_show").at(-1)[1].remote === false, JSON.stringify(after));
+      check("then the dialog closes and the window shows this computer, with no restart", !hand() && !window.SB.LINK.remote);
+      // Back to the server for the next case.
+      await window.SB.showMachine(true);
+      await wait(60);
       window.SBHandover.open("p1");
       await wait(60);
       $("#hstop").click();
       const n1 = window.__calls.length;
       $("#hgo").click();
       await wait(60);
-      const after2 = window.__calls.slice(n1).map((c) => c[0]).filter((c) => ["handover_in", "pane_close", "link_mode"].includes(c));
-      check("with Stop off, the agent on the server keeps running", JSON.stringify(after2) === '["handover_in","link_mode"]', JSON.stringify(after2));
-      $("#handover").hidden = true;
+      const after2 = window.__calls.slice(n1).map((c) => c[0]).filter((c) => ["handover_in", "pane_close", "machine_show"].includes(c));
+      check("with Stop off, the agent on the server keeps running", JSON.stringify(after2) === '["handover_in","machine_show"]', JSON.stringify(after2));
+      await window.SB.showMachine(true);
+      await wait(60);
       // A failure says why, and offers Try again; Escape closes.
       window.__handFail = "No clone of git@github.com:sigp/lighthouse.git on this computer. Clone it into a scan folder, then try again.";
       window.SBHandover.open("p1");

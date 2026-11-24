@@ -200,14 +200,14 @@ pub fn pane_tools() -> Value {
         },
         {
             "name": "agents_list",
-            "description": "The agents that can get a message, on this computer and the user's other machine (server or laptop): address (like p7@box), machine, repo, branch, title and state. `you` marks this agent.",
+            "description": "The agents that can get a message, on this computer and the user's other machine (server or laptop): address (like p7@box), machine, repo, branch, title (its name) and state. `you` marks this agent.",
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
             "name": "message_send",
             "description": "Send a message to another agent, on this machine or the other one. It reaches the agent at the end of its turn, or at once when it is idle. Use it to hand over work, ask a question, or answer a message. Keep it short and self-contained: the other agent does not see your conversation.",
             "inputSchema": { "type": "object", "properties": {
-                "to": s("The address from agents_list, for example p7@box."),
+                "to": s("The agent's name (its title, like sandcastle) or its address from agents_list, like p7@box. When the user says \"tell sandcastle …\", pass sandcastle."),
                 "text": s("The message.")
             }, "required": ["to", "text"] }
         }

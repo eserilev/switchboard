@@ -113,14 +113,16 @@ fn agents_on_two_machines_send_messages_that_land() {
     assert!(list.iter().any(|a| a["address"] == to_b.as_str() && a["you"] == true), "{out}");
 
     // Refusals: to itself, a bad address, an agent that does not run.
-    for (to, why) in [(to_a.as_str(), "itself"), ("nobody", "not an agent address"), ("p99@box", "No agent")] {
+    for (to, why) in [(to_a.as_str(), "itself"), ("nobody", "No agent is named nobody"), ("bad addr@", "No agent is named"), ("p99@box", "No agent")] {
         let (code, out) = sb(&ha, &a1, &ra, &["msg", "send", to], "hi");
         assert!(code == 1 && out.contains(why), "{to}: {out}");
     }
 
-    // Server to Mac, to an idle agent: typed in with Enter, after the agent settles.
-    let (code, out) = sb(&ha, &a1, &ra, &["msg", "send", &to_b], "Run the tests on your side, please.");
+    // Server to Mac, by name (the branch, in any case: the sender is left out), to an
+    // idle agent: typed in with Enter, after the agent settles.
+    let (code, out) = sb(&ha, &a1, &ra, &["msg", "send", "Main"], "Run the tests on your side, please.");
     assert_eq!(code, 0, "{out}");
+    assert!(out.contains(&to_b), "{out}");
     let typed = |dir: &Path, pane: &str| std::fs::read_to_string(dir.join(format!(".typed-{pane}"))).unwrap_or_default();
     wait_for("the message in the Mac agent", 15, || typed(&rb, &b1).contains("\r"));
     let got = typed(&rb, &b1);

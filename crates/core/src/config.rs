@@ -29,8 +29,8 @@ pub struct Config {
     /// Remote mode (SPEC 29): the ssh host of the hub, for example `me@box`. With
     /// none, the hub runs here.
     pub remote: Option<String>,
-    /// True: the hub runs here, though `remote` names a host. The switch in the
-    /// window sets it, so the host stays for the switch back (SPEC 29.1).
+    /// True: the window opens on this computer, though `remote` names a host. Both
+    /// hubs run either way; the machine rows in the rail set it (SPEC 29.13).
     pub remote_off: bool,
     /// The program that links the window to the remote hub. With none,
     /// `ssh -T <remote> sb attach`, with `~/.local/bin` and `~/.cargo/bin` on its PATH.
@@ -363,6 +363,13 @@ impl Config {
 
     pub fn remote_argv(&self) -> Option<(String, Vec<String>)> {
         self.remote_argv_with(sb_remote_env())
+    }
+
+    /// The argv of the link to the server, whichever machine the window shows
+    /// first (SPEC 29.13): `SB_REMOTE`, else `remote`. `remote_off` only picks
+    /// the machine shown at the start.
+    pub fn server_argv(&self) -> Option<(String, Vec<String>)> {
+        self.remote_argv_with(sb_remote_env().or_else(|| self.remote.clone()).filter(|h| !h.is_empty()))
     }
 
     fn remote_argv_with(&self, env: Option<String>) -> Option<(String, Vec<String>)> {
@@ -711,6 +718,10 @@ mod tests {
         assert!(argv.contains(&"BatchMode=yes".to_owned()));
         let c = Config::set_remote_off(&path, true).unwrap();
         assert!(c.remote_off && c.remote_argv_with(None).is_none());
+        // The server's link runs all the same; remote_off only picks the machine shown.
+        if sb_remote_env().is_none() {
+            assert_eq!(c.server_argv().unwrap().0, "me@box");
+        }
         assert_eq!(Config::load(&path).unwrap(), c);
         // SB_REMOTE wins.
         assert_eq!(c.remote_argv_with(Some("other".into())).unwrap().0, "other");

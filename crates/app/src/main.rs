@@ -16,6 +16,11 @@ use tauri::{AppHandle, Emitter, Manager, UserAttentionType};
 
 struct AppSink {
     handle: AppHandle,
+    /// The machine of this sink: true for the server.
+    remote: bool,
+    /// The machine the window shows (SPEC 29.13). News of the other one does not
+    /// reach the window, but its panes do, as `other_pane(s)`, for the counts in the rail.
+    on_remote: Arc<AtomicBool>,
 }
 
 impl Sink for AppSink {
@@ -23,10 +28,17 @@ impl Sink for AppSink {
         if event == "pane" && payload["alert"] == true {
             self.alert(&payload);
         }
-        let _ = self.handle.emit(event, payload);
+        if self.shown() {
+            let _ = self.handle.emit(event, payload);
+        } else if event == "pane" || event == "panes" {
+            let _ = self.handle.emit(&format!("other_{event}"), payload);
+        }
     }
 
     fn output(&self, pane: &str, data: &[u8]) {
+        if !self.shown() {
+            return;
+        }
         let _ = self.handle.emit(
             "pane_output",
             json!({ "pane": pane, "data": B64.encode(data) }),
@@ -35,6 +47,10 @@ impl Sink for AppSink {
 }
 
 impl AppSink {
+    fn shown(&self) -> bool {
+        self.on_remote.load(Ordering::SeqCst) == self.remote
+    }
+
     /// A desktop notification and the urgency hint, when the window is not focused (SPEC 6.3).
     fn alert(&self, pane: &Value) {
         let label = match pane["lamp"].as_str() {
@@ -123,10 +139,15 @@ fn alert_command(title: &str, body: &str) -> std::process::Command {
 
 type Res<T> = Result<T, String>;
 
-/// Where the commands go: the hub in this process, or a remote hub (SPEC 29).
-enum Backend {
-    Local(Arc<Hub>),
-    Remote(Remote),
+/// Where the commands go (SPEC 29.13): the hub in this process, the hub on the
+/// server, or both at once. The window shows one of them; a switch is instant.
+struct Backend {
+    local: Option<Arc<Hub>>,
+    remote: Option<Remote>,
+    /// The window shows the server. Always true with no hub here.
+    on_remote: Arc<AtomicBool>,
+    /// This computer's machine name.
+    here: String,
 }
 
 /// The link to a remote hub, and what the window needs to know about it.
@@ -241,12 +262,41 @@ enum Pending {
 }
 
 impl Backend {
+    /// The server link, when the window shows it.
+    fn shown_remote(&self) -> Option<&Remote> {
+        self.remote.as_ref().filter(|_| self.on_remote.load(Ordering::SeqCst) || self.local.is_none())
+    }
+
+    /// Shows the other machine: true for the server. The agents of both keep running.
+    fn show(&self, remote: bool) -> Res<()> {
+        if remote && self.remote.is_none() {
+            return Err("No server: set remote = \"me@box\" in the config.".into());
+        }
+        if !remote && self.local.is_none() {
+            return Err("SB_REMOTE runs this window on the server only.".into());
+        }
+        tracing::info!(target: "sb::app", remote, "show the machine");
+        self.on_remote.store(remote, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// The panes of the machine the window does not show, for the counts in the rail.
+    fn other_panes(&self) -> Value {
+        let out = if self.shown_remote().is_some() {
+            self.local.as_ref().map(|h| dispatch::dispatch(h, "panes", &json!({})))
+        } else {
+            self.remote.as_ref().filter(|r| r.is_up()).map(|r| r.call("panes", json!({})))
+        };
+        out.and_then(Result::ok).unwrap_or_else(|| json!([]))
+    }
+
     /// Starts one command without a wait for a remote answer, so the next one can
     /// go out behind it in order. A local one runs to the end here.
     fn start(&self, cmd: &str, args: Value) -> Pending {
-        match self {
-            Backend::Local(hub) => Pending::Done(dispatch::dispatch(hub, cmd, &args)),
-            Backend::Remote(r) => {
+        match (self.shown_remote(), &self.local) {
+            (None, Some(hub)) => Pending::Done(dispatch::dispatch(hub, cmd, &args)),
+            (None, None) => Pending::Done(Err("no hub".into())),
+            (Some(r), _) => {
                 let c = r.client.lock().unwrap().clone();
                 match c.map(|c| c.send(cmd, args)) {
                     Some(Ok(rx)) => Pending::Wait(rx),
@@ -259,9 +309,10 @@ impl Backend {
 
     /// One command of the window. It blocks: run it off the async runtime.
     fn call(&self, cmd: &str, args: Value) -> Res<Value> {
-        match self {
-            Backend::Local(hub) => dispatch::dispatch(hub, cmd, &args),
-            Backend::Remote(r) => {
+        match (self.shown_remote(), &self.local) {
+            (None, Some(hub)) => dispatch::dispatch(hub, cmd, &args),
+            (None, None) => Err("no hub".into()),
+            (Some(r), _) => {
                 let mut v = r.call(cmd, args)?;
                 // The keys are of this computer.
                 if cmd == "settings" {
@@ -272,15 +323,22 @@ impl Backend {
         }
     }
 
+    /// The state of the link the window shows, and `box`: the server link's own,
+    /// for its dot in the rail. `both`: the rail lists the two machines.
     fn link_state(&self) -> Value {
-        match self {
-            Backend::Local(_) => json!({ "remote": false, "up": true }),
-            Backend::Remote(r) => {
-                let why = r.down.lock().unwrap().clone();
-                let up = r.client.lock().unwrap().as_ref().is_some_and(|c| c.is_up());
-                json!({ "remote": true, "host": r.host, "up": up && why.is_none(), "why": why })
-            }
-        }
+        let server = self.remote.as_ref().map(|r| {
+            let why = r.down.lock().unwrap().clone();
+            let up = r.client.lock().unwrap().as_ref().is_some_and(|c| c.is_up());
+            json!({ "host": r.host, "up": up && why.is_none(), "why": why, "taken": r.taken.load(Ordering::SeqCst) })
+        });
+        let mut v = match (self.shown_remote(), &server) {
+            (Some(_), Some(b)) => json!({ "remote": true, "host": b["host"], "up": b["up"], "why": b["why"], "taken": b["taken"] }),
+            _ => json!({ "remote": false, "up": true }),
+        };
+        v["box"] = server.unwrap_or(Value::Null);
+        v["both"] = json!(self.local.is_some() && self.remote.is_some());
+        v["here"] = json!(self.here);
+        v
     }
 }
 
@@ -429,22 +487,21 @@ struct Switch {
 }
 static SWITCH: std::sync::OnceLock<Switch> = std::sync::OnceLock::new();
 
-/// Writes the mode into this computer's config, for the restart (SPEC 29.1).
-fn link_mode(remote: bool) -> Res<()> {
-    let s = SWITCH.get().ok_or("the app is starting")?;
-    if switchboard_core::config::sb_remote_env().is_some() {
-        return Err("SB_REMOTE sets the hub for this run. Start the app without it to switch.".into());
+/// The machine the window shows goes into this computer's config, so the next
+/// start opens on it (`remote_off`, SPEC 29.13). A failure only goes to the log.
+fn remember_machine(remote: bool) {
+    let Some(s) = SWITCH.get() else { return };
+    if s.host.is_none() || switchboard_core::config::sb_remote_env().is_some() {
+        return;
     }
-    if s.host.is_none() {
-        return Err(format!("No server to switch to. Set remote = \"me@box\" in {}.", s.config.display()));
+    if let Err(err) = Config::set_remote_off(&s.config, !remote) {
+        tracing::warn!(target: "sb::app", %err, "the machine shown was not saved");
     }
-    tracing::info!(target: "sb::app", remote, "switch the hub");
-    Config::set_remote_off(&s.config, !remote).map(drop)
 }
 
 /// The commands that run in the app, in remote mode too. Every other command goes
 /// to the backend. A test keeps this list short (SPEC 29).
-const LOCAL: &[&str] = &["log", "open_url", "clip_write", "handover_check", "handover_in", "link_state", "link_reconnect", "link_mode", "app_restart"];
+const LOCAL: &[&str] = &["log", "open_url", "clip_write", "handover_check", "handover_in", "link_state", "link_reconnect", "machine_show", "machine_other", "app_restart"];
 
 /// The one handler of every `invoke` of the window.
 fn handle(invoke: tauri::ipc::Invoke) -> bool {
@@ -481,7 +538,7 @@ fn handle(invoke: tauri::ipc::Invoke) -> bool {
         "open_url" => invoke.resolver.respond(open_url(&text("url")).map(|_| Value::Null).map_err(Into::into)),
         // The handover on this computer (SPEC 38.2): the dry run, then the real one.
         "handover_check" | "handover_in" => {
-            let remote = matches!(&*backend, Backend::Remote(_));
+            let remote = backend.shown_remote().is_some();
             let plan = args.get("plan").cloned().unwrap_or(Value::Null);
             invoke.resolver.respond_async(async move {
                 tauri::async_runtime::spawn_blocking(move || handover_here(remote, cmd == "handover_in", plan))
@@ -502,29 +559,30 @@ fn handle(invoke: tauri::ipc::Invoke) -> bool {
             if let Some(err) = CONFIG_ERROR.get() {
                 v["config_error"] = json!(format!("The config does not parse, so the defaults are in use: {err}"));
             }
-            // The server the switch goes to, or none.
-            let host = SWITCH.get().and_then(|s| s.host.clone());
-            v["switch"] = json!(host.filter(|_| switchboard_core::config::sb_remote_env().is_none()));
             invoke.resolver.resolve(v)
         }
-        // The app starts again in the other mode. The agents keep running in tmux.
-        "link_mode" => {
+        // The window shows the other machine, at once (SPEC 29.13). The next start
+        // opens on it too.
+        "machine_show" => {
             let remote = args.get("remote").and_then(Value::as_bool).unwrap_or(false);
-            match link_mode(remote) {
+            match backend.show(remote) {
                 Ok(()) => {
-                    invoke.resolver.resolve(Value::Null);
-                    webview.app_handle().request_restart();
+                    remember_machine(remote);
+                    invoke.resolver.resolve(backend.link_state());
                 }
                 Err(e) => invoke.resolver.reject(e),
             }
         }
+        "machine_other" => invoke.resolver.respond_async(async move {
+            tauri::async_runtime::spawn_blocking(move || backend.other_panes()).await.map_err(|e| e.to_string().into())
+        }),
         // Restart (SPEC 29.12). `hub`: the hub on the server starts again with its
         // newest build, and the link comes back on its own. Else this app restarts;
         // a hub here restarts with it. Agents keep running in tmux.
         "app_restart" => {
             let hub = args.get("hub").and_then(Value::as_bool).unwrap_or(false);
-            match &*backend {
-                Backend::Remote(_) if hub => invoke.resolver.respond_async(async move { run("hub_restart".into(), backend, json!({})).await.map_err(Into::into) }),
+            match backend.shown_remote() {
+                Some(_) if hub => invoke.resolver.respond_async(async move { run("hub_restart".into(), backend, json!({})).await.map_err(Into::into) }),
                 _ => {
                     tracing::info!(target: "sb::app", "restart asked");
                     invoke.resolver.resolve(Value::Null);
@@ -534,9 +592,9 @@ fn handle(invoke: tauri::ipc::Invoke) -> bool {
         }
         "link_reconnect" => invoke.resolver.respond_async(async move {
             let b = Arc::clone(&backend);
-            let r = tauri::async_runtime::spawn_blocking(move || match &*b {
-                Backend::Remote(r) => r.connect(),
-                Backend::Local(_) => Ok(()),
+            let r = tauri::async_runtime::spawn_blocking(move || match &b.remote {
+                Some(r) => r.connect(),
+                None => Ok(()),
             })
             .await
             .map_err(|e| e.to_string())
@@ -595,9 +653,6 @@ fn main() {
     ));
     tauri::Builder::default()
         .setup(|app| {
-            let sink = Arc::new(AppSink {
-                handle: app.handle().clone(),
-            });
             let paths = Paths::from_env();
             // A config that does not parse: the defaults, with the error in the log
             // and on the screen. `link_state` carries it, so the window shows it
@@ -608,38 +663,49 @@ fn main() {
                 Config::default()
             });
             let _ = SWITCH.set(Switch { config: paths.config.clone(), host: config.remote.clone() });
-            let backend = match config.remote_argv() {
-                Some((host, argv)) => {
-                    tracing::info!(target: "sb::app", %host, ?argv, "remote mode");
-                    let remote = Remote {
-                        host,
-                        argv,
-                        client: Mutex::default(),
-                        down: Arc::new(Mutex::new(Some("connecting".into()))),
-                        sink,
-                        leader: config.leader.clone(),
-                        gen: Arc::default(),
-                        connecting: Mutex::default(),
-                        taken: Arc::default(),
-                    };
-                    Arc::new(Backend::Remote(remote))
+            // SB_REMOTE: the server only, for one run. Else a hub here always runs,
+            // and with `remote` the server's link too (SPEC 29.13).
+            let only_server = switchboard_core::config::sb_remote_env().is_some();
+            let server = config.server_argv();
+            let on_remote = Arc::new(AtomicBool::new(only_server || (server.is_some() && !config.remote_off)));
+            let sink_of = |remote: bool| Arc::new(AppSink { handle: app.handle().clone(), remote, on_remote: Arc::clone(&on_remote) });
+            let remote = server.map(|(host, argv)| {
+                tracing::info!(target: "sb::app", %host, ?argv, "server link");
+                Remote {
+                    host,
+                    argv,
+                    client: Mutex::default(),
+                    down: Arc::new(Mutex::new(Some("connecting".into()))),
+                    sink: sink_of(true),
+                    leader: config.leader.clone(),
+                    gen: Arc::default(),
+                    connecting: Mutex::default(),
+                    taken: Arc::default(),
                 }
-                None => {
-                    let hub = match Hub::start(paths, sb_path(), sink) {
-                        Ok(h) => h,
-                        // No window can show it yet: an alert, then quit. Before, the
-                        // app quit with the error only in the log.
-                        Err(err) => {
-                            tracing::error!(target: "sb::app", %err, "the hub did not start");
-                            let _ = alert_command("Switchboard did not start", &err)
-                                .stdin(std::process::Stdio::null())
-                                .status();
-                            std::process::exit(1);
-                        }
-                    };
-                    Arc::new(Backend::Local(hub))
+            });
+            let local = if only_server {
+                None
+            } else {
+                match Hub::start(paths, sb_path(), sink_of(false)) {
+                    Ok(h) => Some(h),
+                    // With a server, the window still opens, on it. Else no window
+                    // can show it yet: an alert, then quit.
+                    Err(err) if remote.is_some() => {
+                        tracing::error!(target: "sb::app", %err, "the hub here did not start; the server only");
+                        on_remote.store(true, Ordering::SeqCst);
+                        None
+                    }
+                    Err(err) => {
+                        tracing::error!(target: "sb::app", %err, "the hub did not start");
+                        let _ = alert_command("Switchboard did not start", &err)
+                            .stdin(std::process::Stdio::null())
+                            .status();
+                        std::process::exit(1);
+                    }
                 }
             };
+            let here = switchboard_core::mail::machine_name(&config);
+            let backend = Arc::new(Backend { local, remote, on_remote, here });
             app.manage(Arc::clone(&backend));
             let (jobs, rx) = mpsc::channel();
             {
@@ -648,9 +714,9 @@ fn main() {
             }
             app.manage(Lane(jobs));
             // The link comes up in the background: the window shows while ssh connects.
-            if matches!(*backend, Backend::Remote(_)) {
+            if backend.remote.is_some() {
                 std::thread::spawn(move || {
-                    if let Backend::Remote(r) = &*backend {
+                    if let Some(r) = &backend.remote {
                         let _ = r.connect();
                         r.keep_up();
                     }
@@ -666,12 +732,12 @@ fn main() {
             // no watchdog reaches them after a quit. A remote hub keeps its runs.
             if let tauri::RunEvent::Exit = event {
                 if let Some(b) = app.try_state::<Arc<Backend>>() {
-                    match &**b {
-                        Backend::Local(hub) => hub.stop_runs(),
-                        Backend::Remote(r) => {
-                            if let Some(c) = r.client.lock().unwrap().take() {
-                                c.close();
-                            }
+                    if let Some(hub) = &b.local {
+                        hub.stop_runs();
+                    }
+                    if let Some(r) = &b.remote {
+                        if let Some(c) = r.client.lock().unwrap().take() {
+                            c.close();
                         }
                     }
                 }
@@ -687,7 +753,7 @@ mod tests {
     /// nothing else here (SPEC 29).
     #[test]
     fn the_local_commands_stay_few() {
-        assert_eq!(LOCAL, &["log", "open_url", "clip_write", "handover_check", "handover_in", "link_state", "link_reconnect", "link_mode", "app_restart"]);
+        assert_eq!(LOCAL, &["log", "open_url", "clip_write", "handover_check", "handover_in", "link_state", "link_reconnect", "machine_show", "machine_other", "app_restart"]);
         for c in LOCAL {
             assert!(!dispatch::COMMANDS.contains(c), "{c} is a hub command too");
         }

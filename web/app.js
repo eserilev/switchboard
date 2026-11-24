@@ -74,7 +74,11 @@ const call = (cmd, args) => invoke(cmd, args).catch((e) => { log("warn", cmd, "f
 // ---------- the link to a remote hub (SPEC 29) ----------
 
 // `synced`: the window has loaded everything from the hub since the link came up.
-const LINK = { remote: false, up: true, host: "", why: null, taken: false, synced: true };
+// `both`: a hub here and the server's link run at once (SPEC 29.13); `remote`
+// says which one the window shows, and `box` is the server link's own state.
+const LINK = { remote: false, up: true, host: "", why: null, taken: false, synced: true, both: false, here: "", box: null };
+// The panes of the machine the window does not show, for the counts in the rail.
+let OTHER = [];
 // The count of `link` events. A `link_state` answer that a newer event passed is
 // old: the link came up while the answer was on its way, and it would say "connecting".
 let linkNews = 0;
@@ -84,14 +88,33 @@ function linkChanged() {
   else if (!LINK.synced) { LINK.synced = true; resync(); }
   drawLink();
 }
+// The rows of the two machines, when both run: a dot for the link and the
+// number of agents that wait on you. A click shows that machine at once.
+const machineName = (host) => String(host || "server").split("@").pop();
+const waitsOn = (list) => list.filter((p) => p.unseen && URGENT.includes(p.lamp)).length;
+function drawMachines() {
+  const on = LINK.both;
+  $("#machines").hidden = !on;
+  $("#host").hidden = on;
+  if (!on) return;
+  const box = LINK.box || {};
+  const rows = [
+    { remote: false, name: LINK.here || "here", up: true, n: LINK.remote ? waitsOn(OTHER) : waitsOn(S.panes), tip: "This computer" },
+    { remote: true, name: machineName(box.host), up: !!box.up, n: LINK.remote ? waitsOn(S.panes) : waitsOn(OTHER), tip: box.host || "" },
+  ];
+  setHTML($("#machines"), rows.map((m) => {
+    const shown = m.remote === !!LINK.remote;
+    const tip = `${m.tip}${m.up ? "" : ": no link"}${shown ? ". Click for Restart." : ""}`;
+    return `<button type="button" class="machine${shown ? " on" : ""}${m.up ? "" : " down"}" data-remote="${m.remote}" aria-pressed="${shown}" title="${esc(tip)}"><span class="mname">${esc(m.name)}</span>${m.n ? `<span class="mn">${m.n}</span>` : ""}</button>`;
+  }).join(""));
+}
 function drawLink() {
-  // `switch`: the server of this computer's config, when the app can switch.
-  const sw = LINK.switch;
   $("#hostsw").hidden = false;
+  drawMachines();
   const name = LINK.remote ? LINK.host : "This computer";
   $("#host").textContent = name;
   const tip = LINK.remote ? `The hub runs on ${LINK.host}` : "The hub runs on this computer";
-  $("#host").title = `${tip}. Click to ${sw ? "switch or restart" : "restart"}.`;
+  $("#host").title = `${tip}. Click to restart.`;
   $("#host").classList.toggle("down", !LINK.up);
   $("#host").classList.toggle("here", !LINK.remote);
   $("#host").disabled = false;
@@ -104,19 +127,11 @@ function drawLink() {
     `<button role="menuitem" data-restart="app">Restart Switchboard</button>`,
     `<div class="note">Switchboard starts again with its newest build. Agents keep running. Review runs stop.</div>`,
   ];
-  setHTML($("#hostmenu"), [
-    ...(sw ? [
-      `<button role="menuitemradio" aria-checked="${!LINK.remote}" data-mode="local">This computer</button>`,
-      `<button role="menuitemradio" aria-checked="${!!LINK.remote}" data-mode="remote">${esc(sw)}</button>`,
-      `<div class="note">Switchboard restarts. Agents keep running where they are.${LINK.remote ? "" : " Review runs here stop."}</div>`,
-      `<hr>`,
-    ] : []),
-    ...restart,
-  ].join(""));
+  setHTML($("#hostmenu"), restart.join(""));
   $("#link").hidden = LINK.up;
   if (LINK.up) return;
   const connecting = LINK.why === "connecting";
-  $("#linklocal").hidden = connecting || !sw;
+  $("#linklocal").hidden = !LINK.both;
   $("#linktext").textContent = connecting ? `Connecting to ${LINK.host}…`
     : LINK.taken ? `Another window took over the hub on ${LINK.host}. Your agents run on there.`
     : LINK.retry ? `No link to ${LINK.host}: ${LINK.why || "the link is down"}. Reconnecting on its own… Your agents run on there.`
@@ -1655,28 +1670,72 @@ listen("paste_failed", (e) => window.SBTasks?.showText("The first message did no
 listen("connections", (e) => { S.conn = e.payload; drawConn(); drawBoard(); });
 listen("focus", (e) => refreshPanes().then(() => expand(e.payload)));
 listen("tmux_exit", () => toast("The Switchboard tmux server ended. Restart the app to start it again."));
+// The server link's news. It is the window's link only while the window shows the server.
+const linkOf = (b) => ({ up: !!b.up, why: b.why ?? null, taken: !!b.taken, retry: !!b.retry, host: b.host });
 listen("link", (e) => {
   linkNews++;
-  Object.assign(LINK, { remote: true, why: null, taken: false, retry: false }, e.payload);
+  LINK.box = Object.assign({ why: null, taken: false, retry: false }, e.payload);
+  if (!LINK.both) LINK.remote = true;
+  if (LINK.remote) Object.assign(LINK, linkOf(LINK.box));
+  // The other machine's counts come back with its link.
+  if (!LINK.remote && LINK.box.up) loadOther();
   linkChanged();
   if (!LINK.up) $("#toast").hidden = true;
 });
 $("#linkgo").addEventListener("click", reconnect);
-// The switch between a hub here and the hub on the server: the app restarts.
-async function switchHub(remote) {
+// Shows the other machine at once (SPEC 29.13). Both keep running: the window
+// drops what it showed and loads the other one's panes, reviews and tasks.
+async function showMachine(remote) {
   $("#hostmenu").hidden = true;
   if (remote === !!LINK.remote) return;
+  if (S.live) collapse();
+  let st;
   try {
-    await invoke("link_mode", { remote });
-    toast(remote ? `Restarting with the hub on ${LINK.switch}…` : "Restarting with the hub on this computer…");
+    st = await invoke("machine_show", { remote });
   } catch (e) {
-    toast(e);
+    return toast(e);
   }
+  linkNews++;
+  Object.assign(LINK, { why: null, taken: false, retry: false }, st);
+  OTHER = [];
+  S.panes = [];
+  S.reviews = new Map();
+  if (!["board", "tasks", "today"].includes(S.tab)) setTab("board");
+  drawBoard();
+  drawTabs();
+  LINK.synced = LINK.up;
+  drawLink();
+  if (!LINK.up) return;
+  await resync();
+  if (S.tab === "today") window.SBToday?.refresh?.();
+  loadOther();
 }
+async function loadOther() {
+  if (!LINK.both) return;
+  try {
+    OTHER = await invoke("machine_other");
+  } catch {
+    OTHER = [];
+  }
+  drawMachines();
+}
+listen("other_panes", (e) => { OTHER = e.payload; drawMachines(); });
+listen("other_pane", (e) => {
+  const i = OTHER.findIndex((x) => x.id === e.payload.id);
+  if (i < 0) OTHER.push(e.payload);
+  else OTHER[i] = e.payload;
+  drawMachines();
+});
+$("#machines").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-remote]");
+  if (!b) return;
+  const remote = b.dataset.remote === "true";
+  // The machine shown: its menu, with Restart.
+  if (remote === !!LINK.remote) $("#hostmenu").hidden = !$("#hostmenu").hidden;
+  else showMachine(remote);
+});
 $("#host").addEventListener("click", () => ($("#hostmenu").hidden = !$("#hostmenu").hidden));
 $("#hostmenu").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-mode]");
-  if (b) switchHub(b.dataset.mode === "remote");
   const r = e.target.closest("[data-restart]");
   if (r) restartSb(r.dataset.restart === "hub");
 });
@@ -1690,7 +1749,7 @@ async function restartSb(hub) {
   }
 }
 document.addEventListener("click", (e) => { if (!e.target.closest("#hostsw")) $("#hostmenu").hidden = true; });
-$("#linklocal").addEventListener("click", () => switchHub(false));
+$("#linklocal").addEventListener("click", () => showMachine(false));
 listen("error", (e) => toast(e.payload.message || e.payload));
 listen("review", (e) => {
   const was = S.reviews.has(e.payload.id);
@@ -1725,7 +1784,7 @@ function copyText(text) {
   return ok;
 }
 
-window.SB = { S, LINK, refreshReviews, invoke, call, listen, esc, setHTML, toast, setTab, WORK_TITLE, workOf, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, drawTabs, openLauncher, paneName, copyText, LABEL, term, isLeader, webLinks, clip52, bytes, $,
+window.SB = { S, LINK, showMachine, refreshReviews, invoke, call, listen, esc, setHTML, toast, setTab, WORK_TITLE, workOf, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, drawTabs, openLauncher, paneName, copyText, LABEL, term, isLeader, webLinks, clip52, bytes, $,
   lampIcon, actions, stateAct, stateWord, gb, home, ICON, startRename, remeasure };
 
 (async function start() {
@@ -1736,8 +1795,9 @@ window.SB = { S, LINK, refreshReviews, invoke, call, listen, esc, setHTML, toast
     // config error) comes from the answer.
     if (linkNews === seen) Object.assign(LINK, st);
     else {
-      const { up, why, taken, host, remote, ...rest } = st || {};
+      const { up, why, taken, host, box, ...rest } = st || {};
       Object.assign(LINK, rest);
+      if (LINK.remote && LINK.box) Object.assign(LINK, linkOf(LINK.box));
     }
     if (LINK.config_error) toast(LINK.config_error);
     // A remote hub that is not linked yet: the `link` event loads everything.
@@ -1751,6 +1811,7 @@ window.SB = { S, LINK, refreshReviews, invoke, call, listen, esc, setHTML, toast
     await refreshReviews();
     setTab("board");
     window.SBHandover?.arrive();
+    loadOther();
     invoke("repos").then((r) => (S.repos = r)).catch(() => {});
   } catch (e) {
     toast(e);

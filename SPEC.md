@@ -849,7 +849,7 @@ enabled = true                  # the `switchboard` MCP server in every agent pa
 context = ["~/packs/lighthouse"]   # shared notes: files, or folders of .md files
 ```
 
-`remote = "me@box"` runs the window against a hub on that host, `remote_off = true` keeps the host but runs the hub here (the switch on the rail sets it), and `remote_command` replaces the ssh command (29.1).
+`remote = "me@box"` links the window to the hub on that host too, `remote_off = true` opens the window on this computer (the machine rows of the rail set it, 29.13), and `remote_command` replaces the ssh command (29.1).
 
 A missing file gives the defaults. An unknown key is an error with the key name.
 
@@ -1091,6 +1091,7 @@ Where the build differs from the text above:
 - Sandbox (31): the git paths in `denyWrite` are the real paths when the pane starts, not globs such as `modules/*/hooks`: Claude Code skips a glob in a write rule on Linux. So a submodule or a worktree added while the pane runs is not covered until the pane starts again. A `config.worktree` that is not there yet is listed only when `extensions.worktreeConfig` is on, since git reads it only then (and that setting lives in the closed `config`).
 - Repo context (37): built as 37 says. Not built yet: notes in Settings, URL sources, and the notes in the window's review panel.
 - Reconnect and restart (29.12): built as 29.12 says.
+- Both machines at once (29.13): built as 29.13 says. It replaces the restart of the old switch. Messages by name (40.2) are built. The window checks of 29.13 are written, not run here: this Mac has no Chrome.
 - Today (39): built as 39 says, except 39.10. Tell Claude (39.12) is built. A live run against GitHub is `cargo test -p switchboard-core live_today -- --ignored --nocapture` (read only). In remote mode it runs on the server, with the server's `gh` login.
 - Pane tools (36): built, slice 1 (36.8): tasks, the board and the start note. Not built yet: the change feed and its Undo, the "sb" mark and call log on the tile, the switch in Settings (only the config key), review reads, and the Today writes (Done and Later from an agent). The Today reads are built (39.8). Checked on 2026-11-23 with Claude Code 2.1.330: an interactive pane loads the `--mcp-config` server with no "new MCP server" dialog, shows it connected with its 6 tools, and the user's own servers still load.
 - Sandbox (31): the `credentials` key of the sandbox is not used. `denyRead` and the permission deny rules cover the same folders, and an older Claude Code may not know the key.
@@ -1681,8 +1682,8 @@ The hub runs on a server, and the window runs on your computer. The agents, tmux
 
 3. Start the app. It runs `ssh -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 me@box sb attach`, with `~/.local/bin` and `~/.cargo/bin` on the server PATH. `BatchMode` means ssh never asks: a host key it does not know, or a password, fails at once with ssh's reason. The window has no terminal, so a prompt would only wait out the 20 s hello. Connect once with `ssh me@box` in a terminal to accept the host key.
 
-- **The switch.** With `remote` set, the foot of the rail names where the hub runs: the host, or "This computer". A click opens a menu with both. The other one writes `remote_off = true` (or takes it out) in the config of your computer, and the app restarts in that mode. The host stays in the config for the switch back. While the link is down, the banner also offers **Use this computer**. The agents keep running in tmux on each side. A restart from a hub here stops its review runs, as a quit does. `link_mode` is the one command for it, and it runs on your computer (29.2).
-- `SB_REMOTE=me@box switchboard` sets the host for one run. It wins over `remote_off`, and the switch is off for that run.
+- **Both machines.** With `remote` set, the hub here and the link to the server both run, and the window shows one of them. The foot of the rail lists the two machines; a click shows the other one at once, with no restart (29.13).
+- `SB_REMOTE=me@box switchboard` sets the host for one run: the server only, with no hub here and no machine rows.
 - `remote_command = ["ssh", "-p", "2222", "me@box", "sb", "attach"]` replaces the whole command.
 - `sb attach` starts `sb serve` when none runs. `sb serve` runs on after the window goes, with its own session (`setsid`). It stops on SIGTERM or SIGINT, and ignores SIGHUP.
 - `sb serve` logs to `~/.switchboard/logs/serve.log`. Its pid is in `run/serve.pid`, and its socket is `run/window.sock` (mode 600).
@@ -1697,7 +1698,7 @@ One JSON object per line, on the window socket. `sb attach` copies its stdin and
 - A command: `{"id":7,"cmd":"pane_open","args":{...}}`. Its answer: `{"id":7,"ok":<value>}` or `{"id":7,"err":"..."}`. Answers can come out of order.
 - News: `{"event":"panes","payload":...}`. Pane bytes: `{"event":"pane_output","payload":{"pane":"p3","data":"<base64>"}}`.
 - One table in `crates/core/src/dispatch.rs` holds every command, for the app and for `sb serve`.
-- In remote mode only `log`, `open_url`, `clip_write` (29.11), `handover_check` and `handover_in` (38.2), `link_state`, `link_reconnect` and `link_mode` run on your computer. A test keeps that list short. So a server can make the app do nothing else on your computer: it can write your clipboard, never read it.
+- In remote mode only `log`, `open_url`, `clip_write` (29.11), `handover_check` and `handover_in` (38.2), `link_state`, `link_reconnect`, `machine_show` and `machine_other` (29.13) and `app_restart` (29.12) run on your computer. A test keeps that list short. So a server can make the app do nothing else on your computer: it can write your clipboard, never read it.
 
 ### 29.3 One window at a time
 
@@ -1812,10 +1813,23 @@ An agent on a remote hub cannot read the clipboard of the window's machine. So t
 
 - **Reconnect on its own.** A link that goes down connects again with no click: after 1 s, then 2, 4, 8, and every 15 s while it stays down. The banner says "Reconnecting on its own…", and Reconnect still works at once. `sb attach` starts `sb serve` when none runs, so a hub that stopped comes back with the link.
 - Not after a takeover: two windows would take the hub from each other for ever. "Take it back" stays a click.
-- **Restart** is in the host menu (a click on the host name in the top bar), also with no server in the config.
+- **Restart** is in the host menu (a click on the host name at the foot of the rail, or on the machine shown when both run), also with no server in the config.
   - Remote mode: **Restart the hub on <host>** and **Restart this app**. The hub restart sends `hub_restart`. `sb serve` answers, stops its review runs, and starts again in place with `exec`: the same pid, with the `sb` binary on disk now. So an install on the server takes effect with one click. The link drops, and the window links back on its own.
   - Local mode: **Restart Switchboard**. The app starts again; its hub starts with it.
   - Agents keep running in tmux. The new hub takes them over, as after any start.
+
+### 29.13 Both machines at once
+
+You work on the server and on your computer, and switch between them with one click.
+
+- **What runs.** With `remote` in the config, the app starts the hub here and the link to the server, side by side. `SB_REMOTE` runs the server only. A hub here that does not start leaves the server alone, with the error in the log.
+- **The rail.** Its foot lists the two machines, this computer first: a dot (green, red with no link), the name (this computer's machine name of 40.1, the server's host after `@`), and the number of agents that wait on you there. The machine shown is lit. On the icon rail, the dot and the number; the name is in the tooltip.
+- **A click** on the other machine shows it at once: `machine_show` sets where the window's commands go, and the window loads that machine's panes, reviews and tasks again. The Board, Tasks and Today stay; another tab goes back to the Board. A click on the machine shown opens its menu, with Restart (29.12). Nothing stops: the agents of both keep running. The next start opens on the machine shown last (`remote_off` in the config).
+- **The other machine.** Its news does not reach the window, except its panes, as `other_pane(s)`, for its number. `machine_other` loads its panes after a switch and when the server's link comes back.
+- **A lost link.** The banner shows only while the window shows the server. Its **Use this computer** shows this computer. The server's dot goes red.
+- **Messages** (40). The hub here always runs, so agents here get messages in both views.
+- **Handover** (38) shows this computer when it is done; no restart.
+- Window checks: both rows, the server down; Use this computer with no restart; the count of the other machine and its update; the menu of the machine shown; the switch back.
 
 ## 30. Work environment
 
@@ -2758,7 +2772,7 @@ Two commands of the app (29.2) run here, in remote mode only. The window sends t
 
 ### 38.3 The switch and the arrival
 
-After `handover_in`, the window closes the agent on the server if you chose that, then calls `link_mode` (29.1): the app restarts on this computer. There the window calls `handover_take` after its first load. The hub reads the pending handover once, copies the session file into Claude Code's folder for the new worktree (`<claude>/projects/<path with each character that is not a letter, digit or - as ->`), in the active connection's Claude folder, and starts Claude Code there with `--resume <session>`. With no session file, a new agent starts. The window opens the agent, and a note says what came along: "Continued from box: branch feat, 3 changed files, the conversation."
+After `handover_in`, the window closes the agent on the server if you chose that, then shows this computer (29.13), with no restart, and calls `handover_take`. With `SB_REMOTE` there is no hub here: a note says to start the app without it, and the window calls `handover_take` after that start's first load. The hub reads the pending handover once, copies the session file into Claude Code's folder for the new worktree (`<claude>/projects/<path with each character that is not a letter, digit or - as ->`), in the active connection's Claude folder, and starts Claude Code there with `--resume <session>`. With no session file, a new agent starts. The window opens the agent, and a note says what came along: "Continued from box: branch feat, 3 changed files, the conversation."
 
 ### 38.4 The dialog
 
@@ -2959,7 +2973,8 @@ An agent sends a message to another agent, on the same machine or on the other o
 
 ### 40.2 Send
 
-- The pane tool `message_send(to, text)`, or `sb msg send <address>` with the text on stdin, in a pane.
+- The pane tool `message_send(to, text)`, or `sb msg send <to>` with the text on stdin, in a pane.
+- **By name.** `to` is an address, or a name: you say "tell sandcastle to rerun the tests" in any pane, and the agent sends to `sandcastle`. The mailbox hub takes the one agent, on either machine, whose title is that name, in any case; with none, the one whose branch is. The sender is left out. No match, or more than one, is refused with the addresses to pick from.
 - On the server, the request goes to its hub. On your computer, it goes to the server over ssh: `ssh -T -o BatchMode=yes <host> sb msg send-json`, with the sender, label and text as JSON on stdin. The label comes from the folder: repo, branch and pane.
 - The hub refuses a send to itself, a bad address, an agent that does not run (on the server, or on a linked machine), an empty text, and a sender over its limit. A machine with no link takes the message; it waits for the link.
 - The text loses control characters but newline and tab, and is cut to 8000 characters.
@@ -2983,7 +2998,7 @@ Each hub hands messages to its own agents. A message waits in the hub's queue fo
 - A hub on a computer with `remote` keeps one link to the server while it runs: `ssh … sb msg watch <machine>`. `sb msg watch` connects to the server's hub, which holds the connection.
 - The server sends every new message for that machine, at once and as it comes. The computer sends its agent list when it changes, and `handed` with each id it hands. The server takes only that machine's agents and ids from the link.
 - A newer link of the same machine replaces an older one. When the link ends, its agents leave the list. It starts again after 2 s, and waits up to 60 s after links that fail at once. The computer drops an id it has handed already.
-- In remote mode no hub runs on your computer (29), so its agents get no messages until it runs again. They can still send: the send goes over ssh.
+- The hub on your computer runs in both views of the window (29.13), so its agents get messages while the window shows the server. With `SB_REMOTE` no hub runs here: its agents get no messages until one runs again. They can still send: the send goes over ssh.
 
 ### 40.6 Limits
 
