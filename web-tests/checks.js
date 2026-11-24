@@ -2674,6 +2674,55 @@
     $('#view-today [data-job="Lighthouse dev"]').click();
     await wait(60);
     check("a job tab asks for that job and marks the last one looked at", called("today").at(-1)?.[1].job === "Lighthouse dev" && called("today_looked").some((c) => c[1].job === "Everything"));
+    // Any repo (SPEC 39.13): a severity chip, + Add a job with the repo check, and the job menu.
+    {
+      window.__today = { ...window.__today, sections: window.__today.sections.map((x) => x.key === "reviews" ? { ...x, items: [...x.items, it(172, "reviews", "Shota replied 2 days ago. Answer.", { repo: "eb/lh", severity: "High", issue: true })] } : x) };
+      window.__emit("today", { refreshing: false });
+      await upto(() => $("#view-today .tdsev"));
+      check("a report shows its severity as a chip", $("#view-today .tdsev.sev-high")?.textContent === "High");
+      $("#view-today [data-addjob]").click();
+      await wait(30);
+      check("+ opens Add a job with the cursor in the repo box", !$("#tdform").hidden && $("#tdft").textContent === "Add a job" && document.activeElement === $("#tdfrepo"));
+      $("#tdfrepo").value = "eb/lh";
+      $("#tdfrepo").dispatchEvent(new Event("input", { bubbles: true }));
+      $("#tdfrepo").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await upto(() => $("#tdform .tdfcheck.ok"));
+      check("Enter checks the repo with gh and says what it found", $("#tdform .tdfcheck.ok")?.textContent.includes("40 open issues · 3 open PRs") && called("today_repo_check").at(-1)?.[1].repo === "eb/lh");
+      check("the form guesses bug reports, with severity and hide from the repo's labels", $('#tdform [name="tdfkind"][value="reports"]').checked && $('#tdform [name="tdfscope"][value="all"]').checked
+        && [...$$('#tdform [data-chipx="severity"]')].length === 3 && $("#tdfname").value === "lh");
+      $("#tdfname").value = "Bug bounty";
+      $("#tdfname").dispatchEvent(new Event("input", { bubbles: true }));
+      $("#tdform [data-fsave]").click();
+      await wait(80);
+      const sv = called("today_job_save").at(-1)?.[1].form;
+      check("Add job saves the form and opens the job", sv?.name === "Bug bounty" && sv.repos.join() === "eb/lh" && sv.kind === "reports" && sv.severity.join() === "Critical,High,Low" && sv.hide_labels.join() === "wontfix" && sv.read.join() === "issues,prs"
+        && $("#tdform").hidden && called("today").at(-1)?.[1].job === "Bug bounty", JSON.stringify(sv));
+      $("#view-today [data-addjob]").click();
+      await wait(20);
+      $("#tdfrepo").value = "no/such";
+      $("#tdfrepo").dispatchEvent(new Event("input", { bubbles: true }));
+      $("#tdform [data-repoadd]").click();
+      await upto(() => $("#tdform .tdfcheck.bad"));
+      check("a repo you can't read says so", $("#tdform .tdfcheck.bad")?.textContent.includes("can't read"));
+      $("#tdfrepo").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await wait(20);
+      check("Escape closes the form", $("#tdform").hidden);
+      $('#view-today [data-jmenu="Lighthouse dev"]').click();
+      await wait(20);
+      check("a job tab's menu has Edit, Refresh and Remove", all("#view-today .tdjmenu [data-jact]").map((b) => b.textContent).join("|") === "Edit job…|Refresh this job|Remove job");
+      $('#view-today [data-jact="edit"]').click();
+      await upto(() => !$("#tdform").hidden);
+      check("Edit job opens the form with the job", $("#tdft").textContent === "Edit job" && $("#tdfname").value === "Lighthouse dev" && called("today_job").at(-1)?.[1].name === "Lighthouse dev");
+      $("#tdform [data-fclose]").click();
+      $('#view-today [data-jmenu="Lighthouse dev"]').click();
+      await wait(20);
+      const conf = window.confirm;
+      window.confirm = () => true;
+      $('#view-today [data-jact="remove"]').click();
+      await wait(80);
+      window.confirm = conf;
+      check("Remove job takes it out and goes to Everything", called("today_job_remove").at(-1)?.[1].name === "Lighthouse dev" && called("today").at(-1)?.[1].job === "Everything");
+    }
     // Tell Claude (39.11): the box, a note, the reply, the Hidden list and Forget.
     $('#view-today [data-job="Everything"]').click();
     await wait(60);

@@ -8,7 +8,7 @@
 
   // `sel`: the key of the selected row. `later`: the row whose Later menu is open.
   // `undo`: the last Done or Later, to take back. `g`: Leader-free `g` waits for a number.
-  const D = { job: load("job") || "Everything", v: null, sel: null, later: null, undo: null, g: false, busy: false, fresh: 0 };
+  const D = { job: load("job") || "Everything", v: null, sel: null, later: null, undo: null, g: false, busy: false, fresh: 0, menu: null, form: null };
   const view = () => $("#view-today");
   const keyOf = (i) => `${i.repo.toLowerCase()}#${i.number}#${i.section === "changed" ? "c" : ""}`;
   const rows = () => (D.v ? D.v.sections.flatMap((s) => s.items) : []);
@@ -57,9 +57,13 @@
 
   // ---------- drawing ----------
 
+  // A report's severity as a chip (SPEC 39.13): its color comes from its name.
+  const SEV_CLASS = { critical: "crit", high: "high", medium: "med", low: "low", informational: "info", info: "info" };
+  const sevChip = (i) => i.severity ? `<span class="tdsev sev-${SEV_CLASS[i.severity.toLowerCase()] || "other"}">${esc(i.severity)}</span>` : "";
+
   function rowHTML(i) {
     const k = keyOf(i);
-    const tags = i.tags.map((t) => `<span class="tdtag${t === "came back" ? " back" : ""}">${esc(t)}</span>`).join("");
+    const tags = sevChip(i) + i.tags.map((t) => `<span class="tdtag${t === "came back" ? " back" : ""}">${esc(t)}</span>`).join("");
     return `<div class="tdrow${D.sel === k ? " sel" : ""}" data-k="${esc(k)}" role="option" aria-selected="${D.sel === k}">
       <button class="tdcheck" type="button" data-act="done" title="Done (x)" aria-label="Mark ${esc(name(i))} done"></button>
       <span class="tdname">${esc(name(i))}</span>
@@ -81,7 +85,7 @@
       : `<div class="tdacts"><button class="btn" type="button" data-act="done">Done <kbd>x</kbd></button><button class="btn" type="button" data-act="later" aria-expanded="${D.later === keyOf(i)}">Later <kbd>l</kbd></button></div>
          <p class="tdnote">Done hides it until someone else acts on the PR. Later hides it until a time you pick.</p>${later}`;
     return `${back}
-      <div class="tdph"><span class="tdname">${esc(i.repo)}#${i.number}</span></div>
+      <div class="tdph"><span class="tdname">${esc(i.repo)}#${i.number}</span>${sevChip(i)}${i.issue ? `<span class="tdtag">issue</span>` : ""}</div>
       <h2 class="tdtitle">${esc(i.title)}</h2>
       <p class="tdtodo">${esc(i.line)}</p>
       ${detail}
@@ -91,7 +95,7 @@
       <div class="tdlinks">
         <button class="linkish" type="button" data-act="open">Open on GitHub <kbd>o</kbd></button>
         <button class="linkish" type="button" data-act="task">Make a task <kbd>t</kbd></button>
-        <button class="linkish" type="button" data-act="review">Start review <kbd>r</kbd></button>
+        ${i.issue ? "" : `<button class="linkish" type="button" data-act="review">Start review <kbd>r</kbd></button>`}
         <button class="linkish" type="button" data-act="about">Tell Claude about this one</button>
       </div>`;
   }
@@ -104,7 +108,13 @@
       el.innerHTML = `<header class="head"><h1 class="htitle">Today</h1></header><div class="tdwait">Loading what needs you on GitHub…</div>`;
       return;
     }
-    const tabs = v.jobs.map((j, n) => `<button class="tdjob" type="button" data-job="${esc(j.name)}" aria-current="${j.name === v.job ? "page" : "false"}" title="${esc(j.name)} (g ${n + 1})">${esc(j.name)}<span class="nc">${j.count || ""}</span></button>`).join("");
+    // A job of your own has a ⋯ menu; + adds a job (SPEC 39.13.4).
+    const tabs = v.jobs.map((j, n) => {
+      const tab = `<button class="tdjob" type="button" data-job="${esc(j.name)}" aria-current="${j.name === v.job ? "page" : "false"}" title="${esc(j.name)} (g ${n + 1})">${esc(j.name)}<span class="nc">${j.count || ""}</span></button>`;
+      if (n === 0) return tab;
+      const menu = D.menu === j.name ? `<div class="tdjmenu" role="menu"><button type="button" role="menuitem" data-jact="edit">Edit job…</button><button type="button" role="menuitem" data-jact="refresh">Refresh this job</button><button type="button" role="menuitem" class="danger" data-jact="remove">Remove job</button><span class="tk-info">Remove takes the job out of the config. The repo's rules stay.</span></div>` : "";
+      return `<span class="tdjobw">${tab}<button type="button" class="tdjmore" data-jmenu="${esc(j.name)}" aria-label="${esc(j.name)}: more" aria-haspopup="menu" aria-expanded="${D.menu === j.name}">⋯</button>${menu}</span>`;
+    }).join("") + `<button type="button" class="tdjadd" data-addjob aria-label="Add a job" title="Add a job">+</button>`;
     const shown = rows();
     const doneToday = v.done.filter((i) => (i.done_at || 0) >= startOfDay()).length;
     const total = shown.length + doneToday;
@@ -139,7 +149,7 @@
         </div>
         <aside class="tdpanel" aria-label="The selected item">${panelHTML(byKey(D.sel))}</aside>
       </div>
-      <footer class="tdkeys">j/k move · x done · l later · u undo · o open on GitHub · r review · t task · c tell Claude · g 1–9 job</footer>`;
+      <footer class="tdkeys">j/k move · x done · l later · u undo · o open on GitHub · r review · t task · c tell Claude · g 1–9 job · + add a job</footer>`;
     if (typed) {
       const inp = el.querySelector("#tdtellin");
       inp.value = typed.value;
@@ -196,6 +206,177 @@
   }
   const open = (i) => i && invoke("open_url", { url: i.url }).catch(toast);
 
+  // ---------- Add a job (SPEC 39.13.4) ----------
+  // The form lives in its own element, so a refresh of the list never redraws it.
+
+  const formEl = () => {
+    let f = document.getElementById("tdform");
+    if (!f) { f = Object.assign(document.createElement("div"), { id: "tdform", className: "modal tdformwrap" }); f.hidden = true; document.body.appendChild(f); }
+    return f;
+  };
+  const blankForm = () => ({ name: "", old_name: null, repos: [], repoIn: "", check: null, read: ["prs"], scope: "mine", kind: "code", severity: [], tag_labels: [], hide_labels: [], reply_days: 2, labels: [], error: "", saving: false });
+
+  async function openForm(job) {
+    D.menu = null;
+    D.form = blankForm();
+    if (job) {
+      try { Object.assign(D.form, await call("today_job", { name: job })); } catch (e) { return toast(e); }
+      D.form.repoIn = "";
+      if (D.form.repos[0]) checkRepo(D.form.repos[0], false);
+    }
+    drawForm();
+    formEl().querySelector(job ? "#tdfname" : "#tdfrepo")?.focus();
+  }
+  function closeForm() { D.form = null; formEl().hidden = true; formEl().innerHTML = ""; view()?.querySelector(".tdmain")?.focus(); }
+
+  // Checks a repo with gh. `guess`: fill in kind, severity and hide from it.
+  async function checkRepo(repo, guess = true) {
+    const f = D.form;
+    if (!f || !repo) return;
+    f.check = { busy: true, repo };
+    drawForm();
+    try {
+      const g = await call("today_repo_check", { repo });
+      if (D.form !== f) return;
+      f.check = { ok: true, repo, text: `You can read it${g.private ? " (private)" : ""} · ${g.issues} open issues · ${g.prs} open PRs · ${g.labels.length} labels` };
+      f.labels = g.labels;
+      if (guess) {
+        f.kind = g.kind;
+        if (g.kind === "reports") {
+          f.read = ["issues", "prs"];
+          f.scope = "all";
+          if (!f.severity.length) f.severity = g.severity;
+          if (!f.hide_labels.length) f.hide_labels = g.hide_labels;
+        }
+        if (!f.name) f.name = repo.split("/").pop();
+      }
+    } catch (e) {
+      if (D.form !== f) return;
+      f.check = { ok: false, repo, text: String(e) };
+    }
+    drawForm();
+  }
+
+  function chips(key, list) {
+    const left = (D.form.labels || []).filter((l) => !list.some((x) => x.toLowerCase() === l.toLowerCase()));
+    return `<div class="tdchips">${list.map((l, n) => `<span class="tdchip">${esc(l)}<button type="button" data-chipx="${key}" data-n="${n}" aria-label="Remove ${esc(l)}">×</button></span>`).join("")}
+      <select data-chipadd="${key}" aria-label="Add a label"><option value="">+ label</option>${left.map((l) => `<option>${esc(l)}</option>`).join("")}</select></div>`;
+  }
+
+  function drawForm() {
+    const f = D.form;
+    const el = formEl();
+    if (!f) return closeForm();
+    const active = document.activeElement?.id;
+    const reports = f.kind === "reports";
+    const check = f.check ? `<p class="tdfcheck ${f.check.busy ? "" : f.check.ok ? "ok" : "bad"}" role="status">${f.check.busy ? `Checking ${esc(f.check.repo)}…` : `${f.check.ok ? "✓ " : ""}${esc(f.check.repo)}: ${esc(f.check.text)}`}</p>` : "";
+    el.hidden = false;
+    el.innerHTML = `<div class="tdform" role="dialog" aria-modal="true" aria-labelledby="tdft">
+      <div class="tdfhead"><h2 id="tdft">${f.old_name ? "Edit job" : "Add a job"}</h2><button type="button" class="icon" data-fclose aria-label="Close">×</button></div>
+      <div class="tdfgrid">
+        <label for="tdfname">Name</label><input id="tdfname" type="text" value="${esc(f.name)}" autocomplete="off">
+        <label for="tdfrepo">Repos</label>
+        <div>
+          <div class="tdchips">${f.repos.map((r, n) => `<span class="tdchip mono">${esc(r)}<button type="button" data-repox="${n}" aria-label="Remove ${esc(r)}">×</button></span>`).join("")}</div>
+          <div class="tdfrow"><input id="tdfrepo" class="mono" type="text" placeholder="owner/name" value="${esc(f.repoIn)}" autocomplete="off"><button type="button" class="btn" data-repoadd>Add repo</button></div>
+          ${check}
+        </div>
+        <span>Read</span>
+        <div class="tdfrow"><label><input type="checkbox" data-read="issues"${f.read.includes("issues") ? " checked" : ""}> Issues</label><label><input type="checkbox" data-read="prs"${f.read.includes("prs") ? " checked" : ""}> PRs</label></div>
+        <span>Whose</span>
+        <div class="tdfcol"><label><input type="radio" name="tdfscope" value="mine"${f.scope !== "all" ? " checked" : ""}> Items that involve me <small>yours, assigned to you, asked of you, mentions</small></label>
+          <label><input type="radio" name="tdfscope" value="all"${f.scope === "all" ? " checked" : ""}> Every open item <small>for a repo you triage</small></label></div>
+        <span>Kind</span>
+        <div class="tdfcol"><div class="tdfrow"><label><input type="radio" name="tdfkind" value="code"${!reports ? " checked" : ""}> Code repo</label><label><input type="radio" name="tdfkind" value="reports"${reports ? " checked" : ""}> Bug reports</label></div>
+          <small>A guess from the repo: more open issues than PRs, and labels that look like severity.</small></div>
+        ${reports ? `<span>Severity</span><div>${chips("severity", f.severity)}<small>The worst first. A worse label ranks a report higher.</small></div>
+        <span>Tags</span><div>${chips("tag_labels", f.tag_labels)}<small>Shown on the row, for example where a report came from.</small></div>
+        <span>Hide</span><div>${chips("hide_labels", f.hide_labels)}<small>An item with one of these never shows.</small></div>
+        <label for="tdfreply">Reply in</label><div class="tdfrow"><input id="tdfreply" type="number" min="1" max="60" value="${esc(f.reply_days)}"> days <small>A report with no team reply after this is late.</small></div>` : ""}
+      </div>
+      ${f.error ? `<p class="tdfcheck bad" role="alert">${esc(f.error)}</p>` : ""}
+      <div class="tdffoot"><small>Saved to your Switchboard config. Your comments there stay.</small><button type="button" class="btn" data-fclose>Cancel</button><button type="button" class="btn primary" data-fsave${f.saving ? " disabled" : ""}>${f.old_name ? "Save job" : "Add job"}</button></div>
+    </div>`;
+    if (active) el.querySelector(`#${active}`)?.focus();
+  }
+
+  function addRepo() {
+    const f = D.form;
+    const r = f.repoIn.trim().replace(/^https:\/\/github\.com\//, "").replace(/\/$/, "");
+    if (!r) return;
+    if (!f.repos.some((x) => x.toLowerCase() === r.toLowerCase())) f.repos.push(r);
+    f.repoIn = "";
+    checkRepo(r, f.repos.length === 1);
+  }
+
+  async function saveForm() {
+    const f = D.form;
+    if (f.repoIn.trim()) addRepo();
+    f.error = "";
+    f.saving = true;
+    drawForm();
+    const form = { name: f.name, old_name: f.old_name, repos: f.repos, read: f.read, scope: f.scope, kind: f.kind, severity: f.severity, tag_labels: f.tag_labels, hide_labels: f.hide_labels, reply_days: Number(f.reply_days) || 2 };
+    try {
+      await call("today_job_save", { form });
+    } catch (e) {
+      if (D.form === f) { f.error = String(e); f.saving = false; drawForm(); }
+      return;
+    }
+    closeForm();
+    toast(`${form.old_name ? "Saved" : "Added"} ${form.name.trim()}. Today refreshes.`);
+    await pickJob(form.name.trim());
+  }
+
+  document.addEventListener("click", (e) => {
+    const el = document.getElementById("tdform");
+    if (!el || el.hidden || !el.contains(e.target)) return;
+    const f = D.form;
+    if (e.target === el || e.target.closest("[data-fclose]")) return closeForm();
+    if (e.target.closest("[data-fsave]")) return saveForm();
+    if (e.target.closest("[data-repoadd]")) return addRepo();
+    const rx = e.target.closest("[data-repox]");
+    if (rx) { f.repos.splice(Number(rx.dataset.repox), 1); return drawForm(); }
+    const cx = e.target.closest("[data-chipx]");
+    if (cx) { f[cx.dataset.chipx].splice(Number(cx.dataset.n), 1); return drawForm(); }
+  });
+  document.addEventListener("input", (e) => {
+    const f = D.form;
+    if (!f || !e.target.closest?.("#tdform")) return;
+    const t = e.target;
+    if (t.id === "tdfname") f.name = t.value;
+    if (t.id === "tdfrepo") f.repoIn = t.value;
+    if (t.id === "tdfreply") f.reply_days = t.value;
+  });
+  document.addEventListener("change", (e) => {
+    const f = D.form;
+    if (!f || !e.target.closest?.("#tdform")) return;
+    const t = e.target;
+    if (t.dataset.read) { f.read = [...new Set(t.checked ? [...f.read, t.dataset.read] : f.read.filter((x) => x !== t.dataset.read))]; return drawForm(); }
+    if (t.name === "tdfscope") f.scope = t.value;
+    if (t.name === "tdfkind") { f.kind = t.value; return drawForm(); }
+    if (t.dataset.chipadd && t.value) { f[t.dataset.chipadd].push(t.value); return drawForm(); }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (!D.form || !e.target.closest?.("#tdform")) return;
+    e.stopPropagation();
+    if (e.key === "Escape") { e.preventDefault(); return closeForm(); }
+    if (e.key === "Enter" && e.target.id === "tdfrepo") { e.preventDefault(); return addRepo(); }
+    if (e.key === "Enter" && e.target.tagName === "INPUT" && e.target.type !== "checkbox" && e.target.type !== "radio") { e.preventDefault(); return saveForm(); }
+  }, true);
+
+  // The ⋯ menu of a job.
+  async function jobAct(act, job) {
+    D.menu = null;
+    if (act === "edit") return openForm(job);
+    if (act === "refresh") { call("today_refresh").catch(() => {}); return draw(); }
+    if (act === "remove") {
+      if (!confirm(`Remove the job "${job}"? The repo's rules stay in the config.`)) return draw();
+      try { await call("today_job_remove", { name: job }); } catch (e) { return toast(e); }
+      toast(`Removed ${job}.`);
+      return pickJob("Everything");
+    }
+  }
+
   // Tell Claude (39.12): a note on what is wrong with the list.
   function focusTell(prefix) {
     const inp = view()?.querySelector("#tdtellin");
@@ -242,6 +423,12 @@
   document.addEventListener("click", (e) => {
     const el = view();
     if (!el || !el.contains(e.target)) return;
+    if (e.target.closest("[data-addjob]")) return openForm(null);
+    const jm = e.target.closest("[data-jmenu]");
+    if (jm) { D.menu = D.menu === jm.dataset.jmenu ? null : jm.dataset.jmenu; return draw(); }
+    const ja = e.target.closest("[data-jact]");
+    if (ja) return jobAct(ja.dataset.jact, D.menu);
+    if (D.menu) { D.menu = null; draw(); }
     if (e.target.closest("#tdrefresh")) { call("today_refresh").catch(() => {}); D.v.refreshing = true; draw(); return; }
     const j = e.target.closest("[data-job]");
     if (j) return pickJob(j.dataset.job);
@@ -287,7 +474,7 @@
     }
     if (D.later && ["1", "2", "3"].includes(e.key)) { e.preventDefault(); return later(it, laterTimes()[Number(e.key) - 1][1]); }
     const k = { j: () => step(1), ArrowDown: () => step(1), k: () => step(-1), ArrowUp: () => step(-1), x: () => done(it), l: () => { D.later = D.later ? null : D.sel; draw(); },
-      u: () => undo(), o: () => open(it), r: () => review(it).catch(() => {}), t: () => makeTask(it).catch(() => {}), g: () => { D.g = true; }, c: () => focusTell(),
+      u: () => undo(), o: () => open(it), r: () => review(it).catch(() => {}), t: () => makeTask(it).catch(() => {}), g: () => { D.g = true; }, c: () => focusTell(), "+": () => openForm(null),
       Escape: () => { if (D.later) { D.later = null; draw(); } } }[e.key];
     if (!k) return;
     e.preventDefault();
@@ -299,7 +486,8 @@
     draw: () => { draw(); refresh(); view()?.querySelector(".tdmain")?.focus(); },
     leave: () => { if (D.v) invoke("today_looked", { job: D.v.job }).catch(() => {}); },
     // Your PRs and Reviews of the job, for the rail.
-    count: () => (D.v ? D.v.sections.filter((s) => s.key === "mine" || s.key === "reviews").reduce((a, s) => a + s.items.length, 0) : 0),
+    count: () => (D.v ? D.v.sections.filter((s) => ["mine", "reviews", "assigned", "triage"].includes(s.key)).reduce((a, s) => a + s.items.length, 0) : 0),
+    openForm,
     refresh,
   };
 })();

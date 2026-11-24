@@ -195,6 +195,9 @@ mod tests {
             why: String::new(),
             labels: vec!["focil".into()],
             claude: None,
+            severity: None,
+            issue: false,
+            wide: false,
         }
     }
 

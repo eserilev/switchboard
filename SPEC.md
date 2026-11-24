@@ -1110,7 +1110,7 @@ Where the build differs from the text above:
 - Repo context (37): built as 37 says. Not built yet: notes in Settings, URL sources, and the notes in the window's review panel.
 - Reconnect and restart (29.12): built as 29.12 says.
 - Both machines at once (29.13): built as 29.13 says. It replaces the restart of the old switch. Messages by name (40.2) are built. The window checks of 29.13 are written, not run here: this Mac has no Chrome.
-- Today (39): built as 39 says, except 39.10. Tell Claude (39.12) is built. A live run against GitHub is `cargo test -p switchboard-core live_today -- --ignored --nocapture` (read only). In remote mode it runs on the server, with the server's `gh` login.
+- Today (39): built as 39 says, except 39.10. Tell Claude (39.12) is built. Any repo and issues (39.13) is built, as 39.13.8 says. A live run against GitHub is `cargo test -p switchboard-core live_today -- --ignored --nocapture` (read only). In remote mode it runs on the server, with the server's `gh` login.
 - Pane tools (36): built, slice 1 (36.8): tasks, the board and the start note. Not built yet: the change feed and its Undo, the "sb" mark and call log on the tile, the switch in Settings (only the config key), review reads, and the Today writes (Done and Later from an agent). The Today reads are built (39.8). Checked on 2026-11-23 with Claude Code 2.1.330: an interactive pane loads the `--mcp-config` server with no "new MCP server" dialog, shows it connected with its 6 tools, and the user's own servers still load.
 - Sandbox (31): the `credentials` key of the sandbox is not used. `denyRead` and the permission deny rules cover the same folders, and an older Claude Code may not know the key.
 - Claude points to the code (11.15): not checked with a real `claude` yet. Not verified: that Claude calls `review_show` when asked where something is or what to fix, that it cites `path:line` as the system prompt asks, that an interactive pane runs a `--mcp-config` server with no "new MCP server" dialog, that the allow rule runs the tool with no prompt, and that the Stop input of the Claude Code in use has `last_assistant_message` (else the session file is read).
@@ -2977,6 +2977,129 @@ The rules in code do not know what matters to you this week. You tell Claude in 
 - **The store:** the notes in the setting `today.notes`, Claude's last answer in `today.judged` with a fingerprint of its input. A restart does not ask Claude again.
 - **Agents:** `today_list` and `sb today` leave hidden items out, and end with "Hidden by the user's notes to Claude: #N, …".
 - Notes change only Switchboard's store, never GitHub. A Done or Later of a hidden item stays as it was.
+
+### 39.13 Any repo, and issues
+
+Status: built (39.13.8 lists what differs). The design mockup: https://claude.ai/artifact/XiJUeHKruRtZJukxvRMgdW.
+
+Today v1 reads only PRs that involve you: yours, reviews asked of you, mentions. That fits a code repo such as `sigp/lighthouse`. It misses a repo where the work is issues. Example: `ethereum-bounty/lighthouse` (private) holds bug reports. It has 40 open issues and 3 open PRs. The issues have severity labels (Critical, High, Medium, Low, Informational) and source labels (Bug Bounty, Security Team). The PRs are proofs of concept. Most reports involve you only when someone assigns you.
+
+The change: a job says which repos, what to read and whose items. A repo says how to rank them. A form in Today adds a job, with no file to edit.
+
+#### 39.13.1 Config
+
+```toml
+[today.jobs."Lighthouse dev"]          # as now
+repos = ["sigp/lighthouse"]
+
+[today.jobs."Bug bounty"]
+repos = ["ethereum-bounty/lighthouse"]
+read = ["issues", "prs"]               # default ["prs"]
+scope = "all"                          # "mine" (default): items that involve you. "all": every open item
+
+[today.repos."ethereum-bounty/lighthouse"]
+kind = "reports"                       # "code" (default) or "reports": the rules of 39.13.3
+severity = ["Critical", "High", "Medium", "Low", "Informational"]   # labels, the worst first
+hide_labels = ["wontfix", "duplicate", "invalid", "Resolved"]
+tag_labels = ["Bug Bounty", "Security Team"]   # shown as a tag on the row
+reply_days = 2                         # a report with no team reply after this is late
+stale_days = 14
+```
+
+- `read` and `scope` belong to the job. `kind` and the label lists belong to the repo, so two jobs that share a repo rank it the same way.
+- `only` (39.3) still limits Everything. A job's own repos are read even when `only` leaves them out: you added that job on purpose.
+- **Everything** keeps "involves you": your PRs, reviews asked of you, mentions, and now issues assigned to you. The other items of a `scope = "all"` job show only in that job's tab. So Everything does not fill up with 40 reports.
+
+#### 39.13.2 Fetch
+
+- **`scope = "mine"` with issues:** `is:issue is:open involves:@me repo:…` and `is:issue is:open assignee:@me repo:…`, beside the PR searches of 39.6.
+- **`scope = "all"`:** `repo:… is:open is:issue` and `repo:… is:open is:pr`, sorted by update, at most 100 of each. With more, the tab says "100 of 340, newest first".
+- **The fields of an issue:** number, title, url, author, `authorAssociation`, labels, assignees, created and updated time, the last 10 comments (author, `authorAssociation`, time, body), and the PRs that name it (cross-reference events), with their state.
+- **The team:** a comment author with `authorAssociation` OWNER, MEMBER or COLLABORATOR. Anyone else is a reporter. You count as the team. Bots never count (39.3).
+- One refresh serves every job, as now.
+
+#### 39.13.3 Sections and rules of a "reports" repo
+
+A job whose repos are all `kind = "reports"` shows these sections in place of Your PRs, Reviews and In your area:
+
+| Section | What is in it |
+|---|---|
+| **Assigned to you** | Open issues assigned to you. |
+| **Needs triage** | Open issues with no assignee, or with no severity label. |
+| **Waiting on the team** | Open issues where a reporter wrote last, longer ago than `reply_days`. |
+| **Proofs of concept** | Open PRs of the repo. |
+| **What changed** | As now (39.4): your issues closed or labelled in the last 3 days. |
+
+The rules. Each gives a line and a weight, as in 39.4:
+
+| Rule | When | Line | Weight |
+|---|---|---|---|
+| `reporter_replied` | Assigned to you, and a reporter wrote after your last comment. | "Shota replied 2 days ago. Answer." | 45 |
+| `mentioned` | Your login in a comment after your last comment. | "Matus asked you 1 day ago." | 40 |
+| `no_severity` | No severity label. | "New report, no severity yet." | 35 |
+| `no_team_reply` | No team comment, older than `reply_days`. | "No reply in 4 days." | 30 |
+| `no_fix` | Assigned to you; no PR names it. | "No fix PR yet." | 30 |
+| `fix_open` | Assigned to you; an open PR names it. | "Fix PR sigp/lighthouse#10600 is open: review it." | 25 |
+| `unassigned` | A severity label, no assignee. | "High report with no owner." | 20 |
+| `stale` | No event for `stale_days`. | "No activity in 15 days." | 10 |
+
+- **Severity raises the rank** inside a section: Critical +40, High +30, Medium +20, Low +10, Informational 0. The list order of `severity` sets this, so a repo with other names works too.
+- **The row:** the issue number, the line, the title, the severity as a colored chip, and the `tag_labels` it has.
+- An item with a `hide_labels` label never shows.
+- Done, Later, Tell Claude (39.12), the panel and Why work the same for issues. An issue and a PR of one repo never share a number, so the key stays repo and number.
+
+A job with both kinds of repo shows both sets of sections: the code sections first.
+
+#### 39.13.4 Add a job, with no file to edit
+
+- A **+** after the last job tab opens **Add a job**:
+
+```
+┌ Add a job ───────────────────────────────────────────────┐
+│ Name      [ Bug bounty                    ]               │
+│ Repos     [ ethereum-bounty/lighthouse    ] [+]           │
+│           ✓ You can read it · 40 open issues · 3 open PRs │
+│ Read      [x] PRs   [x] Issues                            │
+│ Whose     ( ) Items that involve me  (•) Every open item  │
+│ Kind      ( ) Code repo  (•) Bug reports                  │
+│ Severity  Critical › High › Medium › Low › Informational  │
+│           (from the repo's labels; drag to reorder)       │
+│ Hide      [wontfix] [duplicate] [invalid] [Resolved] [+]  │
+│                                    [Cancel]  [Add job]    │
+└──────────────────────────────────────────────────────────┘
+```
+
+  - A repo you type is checked with `gh` at once: whether you can read it, its open counts, and its labels.
+  - **Kind** is a guess: more open issues than PRs, and labels that look like severity (Critical, High, Medium, Low), give Bug reports. You can change it.
+  - **Severity** and **Hide** come from the repo's own labels, filled in from that guess.
+- **Add job** writes `[today.jobs.<name>]` and `[today.repos.<repo>]` to the config with `toml_edit`. Your comments and other keys stay. The new tab opens and refreshes.
+- Each job tab has a `⋯` menu with **Edit job** (the same form) and **Remove job**. Remove takes the job out of the config. It keeps the repo's rules, which another job can use.
+- The form only writes the config. The file stays the source of truth: an edit by hand shows on the next refresh.
+
+#### 39.13.5 Agents and the terminal
+
+- `today_list(job)` and `sb today <job>` show the new sections. Issue titles and comment quotes are marked as GitHub data, as now.
+- `today_item(repo, number)` gives an issue in full: labels, assignees, the last comment of the team and of the reporter, and the fix PRs.
+
+#### 39.13.6 Not in scope
+
+- Writes to GitHub: assign, label, comment or close. Today still only reads.
+- Issues of a code repo that do not involve you. A code repo can have `read = ["issues"]` with `scope = "mine"`.
+
+#### 39.13.8 Where the build differs
+
+- The first section is **For you**, not "Assigned to you": it holds issues assigned to you and issues that ask you by name (`@login`) after your last comment.
+- Severity order is the order you add the labels in the form, the worst first. There is no drag. A new job from a repo check gets the order Critical, High, Medium, Low, Informational from the labels it has.
+- Not built yet: "100 of 340, newest first" on a big repo; What changed for issues; **Start an agent on the fix** in a report's panel.
+- Remove job asks first, with the browser's confirm.
+
+#### 39.13.7 Tests
+
+- Fixture issue JSON: each rule fires, and does not fire for its near misses (a team reply, your own last comment, a bot, a hidden label, an open fix PR for `no_fix`).
+- The severity order from config ranks High above Low, also with other label names.
+- Everything does not show the items of a `scope = "all"` job, but it does show an issue assigned to you.
+- The config write keeps comments and other keys, and Remove keeps the repo rules.
+- Window checks: the + tab, the form with the repo check, the guess of Kind, Add job, the new tab with its sections, Edit and Remove.
 
 ## 40. Messages between agents
 

@@ -169,6 +169,9 @@ window.__TAURI__ = {
         case "panes": return structuredClone(d.panes);
         // Today (SPEC 39): a check sets the hub's answer.
         case "today": return window.__today ? structuredClone(window.__today) : null;
+        // Jobs from the window (SPEC 39.13.4).
+        case "today_repo_check": return args.repo === "eb/lh" ? { ok: true, private: true, issues: 40, prs: 3, labels: ["Critical", "High", "Low", "wontfix", "Bug Bounty"], kind: "reports", severity: ["Critical", "High", "Low"], hide_labels: ["wontfix"] } : Promise.reject(`You can't read ${args.repo}, or it does not exist.`);
+        case "today_job": return { name: args.name, old_name: args.name, repos: ["eb/lh"], read: ["issues"], scope: "all", kind: "reports", severity: ["High"], tag_labels: [], hide_labels: [], reply_days: 2 };
         case "connections": return d.connections;
         // A copy, as from the hub: the window never shares an object with the hub.
         // The app puts the leader of this computer's config in (main.rs), as in remote mode.

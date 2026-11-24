@@ -56,7 +56,7 @@ pub fn ymd(secs: u64) -> String {
 pub fn searches(me: &str, cfg: &today::TodayCfg, now: u64) -> (Vec<String>, Vec<String>, String) {
     let d = |n: u64| ymd(now.saturating_sub(n * 86400));
     // With `only`, each search names its repos: GitHub reads several `repo:` as "any of".
-    let only: String = cfg.only.iter().map(|r| r.trim()).filter(|r| !r.is_empty()).map(|r| format!(" repo:{r}")).collect();
+    let only: String = cfg.limit_repos().iter().map(|r| format!(" repo:{r}")).collect();
     let open = vec![
         format!("is:pr is:open archived:false author:{me}{only}"),
         format!("is:pr is:open archived:false review-requested:{me}{only}"),
@@ -65,6 +65,50 @@ pub fn searches(me: &str, cfg: &today::TodayCfg, now: u64) -> (Vec<String>, Vec<
     ];
     let area = cfg.area_repos().iter().map(|r| format!("repo:{r} is:pr is:open -author:{me} updated:>={}", d(30))).collect();
     (open, area, format!("is:pr author:{me} is:closed closed:>={}{only}", d(3)))
+}
+
+/// The searches of the jobs that read issues or every open item (SPEC 39.13.2):
+/// the issue searches, and the searches for the open PRs of a repo you triage.
+pub fn job_searches(me: &str, cfg: &today::TodayCfg) -> (Vec<String>, Vec<String>) {
+    let mut issues = std::collections::BTreeSet::new();
+    let mut prs = std::collections::BTreeSet::new();
+    for j in cfg.jobs.values() {
+        let repos: Vec<&str> = j.repos.iter().map(|r| r.trim()).filter(|r| !r.is_empty()).collect();
+        if repos.is_empty() {
+            continue;
+        }
+        if j.issues() {
+            let names: String = repos.iter().map(|r| format!(" repo:{r}")).collect();
+            issues.insert(format!("is:issue is:open archived:false involves:{me}{names}"));
+            if j.all() {
+                for r in &repos {
+                    issues.insert(format!("is:issue is:open repo:{r} sort:updated-desc"));
+                }
+            }
+        }
+        if j.prs() && j.all() {
+            for r in &repos {
+                prs.insert(format!("is:pr is:open repo:{r} sort:updated-desc"));
+            }
+        }
+    }
+    (issues.into_iter().collect(), prs.into_iter().collect())
+}
+
+/// The answers of the PR searches and of the issue searches of one refresh.
+type Answers = (Vec<Res<Vec<today::Pr>>>, Vec<Res<Vec<crate::today_issues::Issue>>>);
+
+/// One issue search, as `search` does for PRs.
+fn search_issues(gh: &dyn Gh, q: &str) -> Res<Vec<crate::today_issues::Issue>> {
+    use crate::today_issues as ti;
+    let got = match gh.graphql(&ti::search_query(100), json!({ "q": q })) {
+        Err(e) if !e.contains("not logged in") && !e.starts_with("GitHub:") => gh.graphql(&ti::search_query(30), json!({ "q": q })),
+        other => other,
+    };
+    match got? {
+        Some(data) => Ok(ti::parse_search(&data)),
+        None => Ok(vec![]),
+    }
 }
 
 /// One search. A failed answer (a GitHub timeout, a cut-off reply) tries once
@@ -84,16 +128,23 @@ fn search(gh: &dyn Gh, q: &str) -> Res<Vec<today::Pr>> {
 /// repos of your conflicting PRs. Some searches can fail; the rest still count.
 pub fn fetch(gh: &dyn Gh, me: &str, cfg: &today::TodayCfg, t: u64) -> (Option<Data>, Option<String>) {
     let (open_q, area_q, closed_q) = searches(me, cfg, t);
+    let (issue_q, wide_q) = job_searches(me, cfg);
     let mut all: Vec<String> = open_q.clone();
     all.extend(area_q.iter().cloned());
     all.push(closed_q);
-    let results: Vec<Res<Vec<today::Pr>>> = std::thread::scope(|s| {
+    all.extend(wide_q.iter().cloned());
+    let (results, issue_results): Answers = std::thread::scope(|s| {
         let hs: Vec<_> = all.iter().map(|q| s.spawn(move || search(gh, q))).collect();
-        hs.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("a search stopped".into()))).collect()
+        let is: Vec<_> = issue_q.iter().map(|q| s.spawn(move || search_issues(gh, q))).collect();
+        (
+            hs.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("a search stopped".into()))).collect(),
+            is.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("a search stopped".into()))).collect(),
+        )
     });
     let mut errors = vec![];
     let mut data = Data::default();
     let mut got = 0;
+    let closed_at = open_q.len() + area_q.len();
     for (i, r) in results.into_iter().enumerate() {
         match r {
             Ok(mut prs) => {
@@ -101,11 +152,23 @@ pub fn fetch(gh: &dyn Gh, me: &str, cfg: &today::TodayCfg, t: u64) -> (Option<Da
                 prs.retain(|p| cfg.reads(&p.repo));
                 if i < open_q.len() {
                     data.open.extend(prs);
-                } else if i < open_q.len() + area_q.len() {
+                } else if i < closed_at {
                     data.area.extend(prs);
-                } else {
+                } else if i == closed_at {
                     data.closed.extend(prs);
+                } else {
+                    data.wide_prs.extend(prs);
                 }
+            }
+            Err(e) => errors.push(e),
+        }
+    }
+    for r in issue_results {
+        match r {
+            Ok(mut is) => {
+                got += 1;
+                is.retain(|i| cfg.reads(&i.repo));
+                data.issues.extend(is);
             }
             Err(e) => errors.push(e),
         }
@@ -462,6 +525,51 @@ impl Hub {
         self.store.lock().unwrap().today_set(repo, Self::today_key(number, changed), &seen).map_err(|e| e.to_string())?;
         self.sink.emit("today", json!({ "refreshing": self.today.lock().unwrap().running }));
         Ok(())
+    }
+
+    // ---------- jobs from the window (39.13.4) ----------
+
+    /// A job's form, for Edit job.
+    pub fn today_job(&self, name: &str) -> Res<Value> {
+        let f = crate::config::JobForm::of(&self.config().today, name).ok_or(format!("No job \"{name}\" in the config."))?;
+        serde_json::to_value(f).map_err(|e| e.to_string())
+    }
+
+    /// Saves a job to the config. It works at once: Today refreshes.
+    pub fn today_job_save(&self, form: &crate::config::JobForm) -> Res<()> {
+        let config = crate::config::Config::today_job_save(&self.paths.config, form)?;
+        tracing::info!(target: "sb::today", job = %form.name, repos = ?form.repos, "job saved");
+        *self.config.write().unwrap() = config;
+        self.today.lock().unwrap().fetched = None;
+        self.today_refresh();
+        Ok(())
+    }
+
+    pub fn today_job_remove(&self, name: &str) -> Res<()> {
+        let config = crate::config::Config::today_job_remove(&self.paths.config, name)?;
+        tracing::info!(target: "sb::today", job = name, "job removed");
+        *self.config.write().unwrap() = config;
+        self.sink.emit("today", json!({ "refreshing": self.today.lock().unwrap().running }));
+        Ok(())
+    }
+
+    /// Add a job's check of a repo: whether you can read it, its open counts and
+    /// labels, and a guess at its kind (39.13.4).
+    pub fn today_repo_check(&self, repo: &str) -> Res<Value> {
+        let repo = repo.trim();
+        if !crate::config::repo_name_ok(repo) {
+            return Err(format!("{repo} is not owner/name."));
+        }
+        let (owner, name) = repo.split_once('/').unwrap_or_default();
+        let q = "query($o: String!, $n: String!) { repository(owner: $o, name: $n) { isPrivate issues(states: OPEN) { totalCount } pullRequests(states: OPEN) { totalCount } labels(first: 100) { nodes { name } } } }";
+        let gh = self.gh.read().unwrap().clone();
+        let data = gh.graphql(q, json!({ "o": owner, "n": name })).map_err(|e| {
+            if e.contains("Could not resolve") { format!("You can't read {repo}, or it does not exist.") } else { e }
+        })?;
+        match data {
+            Some(d) if !d["repository"].is_null() => Ok(crate::today_issues::repo_guess(&d)),
+            _ => Err(format!("You can't read {repo}, or it does not exist.")),
+        }
     }
 
     pub fn today_looked(&self, job: &str) -> Res<()> {

@@ -41,6 +41,7 @@ pub mod take;
 pub mod tasks;
 pub mod tmux;
 pub mod today;
+pub mod today_issues;
 pub mod today_notes;
 
 /// Seconds since the Unix epoch.

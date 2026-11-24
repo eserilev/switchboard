@@ -756,3 +756,228 @@ mod tests {
         );
     }
 }
+
+// ---------- Today jobs from the window (SPEC 39.13.4) ----------
+
+/// The Add a job form. `old_name`: the job it edits, when it is an edit.
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct JobForm {
+    pub name: String,
+    pub old_name: Option<String>,
+    pub repos: Vec<String>,
+    pub read: Vec<String>,
+    pub scope: String,
+    pub kind: String,
+    pub severity: Vec<String>,
+    pub tag_labels: Vec<String>,
+    pub hide_labels: Vec<String>,
+    pub reply_days: u64,
+}
+
+/// True for `owner/name` with GitHub's characters.
+pub fn repo_name_ok(r: &str) -> bool {
+    let ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+    matches!(r.split_once('/'), Some((o, n)) if ok(o) && ok(n) && !n.contains('/'))
+}
+
+impl JobForm {
+    fn clean(&self) -> Result<JobForm, String> {
+        let mut f = self.clone();
+        f.name = f.name.trim().to_owned();
+        if f.name.is_empty() {
+            return Err("Give the job a name.".into());
+        }
+        if f.name.eq_ignore_ascii_case(crate::today::EVERYTHING) {
+            return Err(format!("\"{}\" is the tab of every repo. Pick another name.", crate::today::EVERYTHING));
+        }
+        let trim = |v: &[String]| -> Vec<String> {
+            let mut out: Vec<String> = vec![];
+            for x in v.iter().map(|x| x.trim()).filter(|x| !x.is_empty()) {
+                if !out.iter().any(|o| o.eq_ignore_ascii_case(x)) {
+                    out.push(x.to_owned());
+                }
+            }
+            out
+        };
+        f.repos = trim(&f.repos);
+        if f.repos.is_empty() {
+            return Err("Add a repo, as owner/name.".into());
+        }
+        if let Some(bad) = f.repos.iter().find(|r| !repo_name_ok(r)) {
+            return Err(format!("{bad} is not owner/name."));
+        }
+        f.read = trim(&f.read).into_iter().filter(|r| r == "prs" || r == "issues").collect();
+        if f.read.is_empty() {
+            return Err("Read PRs, issues or both.".into());
+        }
+        if f.scope != "all" {
+            f.scope = "mine".into();
+        }
+        if f.kind != "reports" {
+            f.kind = "code".into();
+        }
+        f.severity = trim(&f.severity);
+        f.tag_labels = trim(&f.tag_labels);
+        f.hide_labels = trim(&f.hide_labels);
+        if f.reply_days == 0 {
+            f.reply_days = 2;
+        }
+        Ok(f)
+    }
+
+    /// The form of a job in the config, for Edit job.
+    pub fn of(cfg: &crate::today::TodayCfg, name: &str) -> Option<JobForm> {
+        let j = cfg.jobs.get(name)?;
+        let r = j.repos.first().map(|r| cfg.rules(r)).unwrap_or_default();
+        Some(JobForm {
+            name: name.to_owned(),
+            old_name: Some(name.to_owned()),
+            repos: j.repos.clone(),
+            read: if j.read.is_empty() { vec!["prs".into()] } else { j.read.clone() },
+            scope: if j.all() { "all".into() } else { "mine".into() },
+            kind: r.kind,
+            severity: r.severity,
+            tag_labels: r.tag_labels,
+            hide_labels: r.hide_labels,
+            reply_days: r.reply_days,
+        })
+    }
+}
+
+fn read_doc(path: &Path) -> Result<toml_edit::Document, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    text.parse().map_err(|e: toml_edit::TomlError| format!("{}: {}. Fix the file, then save again.", path.display(), e.message()))
+}
+
+/// `doc[a][b]…` as a table, made when missing. A table only of other tables is
+/// implicit, so the file gets no empty `[today.jobs]` header.
+fn sub_table<'a>(t: &'a mut toml_edit::Table, key: &str, implicit: bool, path: &Path) -> Result<&'a mut toml_edit::Table, String> {
+    if !t.contains_key(key) {
+        let mut n = toml_edit::Table::new();
+        n.set_implicit(implicit);
+        t.insert(key, toml_edit::Item::Table(n));
+    }
+    let item = t.get_mut(key).expect("just added");
+    if let Some(inline) = item.as_inline_table().cloned() {
+        *item = toml_edit::Item::Table(inline.into_table());
+    }
+    item.as_table_mut().ok_or_else(|| format!("{}: {key} is not a table.", path.display()))
+}
+
+fn save_doc(path: &Path, doc: &toml_edit::Document) -> Result<Config, String> {
+    let text = doc.to_string();
+    let config = Config::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    write_file(path, &text)?;
+    Ok(config)
+}
+
+impl Config {
+    /// Writes a Today job, and the rules of its repos when they are bug reports.
+    /// Keeps every other key and the comments. An edit that renames the job
+    /// takes out the old one.
+    pub fn today_job_save(path: &Path, form: &JobForm) -> Result<Config, String> {
+        let f = form.clean()?;
+        let mut doc = read_doc(path)?;
+        let root = doc.as_table_mut();
+        let today = sub_table(root, "today", false, path)?;
+        {
+            let jobs = sub_table(today, "jobs", true, path)?;
+            if let Some(old) = f.old_name.as_deref().filter(|o| *o != f.name) {
+                jobs.remove(old);
+            }
+            let job = sub_table(jobs, &f.name, false, path)?;
+            job["repos"] = toml_edit::value(f.repos.iter().map(String::as_str).collect::<toml_edit::Array>());
+            job["read"] = toml_edit::value(f.read.iter().map(String::as_str).collect::<toml_edit::Array>());
+            job["scope"] = toml_edit::value(f.scope.as_str());
+        }
+        let repos = sub_table(today, "repos", true, path)?;
+        for r in &f.repos {
+            if f.kind == "code" && !repos.contains_key(r) {
+                continue;
+            }
+            let t = sub_table(repos, r, false, path)?;
+            t["kind"] = toml_edit::value(f.kind.as_str());
+            if f.kind == "reports" {
+                let list = |v: &[String]| toml_edit::value(v.iter().map(String::as_str).collect::<toml_edit::Array>());
+                t["severity"] = list(&f.severity);
+                t["tag_labels"] = list(&f.tag_labels);
+                t["hide_labels"] = list(&f.hide_labels);
+                t["reply_days"] = toml_edit::value(f.reply_days as i64);
+            }
+        }
+        save_doc(path, &doc)
+    }
+
+    /// Takes a Today job out of the config. The rules of its repos stay: another
+    /// job can use them.
+    pub fn today_job_remove(path: &Path, name: &str) -> Result<Config, String> {
+        let mut doc = read_doc(path)?;
+        let gone = doc
+            .get_mut("today")
+            .and_then(|t| t.get_mut("jobs"))
+            .and_then(|j| j.as_table_like_mut())
+            .and_then(|j| j.remove(name))
+            .is_some();
+        if !gone {
+            return Err(format!("No job \"{name}\" in the config."));
+        }
+        save_doc(path, &doc)
+    }
+}
+
+#[cfg(test)]
+mod job_tests {
+    use super::*;
+
+    #[test]
+    fn a_job_saves_with_its_repo_rules_and_keeps_the_file() {
+        let dir = std::env::temp_dir().join(format!("sb-jobcfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "# mine\nleader = \"ctrl+b\"\n\n[today]\nuser = \"me\" # me\n\n[today.repos.\"sigp/lighthouse\"]\nstale_days = 9\n").unwrap();
+        let form = JobForm {
+            name: "Bug bounty".into(),
+            repos: vec![" ethereum-bounty/lighthouse ".into()],
+            read: vec!["issues".into(), "prs".into(), "x".into()],
+            scope: "all".into(),
+            kind: "reports".into(),
+            severity: vec!["High".into(), "Low".into()],
+            hide_labels: vec!["wontfix".into()],
+            reply_days: 3,
+            ..Default::default()
+        };
+        let c = Config::today_job_save(&path, &form).unwrap();
+        let j = &c.today.jobs["Bug bounty"];
+        assert_eq!((j.repos.clone(), j.read.clone(), j.all()), (vec!["ethereum-bounty/lighthouse".to_owned()], vec!["issues".to_owned(), "prs".to_owned()], true));
+        let r = c.today.rules("ethereum-bounty/lighthouse");
+        assert_eq!((r.kind.as_str(), r.severity.len(), r.reply_days), ("reports", 2, 3));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("# mine\n") && text.contains("user = \"me\" # me") && text.contains("stale_days = 9"), "{text}");
+        assert!(!text.contains("[today.jobs]\n"), "no empty header: {text}");
+        // Edit with a new name: the old job goes.
+        let mut edit = JobForm::of(&c.today, "Bug bounty").unwrap();
+        edit.name = "Bounty".into();
+        let c = Config::today_job_save(&path, &edit).unwrap();
+        assert!(c.today.jobs.contains_key("Bounty") && !c.today.jobs.contains_key("Bug bounty"));
+        // Remove keeps the repo's rules.
+        let c = Config::today_job_remove(&path, "Bounty").unwrap();
+        assert!(c.today.jobs.is_empty());
+        assert_eq!(c.today.rules("ethereum-bounty/lighthouse").kind, "reports");
+        assert!(Config::today_job_remove(&path, "Bounty").is_err());
+        // Bad forms.
+        for (f, why) in [
+            (JobForm { name: "Everything".into(), repos: vec!["a/b".into()], read: vec!["prs".into()], ..Default::default() }, "Pick another name"),
+            (JobForm { name: "x".into(), repos: vec!["nope".into()], read: vec!["prs".into()], ..Default::default() }, "not owner/name"),
+            (JobForm { name: "x".into(), repos: vec!["a/b".into()], ..Default::default() }, "Read PRs"),
+        ] {
+            assert!(Config::today_job_save(&path, &f).unwrap_err().contains(why));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -172,6 +172,10 @@ commands! {
     today_later(repo: String, number: u64, changed: bool, until: Option<u64>) -> () => |h| h.today_later(&repo, number, changed, until);
     today_looked(job: String) -> () => |h| h.today_looked(&job);
     today_tell(text: String) -> () => |h| h.today_tell(&text);
+    today_job(name: String) -> Value => |h| h.today_job(&name);
+    today_job_save(form: crate::config::JobForm) -> () => |h| h.today_job_save(&form);
+    today_job_remove(name: String) -> () => |h| h.today_job_remove(&name);
+    today_repo_check(repo: String) -> Value => |h| h.today_repo_check(&repo);
     hub_restart() -> () => |h| h.ask_restart();
     review_work(id: String, task: String) -> Value => |h| h.review_work(&id, &task);
     today_forget(id: u64) -> () => |h| h.today_forget(id);

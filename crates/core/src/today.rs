@@ -35,6 +35,22 @@ impl Default for TodayCfg {
 pub struct JobCfg {
     /// `owner/name` for each repo.
     pub repos: Vec<String>,
+    /// What the job reads: "prs" and "issues" (SPEC 39.13). Default: PRs.
+    pub read: Vec<String>,
+    /// "mine" (default): items that involve you. "all": every open item of the repos.
+    pub scope: String,
+}
+
+impl JobCfg {
+    pub fn issues(&self) -> bool {
+        self.read.iter().any(|r| r == "issues")
+    }
+    pub fn prs(&self) -> bool {
+        self.read.is_empty() || self.read.iter().any(|r| r == "prs")
+    }
+    pub fn all(&self) -> bool {
+        self.scope == "all"
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -47,6 +63,16 @@ pub struct RepoRules {
     pub waiting_labels: Vec<String>,
     pub stale_labels: Vec<String>,
     pub areas: BTreeMap<String, AreaCfg>,
+    /// "code" (default) or "reports": bug reports with severity labels (SPEC 39.13).
+    pub kind: String,
+    /// Severity labels, the worst first. A worse one ranks a report higher.
+    pub severity: Vec<String>,
+    /// An item with one of these labels never shows.
+    pub hide_labels: Vec<String>,
+    /// Labels shown as a tag on the row.
+    pub tag_labels: Vec<String>,
+    /// A report with no team reply after this many days is late.
+    pub reply_days: u64,
 }
 
 impl Default for RepoRules {
@@ -59,6 +85,11 @@ impl Default for RepoRules {
             waiting_labels: vec!["waiting-on-author".into()],
             stale_labels: vec!["stale".into()],
             areas: BTreeMap::new(),
+            kind: "code".into(),
+            severity: vec![],
+            hide_labels: vec![],
+            tag_labels: vec![],
+            reply_days: 2,
         }
     }
 }
@@ -99,9 +130,21 @@ impl TodayCfg {
         self.repos.iter().filter(|(k, r)| !r.areas.is_empty() && self.reads(k)).map(|(k, _)| k.clone()).collect()
     }
 
-    /// True when Today reads this repo: `only` is empty or holds it.
+    /// True when Today reads this repo: `only` is empty or holds it, or a job
+    /// names it (SPEC 39.13.1).
     pub fn reads(&self, repo: &str) -> bool {
-        self.only.is_empty() || self.only.iter().any(|r| r.trim().eq_ignore_ascii_case(repo))
+        self.only.is_empty() || self.only.iter().any(|r| r.trim().eq_ignore_ascii_case(repo)) || self.jobs.values().any(|j| j.repos.iter().any(|r| r.trim().eq_ignore_ascii_case(repo)))
+    }
+
+    /// The repos that the searches name with `only`: its own, and every job's.
+    pub fn limit_repos(&self) -> Vec<String> {
+        if self.only.is_empty() {
+            return vec![];
+        }
+        let mut v: Vec<String> = self.only.iter().chain(self.jobs.values().flat_map(|j| j.repos.iter())).map(|r| r.trim().to_owned()).filter(|r| !r.is_empty()).collect();
+        v.sort_by_key(|r| r.to_lowercase());
+        v.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        v
     }
 
     pub fn is_bot(&self, login: &str) -> bool {
@@ -313,6 +356,11 @@ pub enum Section {
     Mine,
     Reviews,
     Area,
+    /// Issues assigned to you, or asking you by name (SPEC 39.13.3).
+    Assigned,
+    Triage,
+    Waiting,
+    Poc,
     Changed,
 }
 
@@ -322,10 +370,18 @@ impl Section {
             Section::Mine => "Your PRs",
             Section::Reviews => "Reviews",
             Section::Area => "In your area",
+            Section::Assigned => "For you",
+            Section::Triage => "Needs triage",
+            Section::Waiting => "Waiting on the team",
+            Section::Poc => "Proofs of concept",
             Section::Changed => "What changed",
         }
     }
-    pub const ALL: [Section; 4] = [Section::Mine, Section::Reviews, Section::Area, Section::Changed];
+    pub const ALL: [Section; 8] = [Section::Mine, Section::Reviews, Section::Area, Section::Assigned, Section::Triage, Section::Waiting, Section::Poc, Section::Changed];
+    /// The sections that a tab counts: what waits on you.
+    pub fn counts(self) -> bool {
+        matches!(self, Section::Mine | Section::Reviews | Section::Assigned | Section::Triage)
+    }
 }
 
 /// One reason a rule found.
@@ -370,6 +426,15 @@ pub struct Item {
     /// What Claude made of your notes for this PR (39.12).
     #[serde(default)]
     pub claude: Option<crate::today_notes::Verdict>,
+    /// The severity label of a report (39.13).
+    #[serde(default)]
+    pub severity: Option<String>,
+    /// An issue, not a PR.
+    #[serde(default)]
+    pub issue: bool,
+    /// From a job that reads every open item, and not about you: only that job shows it.
+    #[serde(default)]
+    pub wide: bool,
 }
 
 impl Item {
@@ -387,11 +452,11 @@ pub struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    fn mine(&self, login: &str) -> bool {
+    pub(crate) fn mine(&self, login: &str) -> bool {
         login.eq_ignore_ascii_case(&self.me)
     }
     /// A person other than you.
-    fn other(&self, login: &str) -> bool {
+    pub(crate) fn other(&self, login: &str) -> bool {
         !self.mine(login) && !self.cfg.is_bot(login)
     }
     fn days(&self, since: u64) -> u64 {
@@ -419,6 +484,12 @@ pub struct Data {
     pub closed: Vec<Pr>,
     /// PRs merged lately into the repos of your conflicting PRs.
     pub merged: Vec<Pr>,
+    /// Open issues of the jobs that read issues (SPEC 39.13).
+    #[serde(default)]
+    pub issues: Vec<crate::today_issues::Issue>,
+    /// Open PRs of the jobs that read every open item.
+    #[serde(default)]
+    pub wide_prs: Vec<Pr>,
 }
 
 fn has_label(pr: &Pr, list: &[String]) -> Option<String> {
@@ -682,7 +753,7 @@ fn days_text(d: u64) -> String {
     }
 }
 
-fn ago(d: u64) -> String {
+pub(crate) fn ago(d: u64) -> String {
     match d {
         0 => "today".into(),
         1 => "yesterday".into(),
@@ -816,6 +887,9 @@ pub fn items(data: &Data, breaks: &[Break], ctx: &Ctx) -> Vec<Item> {
             why: String::new(),
             labels: pr.labels.clone(),
             claude: None,
+            severity: None,
+            issue: false,
+            wide: false,
         });
     }
     // What changed: the last 3 days.
@@ -843,6 +917,9 @@ pub fn items(data: &Data, breaks: &[Break], ctx: &Ctx) -> Vec<Item> {
         it.number = pr.number;
         out.push(it);
     }
+    // Issues and the open PRs of repos you triage (SPEC 39.13).
+    out.extend(crate::today_issues::issue_items(&data.issues, ctx, &mut seen));
+    out.extend(crate::today_issues::poc_items(&data.wide_prs, ctx, &mut seen));
     // A list fetched before `only` changed: drop the repos it leaves out now.
     out.retain(|i| ctx.cfg.reads(&i.repo));
     out
@@ -867,6 +944,9 @@ fn changed(repo: String, number: u64, title: String, url: String, r: Reason) -> 
         later_until: None,
         labels: vec![],
         claude: None,
+        severity: None,
+        issue: false,
+        wide: false,
         why: String::new(),
     }
 }
@@ -964,9 +1044,10 @@ fn ordinal(n: usize) -> String {
 }
 
 /// Splits the items of one job into what shows, Done, Later and Hidden (SPEC 39.2, 39.12).
-fn split(all: &[Item], repos: &[String], seen: &HashMap<(String, u64), Seen>, now: u64) -> (Vec<Item>, Vec<Item>, Vec<Item>, Vec<Item>) {
+fn split(all: &[Item], repos: &[String], wide_ok: bool, seen: &HashMap<(String, u64), Seen>, now: u64) -> (Vec<Item>, Vec<Item>, Vec<Item>, Vec<Item>) {
     let (mut show, mut done, mut later, mut hidden) = (vec![], vec![], vec![], vec![]);
-    for it in all.iter().filter(|i| in_job(&i.repo, repos)) {
+    // An item that is not about you shows only in a job that reads every open item.
+    for it in all.iter().filter(|i| in_job(&i.repo, repos) && (wide_ok || !i.wide)) {
         // The area section is for jobs: Everything has no areas.
         if repos.is_empty() && it.section == Section::Area {
             continue;
@@ -1003,14 +1084,16 @@ pub fn view(all: &[Item], cfg: &TodayCfg, job: &str, seen: &HashMap<(String, u64
     let repos = cfg.job_repos(&job);
     let mut all = all.to_vec();
     rank(&mut all);
-    let (show, done, later, hidden) = split(&all, &repos, seen, now);
+    let wide_ok = cfg.jobs.get(&job).is_some_and(|j| j.all());
+    let (show, done, later, hidden) = split(&all, &repos, wide_ok, seen, now);
     let jobs = cfg
         .job_names()
         .into_iter()
         .map(|name| {
             let r = cfg.job_repos(&name);
-            let (s, _, _, _) = split(&all, &r, seen, now);
-            JobTab { count: s.iter().filter(|i| matches!(i.section, Section::Mine | Section::Reviews)).count(), name }
+            let w = cfg.jobs.get(&name).is_some_and(|j| j.all());
+            let (s, _, _, _) = split(&all, &r, w, seen, now);
+            JobTab { count: s.iter().filter(|i| i.section.counts()).count(), name }
         })
         .collect();
     let sections = Section::ALL
@@ -1090,7 +1173,8 @@ pub fn text(v: &View, many_repos: bool) -> String {
         out.push_str(&format!("\n{} ({})\n", s.title.to_uppercase(), s.items.len()));
         for i in &s.items {
             let name = if many_repos { format!("{}#{}", names.get(i.repo.as_str()).copied().unwrap_or(&i.repo), i.number) } else { format!("#{}", i.number) };
-            let tags = if i.tags.is_empty() { String::new() } else { format!("  [{}]", i.tags.join(", ")) };
+            let all_tags: Vec<String> = i.severity.iter().cloned().chain(i.tags.iter().cloned()).collect();
+            let tags = if all_tags.is_empty() { String::new() } else { format!("  [{}]", all_tags.join(", ")) };
             out.push_str(&format!("- {name}  {}{tags}\n    {}\n", i.line, i.title));
         }
     }
@@ -1124,7 +1208,7 @@ pub fn item_json(i: &Item) -> Value {
         "title": format!("<github-data>{}</github-data>", i.title),
         "todo": i.line, "why": i.why,
         "reasons": i.reasons.iter().map(|r| &r.line).collect::<Vec<_>>(),
-        "detail": i.detail, "tags": i.tags, "came_back": i.came_back,
+        "detail": i.detail, "tags": i.tags, "came_back": i.came_back, "severity": i.severity, "kind": if i.issue { "issue" } else { "pr" },
         "claude": i.claude.as_ref().map(|c| json!({ "act": c.act, "why": c.why })),
     })
 }
@@ -1360,7 +1444,7 @@ mod tests {
     #[test]
     fn what_changed_and_jobs() {
         let mut c = cfg();
-        c.jobs.insert("Dev".into(), JobCfg { repos: vec!["O/R".into()] });
+        c.jobs.insert("Dev".into(), JobCfg { repos: vec!["O/R".into()], ..Default::default() });
         let mut m = pr(50, "me");
         m.state = "MERGED".into();
         m.closed = Some(NOW - DAY);
@@ -1375,7 +1459,7 @@ mod tests {
         let data = Data { open: vec![elsewhere, broke], closed: vec![m, old], ..Data::default() };
         let all = items(&data, &[Break { repo: "o/r".into(), number: 53, at: NOW - 10, cause: Some(9) }], &ctx(&c));
         let v = view(&all, &c, "Dev", &HashMap::new(), Some(NOW - 2 * DAY), NOW);
-        let changed: Vec<&str> = v.sections[3].items.iter().map(|i| i.line.as_str()).collect();
+        let changed: Vec<&str> = v.sections[7].items.iter().map(|i| i.line.as_str()).collect();
         assert_eq!(changed, ["#9 merged. Your #53 now conflicts.", "Your #50 merged."]);
         assert!(v.sections[1].items.is_empty(), "a/b is not in the job");
         assert_eq!(v.jobs.iter().map(|j| (j.name.as_str(), j.count)).collect::<Vec<_>>(), [("Everything", 2), ("Dev", 1)]);
@@ -1384,7 +1468,7 @@ mod tests {
         let mut seen = HashMap::new();
         seen.insert(("o/r".to_owned(), 53 + CHANGED_KEY), Seen { done_at: Some(NOW), ..Seen::default() });
         let v = view(&all, &c, "Dev", &seen, None, NOW);
-        assert_eq!(v.sections[3].items.len(), 1);
+        assert_eq!(v.sections[7].items.len(), 1);
         assert!(v.sections[0].items.iter().any(|i| i.number == 53));
         // An unknown job is Everything.
         assert_eq!(view(&all, &c, "nope", &HashMap::new(), None, NOW).job, EVERYTHING);
