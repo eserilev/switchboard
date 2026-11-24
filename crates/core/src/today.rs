@@ -365,6 +365,11 @@ pub struct Item {
     /// "Ranked 1st in Your PRs: ...", set by [`view`].
     #[serde(default)]
     pub why: String,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// What Claude made of your notes for this PR (39.12).
+    #[serde(default)]
+    pub claude: Option<crate::today_notes::Verdict>,
 }
 
 impl Item {
@@ -809,6 +814,8 @@ pub fn items(data: &Data, breaks: &[Break], ctx: &Ctx) -> Vec<Item> {
             done_at: None,
             later_until: None,
             why: String::new(),
+            labels: pr.labels.clone(),
+            claude: None,
         });
     }
     // What changed: the last 3 days.
@@ -858,6 +865,8 @@ fn changed(repo: String, number: u64, title: String, url: String, r: Reason) -> 
         came_back: None,
         done_at: None,
         later_until: None,
+        labels: vec![],
+        claude: None,
         why: String::new(),
     }
 }
@@ -867,8 +876,15 @@ pub fn rank(items: &mut [Item]) {
     items.sort_by(|a, b| {
         let older_first = |i: &Item| matches!(i.reasons.first().map(|r| r.rule.as_str()), Some("requested" | "no_reviews"));
         let at = |i: &Item| i.reasons.first().map(|r| r.at).unwrap_or(0);
+        // Your notes (39.12): Claude's "up" goes first in its section, "down" last.
+        let nudge = |i: &Item| match i.claude.as_ref().map(|c| c.act) {
+            Some(crate::today_notes::Act::Up) => 0,
+            Some(crate::today_notes::Act::Down) => 2,
+            _ => 1,
+        };
         a.section
             .cmp(&b.section)
+            .then(nudge(a).cmp(&nudge(b)))
             .then(b.weight().cmp(&a.weight()))
             .then(b.release.cmp(&a.release))
             .then_with(|| if older_first(a) { at(a).cmp(&at(b)) } else { at(b).cmp(&at(a)) })
@@ -927,6 +943,8 @@ pub struct View {
     pub sections: Vec<SectionView>,
     pub done: Vec<Item>,
     pub later: Vec<Item>,
+    /// Hidden by Claude, from your notes (39.12).
+    pub hidden: Vec<Item>,
     /// Since you last looked, or `None` with nothing new.
     pub since: Option<String>,
 }
@@ -945,15 +963,19 @@ fn ordinal(n: usize) -> String {
     format!("{n}{suf}")
 }
 
-/// Splits the items of one job into what shows, Done and Later (SPEC 39.2).
-fn split(all: &[Item], repos: &[String], seen: &HashMap<(String, u64), Seen>, now: u64) -> (Vec<Item>, Vec<Item>, Vec<Item>) {
-    let (mut show, mut done, mut later) = (vec![], vec![], vec![]);
+/// Splits the items of one job into what shows, Done, Later and Hidden (SPEC 39.2, 39.12).
+fn split(all: &[Item], repos: &[String], seen: &HashMap<(String, u64), Seen>, now: u64) -> (Vec<Item>, Vec<Item>, Vec<Item>, Vec<Item>) {
+    let (mut show, mut done, mut later, mut hidden) = (vec![], vec![], vec![], vec![]);
     for it in all.iter().filter(|i| in_job(&i.repo, repos)) {
         // The area section is for jobs: Everything has no areas.
         if repos.is_empty() && it.section == Section::Area {
             continue;
         }
         let mut it = it.clone();
+        if it.claude.as_ref().is_some_and(|c| c.act == crate::today_notes::Act::Hide) {
+            hidden.push(it);
+            continue;
+        }
         let st = seen.get(&key(&it)).cloned().unwrap_or_default();
         if let Some(until) = st.later_until.filter(|u| *u > now) {
             it.later_until = Some(until);
@@ -972,7 +994,7 @@ fn split(all: &[Item], repos: &[String], seen: &HashMap<(String, u64), Seen>, no
         }
         show.push(it);
     }
-    (show, done, later)
+    (show, done, later, hidden)
 }
 
 /// The list of one job (SPEC 39.1). `looked` is when you last looked at it.
@@ -981,13 +1003,13 @@ pub fn view(all: &[Item], cfg: &TodayCfg, job: &str, seen: &HashMap<(String, u64
     let repos = cfg.job_repos(&job);
     let mut all = all.to_vec();
     rank(&mut all);
-    let (show, done, later) = split(&all, &repos, seen, now);
+    let (show, done, later, hidden) = split(&all, &repos, seen, now);
     let jobs = cfg
         .job_names()
         .into_iter()
         .map(|name| {
             let r = cfg.job_repos(&name);
-            let (s, _, _) = split(&all, &r, seen, now);
+            let (s, _, _, _) = split(&all, &r, seen, now);
             JobTab { count: s.iter().filter(|i| matches!(i.section, Section::Mine | Section::Reviews)).count(), name }
         })
         .collect();
@@ -1000,6 +1022,10 @@ pub fn view(all: &[Item], cfg: &TodayCfg, job: &str, seen: &HashMap<(String, u64
                 let rest: Vec<&str> = it.reasons.iter().skip(1).map(|r| r.rule.as_str()).collect();
                 let also = if rest.is_empty() { String::new() } else { format!(" Also: {}.", rest.iter().map(|r| rule_words(r)).collect::<Vec<_>>().join(", ")) };
                 it.why = format!("Ranked {} of {n} in {}: {}.{also}", ordinal(i + 1), sec.title(), rule_words(&it.reasons[0].rule));
+                if let Some(c) = &it.claude {
+                    let moved = if c.act == crate::today_notes::Act::Up { "up" } else { "down" };
+                    it.why.push_str(&format!(" Claude moved it {moved}, from your notes: {}.", c.why.trim_end_matches('.')));
+                }
             }
             SectionView { key: *sec, title: sec.title().to_owned(), items }
         })
@@ -1022,7 +1048,7 @@ pub fn view(all: &[Item], cfg: &TodayCfg, job: &str, seen: &HashMap<(String, u64
         }
         (!parts.is_empty()).then(|| parts.join(" · "))
     });
-    View { job, jobs, repos, sections, done, later, since }
+    View { job, jobs, repos, sections, done, later, hidden, since }
 }
 
 /// A rule's name in words, for Why.
@@ -1071,6 +1097,10 @@ pub fn text(v: &View, many_repos: bool) -> String {
     if !any {
         out.push_str("\nAll done for today.\n");
     }
+    if !v.hidden.is_empty() {
+        let list: Vec<String> = v.hidden.iter().map(|i| format!("#{}", i.number)).collect();
+        out.push_str(&format!("\nHidden by the user's notes to Claude: {}.\n", list.join(", ")));
+    }
     out
 }
 
@@ -1095,6 +1125,7 @@ pub fn item_json(i: &Item) -> Value {
         "todo": i.line, "why": i.why,
         "reasons": i.reasons.iter().map(|r| &r.line).collect::<Vec<_>>(),
         "detail": i.detail, "tags": i.tags, "came_back": i.came_back,
+        "claude": i.claude.as_ref().map(|c| json!({ "act": c.act, "why": c.why })),
     })
 }
 

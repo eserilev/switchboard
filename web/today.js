@@ -12,12 +12,14 @@
   const view = () => $("#view-today");
   const keyOf = (i) => `${i.repo.toLowerCase()}#${i.number}#${i.section === "changed" ? "c" : ""}`;
   const rows = () => (D.v ? D.v.sections.flatMap((s) => s.items) : []);
-  const byKey = (k) => rows().find((i) => keyOf(i) === k) || (D.v ? [...D.v.done, ...D.v.later].find((i) => keyOf(i) === k) : null);
+  const byKey = (k) => rows().find((i) => keyOf(i) === k) || (D.v ? [...D.v.done, ...D.v.later, ...(D.v.hidden || [])].find((i) => keyOf(i) === k) : null);
+  // What Claude made of your notes for one item, in words (39.12).
+  const claudeSays = (c) => c ? `${c.act === "hide" ? "Hidden" : c.act === "up" ? "Moved up" : "Moved down"} by Claude, from your notes: ${c.why}` : "";
   // `name#N`, or `owner/name#N` when two repos on the list share a name.
   const short = (r) => r.split("/").pop().toLowerCase();
   const name = (i) => {
     if (!D.v?.many_repos) return `#${i.number}`;
-    const all = new Set([...D.v.sections.flatMap((s) => s.items), ...D.v.done, ...D.v.later].map((x) => x.repo));
+    const all = new Set([...D.v.sections.flatMap((s) => s.items), ...D.v.done, ...D.v.later, ...(D.v.hidden || [])].map((x) => x.repo));
     const shared = [...all].some((r) => r !== i.repo && short(r) === short(i.repo));
     return `${shared ? i.repo : i.repo.split("/").pop()}#${i.number}`;
   };
@@ -83,12 +85,14 @@
       <h2 class="tdtitle">${esc(i.title)}</h2>
       <p class="tdtodo">${esc(i.line)}</p>
       ${detail}
+      ${i.claude ? `<p class="tdclaude">${esc(claudeSays(i.claude))}</p>` : ""}
       <h3>Why it is here</h3><p class="tdwhy">${esc(i.why || "")}</p>${reasons}
-      ${acts}
+      ${i.claude?.act === "hide" ? `<p class="tdnote">To show it again, forget the note that hid it, or tell Claude it matters.</p>` : acts}
       <div class="tdlinks">
         <button class="linkish" type="button" data-act="open">Open on GitHub <kbd>o</kbd></button>
         <button class="linkish" type="button" data-act="task">Make a task <kbd>t</kbd></button>
         <button class="linkish" type="button" data-act="review">Start review <kbd>r</kbd></button>
+        <button class="linkish" type="button" data-act="about">Tell Claude about this one</button>
       </div>`;
   }
 
@@ -109,7 +113,19 @@
     const sections = v.sections.filter((s) => s.items.length).map((s) => `<section class="tdsec"><h2>${esc(s.title)} <span>${s.items.length}</span></h2><div role="listbox" aria-label="${esc(s.title)}">${s.items.map(rowHTML).join("")}</div></section>`).join("");
     const empty = !v.loaded ? `<div class="tdwait">${v.error ? "" : "Loading what needs you on GitHub…"}</div>`
       : shown.length ? "" : `<div class="tdall">All done for today.</div>`;
-    const fold = (title, list, hint) => list.length ? `<details class="tdfold"${load(`open.${title}`) === "1" ? " open" : ""} data-fold="${title}"><summary>${title} (${list.length})</summary>${list.map((i) => `<div class="tdrow small${D.sel === keyOf(i) ? " sel" : ""}" data-k="${esc(keyOf(i))}"><span class="tdname">${esc(name(i))}</span><span class="tdline">${esc(i.line)}<small>${esc(hint(i))}</small></span><button class="linkish" type="button" data-act="back">Bring back</button></div>`).join("")}</details>` : "";
+    const fold = (title, list, hint, back = true) => list.length ? `<details class="tdfold"${load(`open.${title}`) === "1" ? " open" : ""} data-fold="${title}"><summary>${title} (${list.length})</summary>${list.map((i) => `<div class="tdrow small${D.sel === keyOf(i) ? " sel" : ""}" data-k="${esc(keyOf(i))}"><span class="tdname">${esc(name(i))}</span><span class="tdline">${esc(i.line)}<small>${esc(hint(i))}</small></span>${back ? `<button class="linkish" type="button" data-act="back">Bring back</button>` : "<span></span>"}</div>`).join("")}</details>` : "";
+    const notes = v.notes || [];
+    const status = v.judging ? `<span class="tdbusy">Claude is reading your notes…</span>`
+      : v.judge_error ? `<span class="tdbad" role="alert">${esc(v.judge_error)}</span>`
+      : v.reply && notes.length ? `<span>Claude: ${esc(v.reply)}</span>` : "";
+    const tell = `<form class="tdtell" id="tdtell">
+        <input id="tdtellin" type="text" maxlength="1000" autocomplete="off" aria-label="Tell Claude what is wrong with this list" placeholder="Tell Claude what is wrong with this list. For example: FOCIL work does not matter now.">
+        <button class="btn" type="submit">Tell Claude</button>
+      </form>${status ? `<p class="tdreply" aria-live="polite">${status}</p>` : ""}`;
+    const notesFold = notes.length ? `<details class="tdfold"${load("open.Notes") === "1" ? " open" : ""} data-fold="Notes"><summary>What you told Claude (${notes.length})</summary>${notes.map((n) => `<div class="tdnoterow"><span>${esc(n.text)}</span><small>${esc(ago(n.at))}</small><button class="linkish" type="button" data-forget="${n.id}">Forget</button></div>`).join("")}</details>` : "";
+    // Keep what you typed and the focus across a redraw.
+    const was = el.querySelector("#tdtellin");
+    const typed = was ? { value: was.value, focus: document.activeElement === was, at: was.selectionStart } : null;
     el.innerHTML = `<header class="head tdbar"><h1 class="htitle">Today</h1><div class="tdjobs" role="tablist" aria-label="Jobs">${tabs}</div><span class="sp"></span>
         <span class="tdmeta">${meta}</span><button class="btn" type="button" id="tdrefresh" title="Refresh from GitHub"${v.refreshing ? " disabled" : ""}>Refresh</button></header>
       <div class="tdbody">
@@ -117,12 +133,18 @@
           <div class="tdprog"><span>${doneToday} of ${total} done today</span><i style="--p:${pct}%"></i></div>
           ${v.since ? `<p class="tdsince"><b>Since you last looked:</b> ${esc(v.since)}</p>` : ""}
           ${v.error ? `<div class="tderr" role="alert">${esc(v.error)}</div>` : ""}
+          ${tell}
           ${sections}${empty}
-          ${fold("Done", v.done, (i) => `done ${ago(i.done_at)}`)}${fold("Later", v.later, (i) => `back ${when(i.later_until)}`)}
+          ${fold("Done", v.done, (i) => `done ${ago(i.done_at)}`)}${fold("Later", v.later, (i) => `back ${when(i.later_until)}`)}${fold("Hidden by your notes", v.hidden || [], (i) => i.claude?.why || "", false)}${notesFold}
         </div>
         <aside class="tdpanel" aria-label="The selected item">${panelHTML(byKey(D.sel))}</aside>
       </div>
-      <footer class="tdkeys">j/k move · x done · l later · u undo · o open on GitHub · r review · t task · g 1–9 job</footer>`;
+      <footer class="tdkeys">j/k move · x done · l later · u undo · o open on GitHub · r review · t task · c tell Claude · g 1–9 job</footer>`;
+    if (typed) {
+      const inp = el.querySelector("#tdtellin");
+      inp.value = typed.value;
+      if (typed.focus) { inp.focus(); inp.setSelectionRange(typed.at, typed.at); }
+    }
     el.querySelector(".tdrow.sel")?.scrollIntoView({ block: "nearest" });
   }
 
@@ -174,6 +196,30 @@
   }
   const open = (i) => i && invoke("open_url", { url: i.url }).catch(toast);
 
+  // Tell Claude (39.12): a note on what is wrong with the list.
+  function focusTell(prefix) {
+    const inp = view()?.querySelector("#tdtellin");
+    if (!inp) return;
+    if (prefix && !inp.value.startsWith(prefix)) inp.value = prefix + inp.value;
+    inp.focus();
+    inp.setSelectionRange(inp.value.length, inp.value.length);
+  }
+  async function tell() {
+    const inp = view()?.querySelector("#tdtellin");
+    const text = inp?.value.trim();
+    if (!text) return focusTell();
+    try {
+      await call("today_tell", { text });
+      inp.value = "";
+      if (D.v) D.v.judging = true;
+      draw();
+    } catch (e) { toast(e); }
+  }
+  async function forget(id) {
+    try { await call("today_forget", { id }); } catch (e) { toast(e); }
+    await refresh();
+  }
+
   // Moves the selection. `after`: the row goes away, so keep the place.
   function step(d, after) {
     const list = rows();
@@ -199,6 +245,8 @@
     if (e.target.closest("#tdrefresh")) { call("today_refresh").catch(() => {}); D.v.refreshing = true; draw(); return; }
     const j = e.target.closest("[data-job]");
     if (j) return pickJob(j.dataset.job);
+    const fg = e.target.closest("[data-forget]");
+    if (fg) return forget(Number(fg.dataset.forget));
     const lt = e.target.closest("[data-later]");
     if (lt) return later(byKey(D.sel), Number(lt.dataset.later));
     const row = e.target.closest("[data-k]");
@@ -211,6 +259,15 @@
     if (act === "open") return open(it);
     if (act === "task") return makeTask(it).catch(() => {});
     if (act === "review") return review(it).catch(() => {});
+    if (act === "about" && it) return focusTell(`About ${it.repo}#${it.number} (${it.title}): `);
+  });
+  document.addEventListener("submit", (e) => {
+    if (e.target.id !== "tdtell") return;
+    e.preventDefault();
+    tell();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && e.target.id === "tdtellin") { e.target.blur(); view()?.querySelector(".tdmain")?.focus(); }
   });
   document.addEventListener("toggle", (e) => {
     const f = e.target.closest?.("[data-fold]");
@@ -230,7 +287,7 @@
     }
     if (D.later && ["1", "2", "3"].includes(e.key)) { e.preventDefault(); return later(it, laterTimes()[Number(e.key) - 1][1]); }
     const k = { j: () => step(1), ArrowDown: () => step(1), k: () => step(-1), ArrowUp: () => step(-1), x: () => done(it), l: () => { D.later = D.later ? null : D.sel; draw(); },
-      u: () => undo(), o: () => open(it), r: () => review(it).catch(() => {}), t: () => makeTask(it).catch(() => {}), g: () => { D.g = true; },
+      u: () => undo(), o: () => open(it), r: () => review(it).catch(() => {}), t: () => makeTask(it).catch(() => {}), g: () => { D.g = true; }, c: () => focusTell(),
       Escape: () => { if (D.later) { D.later = null; draw(); } } }[e.key];
     if (!k) return;
     e.preventDefault();

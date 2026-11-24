@@ -2624,7 +2624,43 @@
     $('#view-today [data-job="Lighthouse dev"]').click();
     await wait(60);
     check("a job tab asks for that job and marks the last one looked at", called("today").at(-1)?.[1].job === "Lighthouse dev" && called("today_looked").some((c) => c[1].job === "Everything"));
-    window.__today = { ...window.__today, sections: window.__today.sections.map((s) => ({ ...s, items: [] })), done: [], since: null };
+    // Tell Claude (39.11): the box, a note, the reply, the Hidden list and Forget.
+    $('#view-today [data-job="Everything"]').click();
+    await wait(60);
+    const inp = $("#tdtellin");
+    check("Today has a box to tell Claude what is wrong", !!inp && $("#tdtell button").textContent === "Tell Claude");
+    key("c");
+    await wait(20);
+    check("c puts the cursor in the box", document.activeElement === $("#tdtellin"));
+    $("#tdtellin").value = "FOCIL work does not matter now";
+    $("#tdtell").requestSubmit();
+    await wait(60);
+    check("Enter sends the note, clears the box and says Claude is reading", called("today_tell").at(-1)?.[1].text === "FOCIL work does not matter now" && $("#tdtellin").value === "" && $(".tdreply")?.textContent.includes("Claude is reading"));
+    $("#tdtellin").value = "half typed";
+    $("#tdtellin").focus();
+    window.__today = { ...window.__today, notes: [{ id: 3, text: "FOCIL work does not matter now", at: Math.floor(Date.now() / 1000) }], judging: false, reply: "Hid #8155: FOCIL is on hold.",
+      sections: window.__today.sections.map((s) => s.key === "reviews" ? { ...s, items: [] } : s),
+      hidden: [it(8155, "reviews", "Review asked of you 2 days ago.", { claude: { act: "hide", why: "FOCIL is on hold" } })] };
+    window.__emit("today", { refreshing: false });
+    await upto(() => $(".tdreply")?.textContent.includes("Hid #8155"));
+    check("a redraw keeps what you typed and the focus", $("#tdtellin").value === "half typed" && document.activeElement === $("#tdtellin"));
+    check("Claude's reply shows under the box", $(".tdreply").textContent === "Claude: Hid #8155: FOCIL is on hold.");
+    check("the hidden item goes to its own fold, with Claude's why", $('[data-fold="Hidden by your notes"] summary')?.textContent === "Hidden by your notes (1)" && $('[data-fold="Hidden by your notes"]').textContent.includes("FOCIL is on hold"));
+    check("your notes are listed with Forget", $('[data-fold="Notes"] summary')?.textContent === "What you told Claude (1)" && !!$('[data-forget="3"]'));
+    $("#tdtellin").value = "";
+    $("#tdtellin").blur();
+    $('[data-fold="Hidden by your notes"] .tdrow').click();
+    await wait(30);
+    check("a hidden row's panel says Claude hid it, and how to show it again", $(".tdpanel .tdclaude")?.textContent === "Hidden by Claude, from your notes: FOCIL is on hold" && $(".tdpanel").textContent.includes("forget the note"));
+    $('.tdpanel [data-act="about"]').click();
+    await wait(20);
+    check("Tell Claude about this one fills the box with the PR", $("#tdtellin").value === "About sigp/lighthouse#8155 (PR 8155): " && document.activeElement === $("#tdtellin"));
+    $("#tdtellin").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    check("Escape leaves the box", document.activeElement !== $("#tdtellin"));
+    $('[data-forget="3"]').click();
+    await wait(60);
+    check("Forget drops the note", called("today_forget").at(-1)?.[1].id === 3);
+    window.__today = { ...window.__today, sections: window.__today.sections.map((s) => ({ ...s, items: [] })), done: [], hidden: [], notes: [], reply: null, since: null };
     window.__emit("today", { refreshing: false });
     await upto(() => $(".tdall"));
     check("an empty list says all done", $(".tdall")?.textContent === "All done for today.");

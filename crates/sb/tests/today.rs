@@ -201,6 +201,47 @@ fn today_lists_ranks_and_hides() {
     assert_eq!(v["later"][0]["later_until"], later);
     hub.today_later("x/y", 2, false, None).unwrap();
 
+    // Tell Claude (39.12): a stand-in `claude` hides #2 and lowers #1, and counts its runs.
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let answer = json!({ "reply": "Hid #2.", "items": [
+        { "pr": "x/y#2", "act": "hide", "why": "FOCIL is on hold" },
+        { "pr": "o/r#1", "act": "down", "why": "not urgent" } ] });
+    let line = json!({ "type": "result", "subtype": "success", "is_error": false, "result": answer.to_string() });
+    std::fs::write(bin.join("claude"), format!("#!/bin/sh\nprintf '%s' \"$2\" > \"$PWD/prompt.txt\"\necho run >> \"$PWD/runs\"\ncat <<'EOF'\n{line}\nEOF\n")).unwrap();
+    Command::new("chmod").args(["+x", bin.join("claude").to_str().unwrap()]).status().unwrap();
+    std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
+    assert!(hub.today_tell("   ").is_err());
+    hub.today_tell("FOCIL work does not matter now").unwrap();
+    wait_for("Claude read the note", || {
+        let v = hub.today(None).unwrap();
+        v["judging"] == false && v["hidden"].as_array().is_some_and(|h| h.len() == 1)
+    });
+    let v = hub.today(None).unwrap();
+    assert!(rows(&v, "reviews").is_empty(), "{v}");
+    assert_eq!(v["hidden"][0]["number"], 2);
+    assert_eq!(v["hidden"][0]["claude"], json!({ "act": "hide", "why": "FOCIL is on hold" }));
+    assert_eq!(v["reply"], "Hid #2.");
+    assert_eq!(v["notes"][0]["text"], "FOCIL work does not matter now");
+    assert!(v["sections"][0]["items"][0]["why"].as_str().unwrap().ends_with("Claude moved it down, from your notes: not urgent."), "{v}");
+    let prompt = std::fs::read_to_string(root.join("home/today/prompt.txt")).unwrap();
+    assert!(prompt.contains("1. FOCIL work does not matter now") && prompt.contains("x/y#2 [Reviews]") && prompt.contains("<github-data>PR 2</github-data>"), "{prompt}");
+    // The same notes and PRs: a refresh does not ask Claude again.
+    hub.today_refresh_now().unwrap();
+    wait_for("the second refresh", || hub.today(None).unwrap()["refreshing"] == false);
+    std::thread::sleep(Duration::from_millis(300));
+    let runs = || std::fs::read_to_string(root.join("home/today/runs")).unwrap_or_default().lines().count();
+    assert_eq!(runs(), 1);
+    let (out, _) = sb(&root, &[], &["today"], "");
+    assert!(out.contains("Hidden by the user's notes to Claude: #2.") && !out.contains("REVIEWS"), "{out}");
+    // Forget the note: the list is as before, and Claude does not run.
+    let id = v["notes"][0]["id"].as_u64().unwrap();
+    hub.today_forget(id).unwrap();
+    let v = hub.today(None).unwrap();
+    assert_eq!((rows(&v, "reviews"), v["hidden"].as_array().unwrap().len(), v["notes"].as_array().unwrap().len()), (vec![2], 0, 0), "{v}");
+    assert!(hub.today_forget(id).is_err());
+    assert_eq!(runs(), 1);
+
     // `sb today` and the pane tool read the same list.
     let (out, err) = sb(&root, &[], &["today"], "");
     assert!(out.contains("YOUR PRS (1)") && out.contains("Reply to bob's 1 open thread.") && out.contains("REVIEWS (1)"), "{out}{err}");

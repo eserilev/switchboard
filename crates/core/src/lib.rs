@@ -40,6 +40,7 @@ pub mod take;
 pub mod tasks;
 pub mod tmux;
 pub mod today;
+pub mod today_notes;
 
 /// Seconds since the Unix epoch.
 pub fn now() -> u64 {

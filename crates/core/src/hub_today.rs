@@ -4,12 +4,18 @@
 use crate::gh::Gh;
 use crate::hub::Hub;
 use crate::now;
+use crate::review;
 use crate::today::{self, Break, Ctx, Data, Item, Seen, CHANGED_KEY, EVERYTHING};
+use crate::today_notes::{self, Judgement, Note};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::time::Duration;
 
 type Res<T> = Result<T, String>;
+
+/// The store settings for your notes and Claude's last answer on them (39.12).
+const NOTES_KEY: &str = "today.notes";
+const JUDGED_KEY: &str = "today.judged";
 
 /// What the last refresh got.
 #[derive(Default)]
@@ -22,6 +28,11 @@ pub struct TodayState {
     running: bool,
     /// Set when Today was opened once: from then on the tick refreshes it.
     opened: bool,
+    /// A Claude run on your notes runs now (39.12).
+    judging: bool,
+    /// The notes or the list changed during the run: run again after it.
+    judge_again: bool,
+    judge_error: Option<String>,
 }
 
 /// `YYYY-MM-DD` of a time, for a GitHub search.
@@ -201,6 +212,7 @@ impl Hub {
                 }
             }
             hub.sink.emit("today", json!({ "refreshing": false }));
+            hub.today_judge();
         });
         if spawned.is_err() {
             self.today.lock().unwrap().running = false;
@@ -230,11 +242,147 @@ impl Hub {
             });
             (st.data.clone(), st.breaks.clone(), st.me.clone(), meta)
         };
-        let items = match (data, me) {
-            (Some(d), Some(me)) => today::items(&d, &breaks, &Ctx { cfg: &cfg, me: me.to_lowercase(), now: now() }),
-            _ => vec![],
-        };
+        let mut items = self.today_raw(data, breaks, me, &cfg);
+        if let Some(j) = self.today_judged() {
+            today_notes::apply(&mut items, &j);
+        }
         (items, meta)
+    }
+
+    fn today_raw(&self, data: Option<Data>, breaks: Vec<Break>, me: Option<String>, cfg: &today::TodayCfg) -> Vec<Item> {
+        match (data, me) {
+            (Some(d), Some(me)) => today::items(&d, &breaks, &Ctx { cfg, me: me.to_lowercase(), now: now() }),
+            _ => vec![],
+        }
+    }
+
+    // ---------- Tell Claude (39.12) ----------
+
+    pub fn today_notes(&self) -> Vec<Note> {
+        let raw = self.store.lock().unwrap().get(NOTES_KEY).ok().flatten();
+        raw.and_then(|r| serde_json::from_str(&r).ok()).unwrap_or_default()
+    }
+
+    fn today_save_notes(&self, notes: &[Note]) -> Res<()> {
+        let v = serde_json::to_string(notes).map_err(|e| e.to_string())?;
+        self.store.lock().unwrap().set(NOTES_KEY, &v).map_err(|e| e.to_string())
+    }
+
+    fn today_judged(&self) -> Option<Judgement> {
+        let raw = self.store.lock().unwrap().get(JUDGED_KEY).ok().flatten();
+        raw.and_then(|r| serde_json::from_str(&r).ok())
+    }
+
+    /// `today_tell(text)`: a new note. Claude reads the list again with it.
+    pub fn today_tell(&self, text: &str) -> Res<()> {
+        let text = today_notes::clean(text).ok_or("Write what is wrong with the list first.")?;
+        let mut notes = self.today_notes();
+        let id = notes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
+        notes.push(Note { id, text, at: now() });
+        if notes.len() > today_notes::NOTES_MAX {
+            notes.remove(0);
+        }
+        self.today_save_notes(&notes)?;
+        self.today_judge();
+        Ok(())
+    }
+
+    /// `today_forget(id)`: drops a note. Claude reads the list again without it.
+    pub fn today_forget(&self, id: u64) -> Res<()> {
+        let mut notes = self.today_notes();
+        let before = notes.len();
+        notes.retain(|n| n.id != id);
+        if notes.len() == before {
+            return Err("That note is gone already.".into());
+        }
+        self.today_save_notes(&notes)?;
+        self.today_judge();
+        Ok(())
+    }
+
+    /// Starts a Claude run on the notes and the list, unless its answer for them
+    /// is saved already. One run at a time; a change during a run runs again after it.
+    pub(crate) fn today_judge(&self) {
+        let notes = self.today_notes();
+        if notes.is_empty() {
+            let _ = self.store.lock().unwrap().set(JUDGED_KEY, "");
+            self.today.lock().unwrap().judge_error = None;
+            self.sink.emit("today", json!({ "refreshing": self.today.lock().unwrap().running }));
+            return;
+        }
+        {
+            let mut st = self.today.lock().unwrap();
+            if st.data.is_none() {
+                return;
+            }
+            if st.judging {
+                st.judge_again = true;
+                return;
+            }
+            st.judging = true;
+        }
+        let me = self.me.clone();
+        let spawned = std::thread::Builder::new().name("sb-today-notes".into()).spawn(move || {
+            let Some(hub) = me.upgrade() else { return };
+            loop {
+                hub.today_judge_once();
+                let mut st = hub.today.lock().unwrap();
+                if !st.judge_again {
+                    st.judging = false;
+                    break;
+                }
+                st.judge_again = false;
+            }
+            hub.sink.emit("today", json!({ "refreshing": hub.today.lock().unwrap().running }));
+        });
+        if spawned.is_err() {
+            self.today.lock().unwrap().judging = false;
+        }
+    }
+
+    fn today_judge_once(&self) {
+        let cfg = self.config().today;
+        let (data, breaks, me) = {
+            let st = self.today.lock().unwrap();
+            (st.data.clone(), st.breaks.clone(), st.me.clone())
+        };
+        let items = self.today_raw(data, breaks, me, &cfg);
+        let notes = self.today_notes();
+        if notes.is_empty() {
+            return;
+        }
+        let input = today_notes::input_of(&notes, &items);
+        if self.today_judged().is_some_and(|j| j.input == input) {
+            return;
+        }
+        self.sink.emit("today", json!({ "refreshing": self.today.lock().unwrap().running }));
+        let t0 = std::time::Instant::now();
+        let got = self.today_ask(&today_notes::prompt(&notes, &items)).and_then(|text| today_notes::parse(&text, &items));
+        tracing::info!(target: "sb::today", ms = t0.elapsed().as_millis() as u64, ok = got.is_ok(), notes = notes.len(), "notes read");
+        match got {
+            Ok((reply, verdicts)) => {
+                let j = Judgement { input, reply, items: verdicts, at: now() };
+                if let Ok(v) = serde_json::to_string(&j) {
+                    let _ = self.store.lock().unwrap().set(JUDGED_KEY, &v);
+                }
+                self.today.lock().unwrap().judge_error = None;
+            }
+            Err(e) => self.today.lock().unwrap().judge_error = Some(e),
+        }
+    }
+
+    /// One `claude -p` run with no tools, in a folder of its own.
+    fn today_ask(&self, prompt: &str) -> Res<String> {
+        let dir = self.paths.home.join("today");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let config = self.config();
+        let env = crate::connections::env(&config, &self.active_connection())?;
+        let run = review::Run { cwd: &dir, prompt, resume: None, fork: false, env: &env, mcp: None, dirs: &[], web: &[], search: false, context: "" };
+        match review::run(&run, |_| {})? {
+            review::Stream::Result { text, error: false, .. } => Ok(text),
+            review::Stream::Result { text, .. } => Err(format!("Claude failed: {}", crate::proto::first_line(&text, 200))),
+            _ => Err("Claude gave no answer.".into()),
+        }
     }
 
     fn today_view_of(&self, job: &str) -> (today::View, Value) {
@@ -264,9 +412,18 @@ impl Hub {
         let (v, mut meta) = self.today_view_of(job);
         let many = v.repos.len() != 1;
         let mut out = serde_json::to_value(&v).map_err(|e| e.to_string())?;
+        let (judging, judge_error) = {
+            let st = self.today.lock().unwrap();
+            (st.judging, st.judge_error.clone())
+        };
+        let reply = self.today_judged().map(|j| j.reply).filter(|r| !r.is_empty());
         if let (Some(o), Some(m)) = (out.as_object_mut(), meta.as_object_mut()) {
             o.append(m);
             o.insert("many_repos".into(), json!(many));
+            o.insert("notes".into(), json!(self.today_notes()));
+            o.insert("judging".into(), json!(judging));
+            o.insert("judge_error".into(), json!(judge_error));
+            o.insert("reply".into(), json!(reply));
         }
         Ok(out)
     }

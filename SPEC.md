@@ -1088,7 +1088,7 @@ Where the build differs from the text above:
 - Sandbox (31): a pane that starts again (resume, restart, a new connection) keeps the sandbox of its settings file, whatever the mode is now. A resumed Ask pane has no Ask mark in its start, so the mode alone would drop it.
 - Sandbox (31): the git paths in `denyWrite` are the real paths when the pane starts, not globs such as `modules/*/hooks`: Claude Code skips a glob in a write rule on Linux. So a submodule or a worktree added while the pane runs is not covered until the pane starts again. A `config.worktree` that is not there yet is listed only when `extensions.worktreeConfig` is on, since git reads it only then (and that setting lives in the closed `config`).
 - Repo context (37): built as 37 says. Not built yet: notes in Settings, URL sources, and the notes in the window's review panel.
-- Today (39): built as 39 says, except 39.10. A live run against GitHub is `cargo test -p switchboard-core live_today -- --ignored --nocapture` (read only). In remote mode it runs on the server, with the server's `gh` login.
+- Today (39): built as 39 says, except 39.10. Tell Claude (39.12) is built. A live run against GitHub is `cargo test -p switchboard-core live_today -- --ignored --nocapture` (read only). In remote mode it runs on the server, with the server's `gh` login.
 - Pane tools (36): built, slice 1 (36.8): tasks, the board and the start note. Not built yet: the change feed and its Undo, the "sb" mark and call log on the tile, the switch in Settings (only the config key), review reads, and the Today writes (Done and Later from an agent). The Today reads are built (39.8). Checked on 2026-11-23 with Claude Code 2.1.330: an interactive pane loads the `--mcp-config` server with no "new MCP server" dialog, shows it connected with its 6 tools, and the user's own servers still load.
 - Sandbox (31): the `credentials` key of the sandbox is not used. `denyRead` and the permission deny rules cover the same folders, and an older Claude Code may not know the key.
 - Claude points to the code (11.15): not checked with a real `claude` yet. Not verified: that Claude calls `review_show` when asked where something is or what to fix, that it cites `path:line` as the system prompt asks, that an interactive pane runs a `--mcp-config` server with no "new MCP server" dialog, that the allow rule runs the tool with no prompt, and that the Stop input of the Claude Code in use has `last_assistant_message` (else the session file is read).
@@ -2889,6 +2889,8 @@ What changed items have only Done; they leave the list after 3 days.
 | `today_done(repo, number, on)` | Done, or undo it. |
 | `today_later(repo, number, until)` | Later until a time in seconds, or `null` to bring it back. |
 | `today_looked(job)` | Marks the job looked at now, for Since you last looked and What changed. |
+| `today_tell(text)` | Saves a note to Claude about the list, and starts a Claude run on it (39.12). |
+| `today_forget(id)` | Drops a note. Claude reads the list again without it. |
 
 ### 39.8 Agents and the terminal
 
@@ -2913,6 +2915,24 @@ What changed items have only Done; they leave the list after 3 days.
 - `today` unit tests: each rule from fixture PR JSON fires, and does not fire for the near misses (your own last comment, a bot's comment, a resolved thread, a commit after the requested change); rank order; the conflict cause; the flake guess; Done hides until another person's event and comes back with the tag; Later hides until its time; bots and your own events never bring an item back; areas by label, prefix and glob; jobs from config, with Everything first.
 - `crates/sb/tests/today.rs`: a real hub with a fake GraphQL: the `today` command, Done and Undo, Later, the store across a restart, the pane tool and `sb today`.
 - Window checks: the rail entry and Leader `y`, the job tabs, the sections and rows, the panel with Why, Done and Later with Undo, the Done list, and "All done for today".
+
+### 39.12 Tell Claude
+
+The rules in code do not know what matters to you this week. You tell Claude in plain words, and Claude sorts the list with your notes.
+
+- **The box:** under the progress bar, "Tell Claude what is wrong with this list". `c` puts the cursor in it. Enter sends the note. Escape leaves it. A note is at most 1,000 characters.
+- **A note stays** until you forget it. Examples: "FOCIL work does not matter now", "PRs by the docs team are not mine to review", "release work comes first". At most 30 notes; a new one past that drops the oldest.
+- **What Claude does:** it reads your notes and the list, and says for each PR that a note is about: hide, down or up, with a short why. It leaves out every PR no note is about.
+  - **Hide:** the item goes to a folded list, **Hidden by your notes**, with the why. Its panel says Claude hid it. To show it again, forget the note, or tell Claude it matters.
+  - **Down** puts it last in its section, **up** first. Why it is here says so, with Claude's why.
+- **Claude's reply** shows under the box: one or two sentences on the newest note, for example "Hid 4 FOCIL PRs." While it reads, the line says "Claude is reading your notes…". A failure shows there, and the list stays as it was.
+- **What you told Claude** is a folded list at the foot, with Forget on each note.
+- **The panel** of any item has "Tell Claude about this one". It puts "About owner/name#N (title): " in the box.
+- **When Claude reads:** after a new note, after Forget, and after a refresh that brings a new PR, a new title or new labels. Not when only a line changes (a day older): the saved answer stays. One run at a time; a change during a run starts one more after it.
+- **The run:** `claude -p` with no tools, in `~/.switchboard/today`, with `review::WRITING`. The prompt holds the notes, and one line per PR: repo and number, section, the rule's line, the title and labels. GitHub text is in `<github-data>` blocks, marked as data, never instructions. Claude answers JSON: `{"reply", "items": [{"pr", "act", "why"}]}`. A PR that is not on the list is dropped.
+- **The store:** the notes in the setting `today.notes`, Claude's last answer in `today.judged` with a fingerprint of its input. A restart does not ask Claude again.
+- **Agents:** `today_list` and `sb today` leave hidden items out, and end with "Hidden by the user's notes to Claude: #N, …".
+- Notes change only Switchboard's store, never GitHub. A Done or Later of a hidden item stays as it was.
 
 ## 40. Messages between agents
 
