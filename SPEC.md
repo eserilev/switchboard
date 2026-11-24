@@ -3444,14 +3444,11 @@ The hub's name and link state sit at the top of every tab: a green dot when link
 - A long-press on a line selects it; drag to select more. The selection opens **Comment** and **Ask about these lines**.
 - Pinch zooms the text only, not the layout. Landscape gives the diff the whole width.
 
-**Landscape** (turn the phone on its side, on any step):
-- The code takes the width. Lines don't wrap; old and new line numbers sit in a narrow gutter.
-- The step's text folds into a rail on the left: step number, title, what and why in short, the findings as one line each, and the notes count. A tap on **‹** folds the rail away for the whole width.
-- The actions move to a rail on the right edge, under the right thumb: **‹ Prev**, **Ask**, **Note**, and a tall gold **Reviewed ›**.
-- **Unified** or **Split**: Split shows old and new side by side, and long lines wrap there.
-- A note's marker on a line opens the note in the left rail, with **Dismiss** and **Comment**. Swipe up in the rail for the next note.
-- The place, the selection and the open note carry over when you turn the phone back.
-- With rotation lock on, a **Wide** button on the step screen opens the same view.
+**Landscape is for reading code only.** Turn the phone on its side on a step:
+- The step's lines fill the screen. Long lines don't wrap; old and new line numbers sit in a narrow gutter.
+- One thin bar on top: the file name, and **Unified** or **Split** (old and new side by side, long lines wrapped).
+- Nothing else: no step text, no notes, no buttons. Scroll and pinch work as in portrait.
+- Turn the phone back to act (Ask, Comment, Reviewed). Your place in the lines carries over both ways.
 
 **Claude's notes as cards:**
 - Each note is a card: its kind (must, should, nit, question), the line, and the text.
