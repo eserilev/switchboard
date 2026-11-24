@@ -1921,6 +1921,10 @@ impl Hub {
                 Ok(()) => Ack::ok(),
                 Err(err) => Ack::err(err),
             }),
+            Request::Resume { pane } => json!(match self.resume(&pane) {
+                Ok(()) => Ack::ok(),
+                Err(err) => Ack::err(err),
+            }),
             Request::ReviewWork { review, task } => match self.review_work(&review, &task) {
                 Ok(v) => {
                     // The window shows the new agent.
@@ -2210,6 +2214,7 @@ fn request_kind(r: &Request) -> &'static str {
         Request::GuideUpdate { .. } => "guide_update",
         Request::ReviewShow { .. } => "review_show",
         Request::ReviewWork { .. } => "review_work",
+        Request::Resume { .. } => "resume",
         Request::Task { .. } => "task",
         Request::Board { .. } => "board",
         Request::Today { .. } => "today",

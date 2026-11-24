@@ -106,6 +106,17 @@ fn agents_on_two_machines_send_messages_that_land() {
     // Claude panes start in Claude Code's normal mode, so they keep a scroll bar (SPEC 12).
     wait_for("the agent started", 10, || std::fs::read_to_string(ra.join(format!(".alt-{a1}"))).is_ok_and(|t| t.trim() == "1"));
 
+    // `sb resume` starts a running agent again with its session (a new build's
+    // tools and env). With no session, it refuses.
+    let (code, _) = sb(&ha, "", &ra, &["resume", &a1], "");
+    assert_eq!(code, 1, "no session yet");
+    sb(&ha, &a1, &ra, &["state", "session"], r#"{"session_id":"s-1"}"#);
+    wait_for("the session is known", 5, || hub_a.views().iter().any(|v| v.id == a1 && v.session.as_deref() == Some("s-1")));
+    std::fs::remove_file(ra.join(format!(".alt-{a1}"))).unwrap();
+    let (code, out) = sb(&ha, "", &ra, &["resume", &a1], "");
+    assert_eq!(code, 0, "{out}");
+    wait_for("the agent started again", 10, || std::fs::read_to_string(ra.join(format!(".alt-{a1}"))).is_ok_and(|t| t.trim() == "1"));
+
     // The link brings the Mac's agents to the server's list.
     wait_for("the Mac's agent on the server", 15, || hub_a.mail_agents().iter().any(|a| a.address == to_b));
     let (code, out) = sb(&hb, &b1, &rb, &["msg", "agents"], "");

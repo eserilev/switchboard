@@ -53,6 +53,7 @@ fn main() {
             Some("--pane") => mcp::serve_pane(),
             a => mcp::serve(a == Some("--ask")),
         },
+        Some("resume") => resume(&args[1..]),
         Some("serve") => serve(),
         Some("attach") => attach(),
         Some("connect") if args.get(1).map(String::as_str) == Some("add") => {
@@ -804,6 +805,33 @@ fn connect_add(args: &[String]) -> i32 {
 
 
 /// `sb today [job]` (SPEC 39.8): the Today list in the terminal.
+/// `sb resume <pane>...`: starts Claude panes again with their sessions, so they
+/// get a new build's tools and settings. Their conversations stay.
+fn resume(panes: &[String]) -> i32 {
+    if panes.is_empty() {
+        eprintln!("usage: sb resume <pane>...");
+        return 2;
+    }
+    let mut code = 0;
+    for p in panes {
+        let req = Request::Resume { pane: p.clone() };
+        let v: Value = match send(&req, true) {
+            Ok(Some(line)) => serde_json::from_str(&line).unwrap_or(json!({ "ok": false, "error": "bad reply" })),
+            _ => {
+                eprintln!("sb resume: Switchboard is not running");
+                return 1;
+            }
+        };
+        if v["ok"] == json!(true) {
+            println!("{p}: started again");
+        } else {
+            eprintln!("sb resume: {p}: {}", v["error"].as_str().unwrap_or("failed"));
+            code = 1;
+        }
+    }
+    code
+}
+
 fn today(job: Option<&str>) -> i32 {
     let req = Request::Today { pane: None, job: job.map(str::to_owned), repo: None, number: None };
     let line = match send(&req, true) {

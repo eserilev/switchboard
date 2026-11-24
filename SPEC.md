@@ -714,7 +714,7 @@ A review finds work to do on the PR. A new agent does it, in a folder of its own
 | Guide sessions | `claude -p`, as in 11.2, on the active connection. |
 | Review threads | Forks of the guide session, as in 11.5, on the active connection. |
 
-Claude panes start with `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`: Claude Code's normal mode, also when your Claude config says `"tui": "fullscreen"`. In full-screen mode Claude Code scrolls inside itself, so the terminal keeps no history and the window shows no scroll bar. The config key `claude_fullscreen = true` keeps full screen. The terminal's scroll bar stays in view (macOS hides overlay scroll bars until a scroll). A pane that runs already keeps its mode until it starts again.
+Claude panes start with `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`: Claude Code's normal mode, also when your Claude config says `"tui": "fullscreen"`. In full-screen mode Claude Code scrolls inside itself, so the terminal keeps no history and the window shows no scroll bar. The config key `claude_fullscreen = true` keeps full screen. `sb resume <pane>...` starts Claude panes again with their sessions, also ones that run (`respawn-pane -k`): the conversation stays, and the pane gets the new build's tools, env and settings. The terminal's scroll bar stays in view (macOS hides overlay scroll bars until a scroll). A pane that runs already keeps its mode until it starts again.
 
 There is no separate local LLM setting. A local model is one more connection (8.1).
 

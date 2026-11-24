@@ -37,6 +37,11 @@ pub enum Request {
         review: String,
         points: Value,
     },
+    /// `sb resume <pane>`: starts a Claude pane again with its session, also one
+    /// that runs. Its conversation stays; its tools, env and settings are new.
+    Resume {
+        pane: String,
+    },
     /// `review_work` of the Ask pane (SPEC 11.16): a new agent on the PR's branch.
     ReviewWork {
         review: String,
