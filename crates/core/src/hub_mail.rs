@@ -410,6 +410,22 @@ impl Hub {
         tracing::info!(target: "sb::mail", machine, "link down");
     }
 
+    /// At start, on the mailbox hub: the messages that still wait for this
+    /// machine's panes go back in their queues. The queues live in memory, so a
+    /// restart lost them; the store kept them as new (SPEC 40).
+    pub(crate) fn mail_restore(&self) {
+        if !self.mailbox_here() {
+            return;
+        }
+        let machine = self.machine();
+        let waiting = self.store.lock().unwrap().mail_new_for_machine(&machine).unwrap_or_default();
+        for m in waiting {
+            let Some(pane) = mail::parse(&m.to).map(|(p, _)| p.to_owned()) else { continue };
+            tracing::info!(target: "sb::mail", id = m.id, to = %m.to, "a waiting message is back in its queue");
+            self.mail_arrive(&pane, m);
+        }
+    }
+
     /// On a computer with `remote`: the link to the mailbox hub, for as long as
     /// the hub runs (SPEC 40.5). It starts again after a pause when it ends.
     pub(crate) fn mail_link_start(&self) {

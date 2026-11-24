@@ -393,6 +393,7 @@ impl Hub {
         hub.listen()?;
         hub.tick_loop();
         hub.mail_link_start();
+        hub.mail_restore();
         Ok(hub)
     }
 

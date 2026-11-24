@@ -1837,6 +1837,7 @@ An agent on a remote hub cannot read the clipboard of the window's machine. So t
   - Remote mode: **Restart the hub on <host>** and **Restart this app**. The hub restart sends `hub_restart`. `sb serve` answers, stops its review runs, and starts again in place with `exec`: the same pid, with the `sb` binary on disk now. So an install on the server takes effect with one click. The link drops, and the window links back on its own.
   - Local mode: **Restart Switchboard**. The app starts again; its hub starts with it.
   - Agents keep running in tmux. The new hub takes them over, as after any start.
+- **Restart tests** (`crates/sb/tests/restart.rs`): each runs a real `sb serve` with stand-in `gh` and `claude` scripts on its PATH, gets work going, sends `hub_restart`, and checks what comes back. A guide that the restart cuts off starts again (11.2). The Today list and Claude's notes come back from disk with no fetch and no new Claude run (39.6, 39.12). A message that waits for an agent arrives once (40). An agent keeps running and keeps its session, and `sb resume` starts it with that session.
 
 ### 29.13 Both machines at once
 
@@ -3108,6 +3109,9 @@ A job with both kinds of repo shows both sets of sections: the code sections fir
 ## 40. Messages between agents
 
 An agent sends a message to another agent, on the same machine or on the other one (your computer and the server). The message lands with no click from you: at the end of the receiver's turn, or at once when it is idle. You chose this over a click for each message, knowing that an agent that reads hostile text (a PR, an issue) can steer another one. The limits in 40.6 stop a loop; they do not stop a single bad message.
+
+
+The queues of waiting messages live in the hub's memory; the store keeps each message as `new` until it is handed. At start, the mailbox hub puts the `new` messages for its own panes back in their queues, so a restart loses none and hands none twice.
 
 ### 40.1 The mailbox
 

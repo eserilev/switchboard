@@ -61,21 +61,9 @@ fn fast_forward(tree: &Path, target: &str) -> Option<String> {
     }
 }
 
-/// The remote whose URL is the GitHub repo `owner/name`. It reads the URLs as
-/// written in the config: `git remote -v` shows them after an `insteadOf`.
-fn remote_of(clone: &Path, repo: &str) -> Option<String> {
-    let text = git(clone, &["config", "--get-regexp", r"^remote\..*\.url$"]).ok()?;
-    let want = repo.to_lowercase();
-    text.lines().find_map(|l| {
-        let (key, url) = l.split_once(' ')?;
-        let name = key.strip_prefix("remote.")?.strip_suffix(".url")?;
-        (crate::base::github_repo(url.trim())?.to_lowercase() == want).then(|| name.to_owned())
-    })
-}
-
 /// Fetches the PR head and gives a worktree on its branch.
 pub fn prepare(clone: &Path, head: &Head) -> Result<Prepared, String> {
-    let mine = head.repo.and_then(|r| remote_of(clone, r)).filter(|_| !head.branch.is_empty());
+    let mine = head.repo.and_then(|r| crate::review::find_remote(clone, r)).filter(|_| !head.branch.is_empty());
     let (target, branch, push) = match &mine {
         Some(remote) => {
             let b = head.branch;

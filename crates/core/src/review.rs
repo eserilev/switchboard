@@ -233,9 +233,20 @@ pub fn gh_submit_review(repo: &str, number: u64, payload: &Value) -> Result<Stri
 }
 
 /// The remote of `repo_dir` that points at `owner/name` on GitHub.
+/// The remote of the clone at `repo_dir` that is the GitHub repo `owner/name`.
+/// It reads the URLs as the config writes them: `git remote -v` shows them after an
+/// `insteadOf`, which can hide the GitHub URL.
 pub fn find_remote(repo_dir: &Path, repo: &str) -> Option<String> {
-    let text = git(repo_dir, &["remote", "-v"]).ok()?;
-    remote_for(&text, repo)
+    let text = git(repo_dir, &["config", "--get-regexp", r"^remote\..*\.url$"]).ok()?;
+    // `remote.<name>.url <url>`, as `remote -v` writes `<name> <url>`.
+    let lines: String = text
+        .lines()
+        .filter_map(|l| {
+            let (key, url) = l.split_once(' ')?;
+            Some(format!("{} {}\n", key.strip_prefix("remote.")?.strip_suffix(".url")?, url.trim()))
+        })
+        .collect();
+    remote_for(&lines, repo)
 }
 
 pub fn remote_for(remote_v: &str, repo: &str) -> Option<String> {
