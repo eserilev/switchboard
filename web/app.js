@@ -1338,9 +1338,10 @@ function cycleConnection() {
 
 // ---------- launcher (SPEC 9) ----------
 
-// `prior`: the last closed round of the typed PR. `prSel` 0 starts the next round, 1 a full review.
+// `prior`: the last closed round of the typed PR. `prSel` 1 (the default) starts a fresh full
+// review; 0 the next round, only the changes since that round.
 // `task`: the plan of Start agent from a task (SPEC 27.6), or null.
-const L = { list: [], sel: 0, where: "main", run: "claude", pr: null, prior: null, priorUrl: null, prSel: 0, task: null };
+const L = { list: [], sel: 0, where: "main", run: "claude", pr: null, prior: null, priorUrl: null, prSel: 1, task: null };
 const fuzzy = (q, s) => { let j = 0; for (const c of s.toLowerCase()) if (c === q[j]) j++; return j === q.length; };
 const setSeg = (id, v) => document.querySelectorAll(`#${id} button`).forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === v));
 const agentIn = (tree) => S.panes.some((p) => p.kind === "claude" && p.tree === tree && p.lamp !== "ended");
@@ -1351,7 +1352,7 @@ function filterRepos() {
   if (L.pr !== L.priorUrl) {
     L.priorUrl = L.pr;
     L.prior = null;
-    L.prSel = 0;
+    L.prSel = 1;
     const url = L.pr;
     if (url) invoke("review_prior", { url }).then((p) => { if (L.priorUrl === url) { L.prior = p; drawLauncher(); } }).catch(() => {});
   }
@@ -1366,8 +1367,8 @@ function drawLauncher() {
   const num = esc(q.split("/pull/")[1]?.split(/[/#?]/)[0] || "");
   const p = L.prior;
   $("#lrepos").innerHTML = L.pr && p
-    ? `<li data-pr="0" aria-selected="${L.prSel === 0}"><span class="rn">Round ${p.round + 1} of #${num}</span><span class="rp">The changes since ${esc(p.head.slice(0, 9))}, the head of round ${p.round}${p.sent ? ` · you sent ${p.sent} review${p.sent > 1 ? "s" : ""}` : ""}</span></li>
-       <li data-pr="1" aria-selected="${L.prSel === 1}"><span class="rn">New full review of #${num}</span><span class="rp">${esc(q)}</span></li>`
+    ? `<li data-pr="1" aria-selected="${L.prSel === 1}"><span class="rn">New full review of #${num}</span><span class="rp">Starts fresh: the whole PR, a new guide. ${esc(q)}</span></li>
+       <li data-pr="0" aria-selected="${L.prSel === 0}"><span class="rn">Round ${p.round + 1} of #${num}: only what changed</span><span class="rp">The changes since ${esc(p.head.slice(0, 9))}, the head of round ${p.round}${p.sent ? ` · you sent ${p.sent} review${p.sent > 1 ? "s" : ""}` : ""}</span></li>`
     : L.pr
     ? `<li aria-selected="true"><span class="rn">Review ${num}</span><span class="rp">${esc(q)}</span></li>`
     : L.list.length
@@ -1511,7 +1512,7 @@ $("#launcher").addEventListener("keydown", (e) => {
   else if (e.key === "Enter" && (e.target.matches("input, select") || e.target.id === "lgo")) { e.preventDefault(); launch(); }
   else if (e.target.id === "lq" && L.pr && L.prior && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
     e.preventDefault();
-    L.prSel = e.key === "ArrowDown" ? 1 : 0;
+    L.prSel = e.key === "ArrowDown" ? 0 : 1;
     drawLauncher();
   }
   else if (e.target.id === "lq" && (e.key === "ArrowDown" || e.key === "ArrowUp")) {

@@ -355,9 +355,11 @@ fn worktree_name(number: u64, round: u32) -> String {
 
 /// The base of the diff of a round and a note. A first round uses the merge base.
 /// A later round starts at the head that the round before reviewed (`review::round_base`).
+/// With no new commits since then, the round reviews the whole PR again: you asked
+/// for a review, and an empty round helps nobody.
 fn scope(f: &review::Fetched, round: u32, since: Option<&str>) -> Res<(String, Option<String>)> {
     match since.filter(|_| round > 1) {
-        Some(s) if s == f.head => Err("The PR has no new commits since the round before.".into()),
+        Some(s) if s == f.head => Ok((f.base.clone(), Some(format!("No new commits since round {}, so this round reviews the whole PR.", round - 1)))),
         Some(s) => review::round_base(&f.tree, s, &f.base, &f.head),
         None => Ok((f.base.clone(), None)),
     }

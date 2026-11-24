@@ -284,7 +284,7 @@ Paste a GitHub PR URL into the launcher, and it opens a review (11).
 6. Before an Update fetches, the review's current head is pinned, so a force-push never makes it look like a local commit.
 5. The review's head and base get refs of their own: `refs/switchboard/<review>/head` and `.../base` (11.10).
 
-If a closed round of the PR exists and no review of it is open, the launcher offers **Round N+1 of #n** first, and **New full review** below it.
+If a closed round of the PR exists and no review of it is open, the launcher offers **New full review** first, picked: a review you closed and open again starts fresh, with the whole PR and a new guide. **Round N+1 of #n: only what changed** is below it, for the changes since that round. A round with no new commits since the round before reviews the whole PR, with a note, and is no error.
 
 `gh pr checkout` is not used. It changes the current folder and makes no worktree.
 

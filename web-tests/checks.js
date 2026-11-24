@@ -300,12 +300,10 @@
   q.value = "https://github.com/sigp/lighthouse/pull/999";
   q.dispatchEvent(new Event("input"));
   await wait(100);
-  check("a closed round offers the next round first", $$("#lrepos li[data-pr]").length === 2 && $('#lrepos li[data-pr="0"]').textContent.includes("Round 2 of #999") && $('#lrepos li[data-pr="0"]').getAttribute("aria-selected") === "true" && $("#lrepos").textContent.includes("you sent 2 reviews"), $("#lrepos").textContent);
+  check("a closed review offers a fresh full review first, picked", $$("#lrepos li[data-pr]")[0]?.dataset.pr === "1" && $('#lrepos li[data-pr="1"]').getAttribute("aria-selected") === "true" && $('#lrepos li[data-pr="0"]').textContent.includes("Round 2 of #999") && $("#lrepos").textContent.includes("you sent 2 reviews"), $("#lrepos").textContent);
   q.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
   await wait(20);
-  check("down picks the full review", $('#lrepos li[data-pr="1"]').getAttribute("aria-selected") === "true");
-  q.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
-  await wait(20);
+  check("down picks the next round", $('#lrepos li[data-pr="0"]').getAttribute("aria-selected") === "true");
   $("#lgo").click();
   await wait(400);
   check("the next round opens from the closed round", called("review_open")[0]?.[1].roundOf === "r0", JSON.stringify(called("review_open")[0]?.[1]));
