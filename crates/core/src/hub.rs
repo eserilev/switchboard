@@ -823,6 +823,11 @@ impl Hub {
             &self.config(),
             connection.unwrap_or(connections::DEFAULT),
         )?);
+        // Full-screen mode scrolls inside Claude Code: the terminal keeps no history
+        // and shows no scroll bar. The normal mode wins over `"tui": "fullscreen"`.
+        if !config.claude_fullscreen {
+            env.push(("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN".to_owned(), "1".to_owned()));
+        }
         // The first message goes first: `--add-dir` takes a list.
         let mut argv = vec!["claude".to_owned()];
         argv.extend(start.first.clone());

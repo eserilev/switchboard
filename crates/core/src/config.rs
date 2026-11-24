@@ -35,6 +35,10 @@ pub struct Config {
     /// The program that links the window to the remote hub. With none,
     /// `ssh -T <remote> sb attach`, with `~/.local/bin` and `~/.cargo/bin` on its PATH.
     pub remote_command: Option<Vec<String>>,
+    /// True: Claude panes keep Claude Code's full-screen mode (`"tui": "fullscreen"`).
+    /// False (the default): they start in its normal mode, so the pane keeps its
+    /// history and the window shows a scroll bar (SPEC 12).
+    pub claude_fullscreen: bool,
 }
 
 /// One repo's table, `[repos."owner/name"]` (SPEC 37).
@@ -271,6 +275,7 @@ impl Default for Config {
             remote: None,
             remote_off: false,
             remote_command: None,
+            claude_fullscreen: false,
         }
     }
 }

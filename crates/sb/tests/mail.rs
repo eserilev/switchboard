@@ -85,7 +85,7 @@ fn agents_on_two_machines_send_messages_that_land() {
 
     let bin = root.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    std::fs::write(bin.join("claude"), "#!/bin/sh\nstty raw -echo 2>/dev/null\nexec cat >> \"$PWD/.typed-$SB_PANE\"\n").unwrap();
+    std::fs::write(bin.join("claude"), "#!/bin/sh\necho \"$CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN\" > \"$PWD/.alt-$SB_PANE\"\nstty raw -echo 2>/dev/null\nexec cat >> \"$PWD/.typed-$SB_PANE\"\n").unwrap();
     Command::new("chmod").args(["+x", bin.join("claude").to_str().unwrap()]).status().unwrap();
     std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
 
@@ -102,6 +102,9 @@ fn agents_on_two_machines_send_messages_that_land() {
     let hub_b = start(&hb, &sb_, "machine = \"mac\"\nremote = \"box\"\n");
     let b1 = open(&hub_b, &rb);
     let (to_a, to_b) = (format!("{a1}@box"), format!("{b1}@mac"));
+
+    // Claude panes start in Claude Code's normal mode, so they keep a scroll bar (SPEC 12).
+    wait_for("the agent started", 10, || std::fs::read_to_string(ra.join(format!(".alt-{a1}"))).is_ok_and(|t| t.trim() == "1"));
 
     // The link brings the Mac's agents to the server's list.
     wait_for("the Mac's agent on the server", 15, || hub_a.mail_agents().iter().any(|a| a.address == to_b));

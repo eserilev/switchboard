@@ -714,6 +714,8 @@ A review finds work to do on the PR. A new agent does it, in a folder of its own
 | Guide sessions | `claude -p`, as in 11.2, on the active connection. |
 | Review threads | Forks of the guide session, as in 11.5, on the active connection. |
 
+Claude panes start with `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`: Claude Code's normal mode, also when your Claude config says `"tui": "fullscreen"`. In full-screen mode Claude Code scrolls inside itself, so the terminal keeps no history and the window shows no scroll bar. The config key `claude_fullscreen = true` keeps full screen. The terminal's scroll bar stays in view (macOS hides overlay scroll bars until a scroll). A pane that runs already keeps its mode until it starts again.
+
 There is no separate local LLM setting. A local model is one more connection (8.1).
 
 ## 13. Architecture
@@ -865,7 +867,7 @@ enabled = true                  # the `switchboard` MCP server in every agent pa
 context = ["~/packs/lighthouse"]   # shared notes: files, or folders of .md files
 ```
 
-`remote = "me@box"` links the window to the hub on that host too, `remote_off = true` opens the window on this computer (the machine rows of the rail set it, 29.13), and `remote_command` replaces the ssh command (29.1).
+`remote = "me@box"` links the window to the hub on that host too, `remote_off = true` opens the window on this computer (the machine rows of the rail set it, 29.13), and `remote_command` replaces the ssh command (29.1). `claude_fullscreen = true` keeps Claude Code's full-screen mode in Claude panes; the default is its normal mode, with history and a scroll bar (12).
 
 A missing file gives the defaults. An unknown key is an error with the key name.
 
