@@ -390,7 +390,7 @@
     const text = inp?.value.trim();
     if (!text) return focusTell();
     try {
-      await call("today_tell", { text });
+      await call("today_tell", { text, job: D.v?.job || "Everything" });
       inp.value = "";
       if (D.v) D.v.judging = true;
       draw();

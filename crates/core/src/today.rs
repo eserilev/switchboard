@@ -1078,6 +1078,14 @@ fn split(all: &[Item], repos: &[String], wide_ok: bool, seen: &HashMap<(String, 
     (show, done, later, hidden)
 }
 
+/// The items one job shows before Done and Later: its repos, and the items of
+/// every open item only when it reads them (39.13). Claude's notes of a job read these.
+pub fn job_items(all: &[Item], cfg: &TodayCfg, job: &str) -> Vec<Item> {
+    let repos = cfg.job_repos(job);
+    let wide_ok = cfg.jobs.get(job).is_some_and(|j| j.all());
+    all.iter().filter(|i| in_job(&i.repo, &repos) && (wide_ok || !i.wide) && !(repos.is_empty() && i.section == Section::Area)).cloned().collect()
+}
+
 /// The list of one job (SPEC 39.1). `looked` is when you last looked at it.
 pub fn view(all: &[Item], cfg: &TodayCfg, job: &str, seen: &HashMap<(String, u64), Seen>, looked: Option<u64>, now: u64) -> View {
     let job = if cfg.jobs.contains_key(job) { job.to_owned() } else { EVERYTHING.to_owned() };

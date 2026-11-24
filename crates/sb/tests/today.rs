@@ -211,8 +211,8 @@ fn today_lists_ranks_and_hides() {
     std::fs::write(bin.join("claude"), format!("#!/bin/sh\nprintf '%s' \"$2\" > \"$PWD/prompt.txt\"\necho run >> \"$PWD/runs\"\ncat <<'EOF'\n{line}\nEOF\n")).unwrap();
     Command::new("chmod").args(["+x", bin.join("claude").to_str().unwrap()]).status().unwrap();
     std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
-    assert!(hub.today_tell("   ").is_err());
-    hub.today_tell("FOCIL work does not matter now").unwrap();
+    assert!(hub.today_tell("   ", "Everything").is_err());
+    hub.today_tell("FOCIL work does not matter now", "Everything").unwrap();
     wait_for("Claude read the note", || {
         let v = hub.today(None).unwrap();
         v["judging"] == false && v["hidden"].as_array().is_some_and(|h| h.len() == 1)
@@ -226,6 +226,13 @@ fn today_lists_ranks_and_hides() {
     assert!(v["sections"][0]["items"][0]["why"].as_str().unwrap().ends_with("Claude moved it down, from your notes: not urgent."), "{v}");
     let prompt = std::fs::read_to_string(root.join("home/today/prompt.txt")).unwrap();
     assert!(prompt.contains("1. FOCIL work does not matter now") && prompt.contains("x/y#2 [Reviews]") && prompt.contains("<github-data>PR 2</github-data>"), "{prompt}");
+    // A note belongs to the tab it was told in: the Work job has neither the note,
+    // nor Claude's reply, nor its verdicts.
+    let w = hub.today(Some("Work")).unwrap();
+    assert_eq!((w["notes"].as_array().unwrap().len(), w["reply"].is_null()), (0, true), "{w}");
+    assert!(!w["sections"][0]["items"][0]["why"].as_str().unwrap().contains("Claude moved"), "{w}");
+    // The list is saved, so a restart of the hub shows it at once.
+    assert!(root.join("home/today/list.json").is_file());
     // The same notes and PRs: a refresh does not ask Claude again.
     hub.today_refresh_now().unwrap();
     wait_for("the second refresh", || hub.today(None).unwrap()["refreshing"] == false);

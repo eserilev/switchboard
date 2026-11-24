@@ -14,6 +14,14 @@ pub struct Note {
     pub id: u64,
     pub text: String,
     pub at: u64,
+    /// The job tab it was told in: it works only there. A note from before jobs
+    /// had notes belongs to Everything.
+    #[serde(default = "everything")]
+    pub job: String,
+}
+
+fn everything() -> String {
+    crate::today::EVERYTHING.to_owned()
 }
 
 /// What Claude does to one item.
@@ -202,7 +210,7 @@ mod tests {
     }
 
     fn note(t: &str) -> Note {
-        Note { id: 1, text: t.into(), at: 0 }
+        Note { id: 1, text: t.into(), at: 0, job: everything() }
     }
 
     #[test]

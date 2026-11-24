@@ -17,6 +17,25 @@ type Res<T> = Result<T, String>;
 const NOTES_KEY: &str = "today.notes";
 const JUDGED_KEY: &str = "today.judged";
 
+/// The setting of Claude's answer on the notes of one job.
+fn judged_key(job: &str) -> String {
+    if job == EVERYTHING {
+        // The key from before notes had jobs.
+        JUDGED_KEY.to_owned()
+    } else {
+        format!("{JUDGED_KEY}:{job}")
+    }
+}
+
+/// The last list, saved so a restart of the hub shows it at once (39.6).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Saved {
+    data: Data,
+    breaks: Vec<Break>,
+    me: Option<String>,
+    fetched: u64,
+}
+
 /// What the last refresh got.
 #[derive(Default)]
 pub struct TodayState {
@@ -33,6 +52,8 @@ pub struct TodayState {
     /// The notes or the list changed during the run: run again after it.
     judge_again: bool,
     judge_error: Option<String>,
+    /// The saved list was read from disk once.
+    restored: bool,
 }
 
 /// `YYYY-MM-DD` of a time, for a GitHub search.
@@ -272,6 +293,7 @@ impl Hub {
                     st.data = Some(d);
                     st.breaks = breaks;
                     st.fetched = Some(now());
+                    hub.today_save(&st);
                 }
             }
             hub.sink.emit("today", json!({ "refreshing": false }));
@@ -294,8 +316,54 @@ impl Hub {
         }
     }
 
+    fn today_file(&self) -> std::path::PathBuf {
+        self.paths.home.join("today").join("list.json")
+    }
+
+    /// Saves the list that a refresh got. A failure only logs: the next refresh
+    /// saves again.
+    fn today_save(&self, st: &TodayState) {
+        let Some(data) = st.data.clone() else { return };
+        let saved = Saved { data, breaks: st.breaks.clone(), me: st.me.clone(), fetched: st.fetched.unwrap_or(0) };
+        let path = self.today_file();
+        let res = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))
+            .map_err(|e| e.to_string())
+            .and_then(|_| serde_json::to_vec(&saved).map_err(|e| e.to_string()))
+            .and_then(|b| {
+                // A new file, then a rename: a crash never leaves half a list.
+                let tmp = path.with_extension("json.tmp");
+                std::fs::write(&tmp, b).and_then(|_| std::fs::rename(&tmp, &path)).map_err(|e| e.to_string())
+            });
+        if let Err(err) = res {
+            tracing::warn!(target: "sb::today", %err, "the list was not saved");
+        }
+    }
+
+    /// The saved list, once after a start, so Today shows at once.
+    fn today_restore(&self) {
+        let mut st = self.today.lock().unwrap();
+        if st.restored || st.data.is_some() {
+            st.restored = true;
+            return;
+        }
+        st.restored = true;
+        let Ok(bytes) = std::fs::read(self.today_file()) else { return };
+        match serde_json::from_slice::<Saved>(&bytes) {
+            Ok(s) => {
+                st.data = Some(s.data);
+                st.breaks = s.breaks;
+                if st.me.is_none() {
+                    st.me = s.me;
+                }
+                st.fetched = Some(s.fetched);
+            }
+            Err(err) => tracing::warn!(target: "sb::today", %err, "the saved list does not read"),
+        }
+    }
+
     /// Every item of the last refresh, before Done and Later.
     fn today_items(&self) -> (Vec<Item>, Value) {
+        self.today_restore();
         let cfg = self.config().today;
         let (data, breaks, me, meta) = {
             let st = self.today.lock().unwrap();
@@ -305,11 +373,7 @@ impl Hub {
             });
             (st.data.clone(), st.breaks.clone(), st.me.clone(), meta)
         };
-        let mut items = self.today_raw(data, breaks, me, &cfg);
-        if let Some(j) = self.today_judged() {
-            today_notes::apply(&mut items, &j);
-        }
-        (items, meta)
+        (self.today_raw(data, breaks, me, &cfg), meta)
     }
 
     fn today_raw(&self, data: Option<Data>, breaks: Vec<Break>, me: Option<String>, cfg: &today::TodayCfg) -> Vec<Item> {
@@ -331,17 +395,23 @@ impl Hub {
         self.store.lock().unwrap().set(NOTES_KEY, &v).map_err(|e| e.to_string())
     }
 
-    fn today_judged(&self) -> Option<Judgement> {
-        let raw = self.store.lock().unwrap().get(JUDGED_KEY).ok().flatten();
+    fn today_judged(&self, job: &str) -> Option<Judgement> {
+        let raw = self.store.lock().unwrap().get(&judged_key(job)).ok().flatten();
         raw.and_then(|r| serde_json::from_str(&r).ok())
     }
 
-    /// `today_tell(text)`: a new note. Claude reads the list again with it.
-    pub fn today_tell(&self, text: &str) -> Res<()> {
+    fn job_notes(&self, job: &str) -> Vec<Note> {
+        self.today_notes().into_iter().filter(|n| n.job == job).collect()
+    }
+
+    /// `today_tell(text, job)`: a new note for one job tab. Claude reads that job's
+    /// list again with it; other jobs do not change.
+    pub fn today_tell(&self, text: &str, job: &str) -> Res<()> {
         let text = today_notes::clean(text).ok_or("Write what is wrong with the list first.")?;
+        let job = if self.config().today.jobs.contains_key(job) { job.to_owned() } else { EVERYTHING.to_owned() };
         let mut notes = self.today_notes();
         let id = notes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
-        notes.push(Note { id, text, at: now() });
+        notes.push(Note { id, text, at: now(), job });
         if notes.len() > today_notes::NOTES_MAX {
             notes.remove(0);
         }
@@ -366,9 +436,13 @@ impl Hub {
     /// Starts a Claude run on the notes and the list, unless its answer for them
     /// is saved already. One run at a time; a change during a run runs again after it.
     pub(crate) fn today_judge(&self) {
+        // A job with no notes keeps no answer.
         let notes = self.today_notes();
+        let jobs: Vec<String> = self.config().today.job_names();
+        for j in jobs.iter().filter(|j| !notes.iter().any(|n| &n.job == *j)) {
+            let _ = self.store.lock().unwrap().set(&judged_key(j), "");
+        }
         if notes.is_empty() {
-            let _ = self.store.lock().unwrap().set(JUDGED_KEY, "");
             self.today.lock().unwrap().judge_error = None;
             self.sink.emit("today", json!({ "refreshing": self.today.lock().unwrap().running }));
             return;
@@ -403,35 +477,44 @@ impl Hub {
         }
     }
 
+    /// One Claude run for each job with notes whose list or notes changed.
     fn today_judge_once(&self) {
         let cfg = self.config().today;
         let (data, breaks, me) = {
             let st = self.today.lock().unwrap();
             (st.data.clone(), st.breaks.clone(), st.me.clone())
         };
-        let items = self.today_raw(data, breaks, me, &cfg);
-        let notes = self.today_notes();
-        if notes.is_empty() {
-            return;
+        let all = self.today_raw(data, breaks, me, &cfg);
+        let mut error = None;
+        for job in cfg.job_names() {
+            let notes = self.job_notes(&job);
+            if notes.is_empty() {
+                continue;
+            }
+            let items = today::job_items(&all, &cfg, &job);
+            if let Err(e) = self.today_judge_job(&job, &notes, &items) {
+                error = Some(e);
+            }
         }
+        self.today.lock().unwrap().judge_error = error;
+    }
+
+    fn today_judge_job(&self, job: &str, notes: &[Note], items: &[Item]) -> Res<()> {
+        let (notes, items) = (notes.to_vec(), items.to_vec());
         let input = today_notes::input_of(&notes, &items);
-        if self.today_judged().is_some_and(|j| j.input == input) {
-            return;
+        if self.today_judged(job).is_some_and(|j| j.input == input) {
+            return Ok(());
         }
         self.sink.emit("today", json!({ "refreshing": self.today.lock().unwrap().running }));
         let t0 = std::time::Instant::now();
         let got = self.today_ask(&today_notes::prompt(&notes, &items)).and_then(|text| today_notes::parse(&text, &items));
-        tracing::info!(target: "sb::today", ms = t0.elapsed().as_millis() as u64, ok = got.is_ok(), notes = notes.len(), "notes read");
-        match got {
-            Ok((reply, verdicts)) => {
-                let j = Judgement { input, reply, items: verdicts, at: now() };
-                if let Ok(v) = serde_json::to_string(&j) {
-                    let _ = self.store.lock().unwrap().set(JUDGED_KEY, &v);
-                }
-                self.today.lock().unwrap().judge_error = None;
-            }
-            Err(e) => self.today.lock().unwrap().judge_error = Some(e),
+        tracing::info!(target: "sb::today", job, ms = t0.elapsed().as_millis() as u64, ok = got.is_ok(), notes = notes.len(), "notes read");
+        let (reply, verdicts) = got?;
+        let j = Judgement { input, reply, items: verdicts, at: now() };
+        if let Ok(v) = serde_json::to_string(&j) {
+            let _ = self.store.lock().unwrap().set(&judged_key(job), &v);
         }
+        Ok(())
     }
 
     /// One `claude -p` run with no tools, in a folder of its own.
@@ -450,7 +533,12 @@ impl Hub {
 
     fn today_view_of(&self, job: &str) -> (today::View, Value) {
         let cfg = self.config().today;
-        let (items, meta) = self.today_items();
+        let (mut items, meta) = self.today_items();
+        // Your notes of this job, and only of this job (39.12).
+        let job_key = if cfg.jobs.contains_key(job) { job } else { EVERYTHING };
+        if let Some(j) = self.today_judged(job_key) {
+            today_notes::apply(&mut items, &j);
+        }
         let (seen, looked) = {
             let store = self.store.lock().unwrap();
             let seen = store.today_seen().unwrap_or_default();
@@ -463,6 +551,7 @@ impl Hub {
     /// `today(job)`: the list of one job. Starts a refresh when it is old.
     pub fn today(&self, job: Option<&str>) -> Res<Value> {
         let job = job.unwrap_or(EVERYTHING);
+        self.today_restore();
         let mins = self.config().today.refresh_minutes.max(1);
         let (fetched, running) = {
             let mut st = self.today.lock().unwrap();
@@ -479,11 +568,12 @@ impl Hub {
             let st = self.today.lock().unwrap();
             (st.judging, st.judge_error.clone())
         };
-        let reply = self.today_judged().map(|j| j.reply).filter(|r| !r.is_empty());
+        let job_key = v.job.clone();
+        let reply = self.today_judged(&job_key).map(|j| j.reply).filter(|r| !r.is_empty());
         if let (Some(o), Some(m)) = (out.as_object_mut(), meta.as_object_mut()) {
             o.append(m);
             o.insert("many_repos".into(), json!(many));
-            o.insert("notes".into(), json!(self.today_notes()));
+            o.insert("notes".into(), json!(self.job_notes(&job_key)));
             o.insert("judging".into(), json!(judging));
             o.insert("judge_error".into(), json!(judge_error));
             o.insert("reply".into(), json!(reply));
@@ -589,6 +679,7 @@ impl Hub {
 
     /// Waits for a first list, at most a minute, for `sb today` and the pane tools.
     fn today_wait(&self) {
+        self.today_restore();
         let loaded = self.today.lock().unwrap().data.is_some();
         if loaded {
             return;

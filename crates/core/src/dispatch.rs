@@ -171,7 +171,7 @@ commands! {
     today_done(repo: String, number: u64, changed: bool, on: bool) -> () => |h| h.today_done(&repo, number, changed, on);
     today_later(repo: String, number: u64, changed: bool, until: Option<u64>) -> () => |h| h.today_later(&repo, number, changed, until);
     today_looked(job: String) -> () => |h| h.today_looked(&job);
-    today_tell(text: String) -> () => |h| h.today_tell(&text);
+    today_tell(text: String, job: Option<String>) -> () => |h| h.today_tell(&text, job.as_deref().unwrap_or(crate::today::EVERYTHING));
     today_job(name: String) -> Value => |h| h.today_job(&name);
     today_job_save(form: crate::config::JobForm) -> () => |h| h.today_job_save(&form);
     today_job_remove(name: String) -> () => |h| h.today_job_remove(&name);

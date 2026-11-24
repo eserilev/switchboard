@@ -2921,6 +2921,7 @@ What changed items have only Done; they leave the list after 3 days.
 - Per PR: number, title, url, repo, draft, author, labels, milestone, size, `mergeable`, `reviewDecision`, base, state, merged time, the merge queue entry, review requests, the latest reviews, the last 20 commits and comments with their authors and times, the review threads (resolved or not, the last comment), the check rollup, and the changed paths (first 100).
 - The searches of one refresh run side by side. A refresh takes about 20 s for a busy account (measured: 32 open PRs, 18 s).
 - A refresh runs on its own thread, at most one at a time, when you open Today, when you press refresh, and every `refresh_minutes` while the hub runs once Today was opened. The window gets a `today` event. An error (gh not logged in, rate limit, no network) keeps the last list and shows the reason above it.
+- Each refresh saves the list to `~/.switchboard/today/list.json` (a new file, then a rename). After a restart of the hub, Today shows that list at once, with its "updated" time, and refreshes behind it when it is older than `refresh_minutes`.
 - The store (version 14): `today_seen` (repo, number, done_at, done_event, later_until) for Done and Later; `today_pr` (repo, number, mergeable, author_mine, state) for What changed; the time you last looked at each job is the setting `today.looked:<job>`.
 - The rules are pure functions from the fetched PR JSON, the config and the store rows to the list. No network inside them, so tests use fixtures.
 
@@ -2965,6 +2966,7 @@ What changed items have only Done; they leave the list after 3 days.
 The rules in code do not know what matters to you this week. You tell Claude in plain words, and Claude sorts the list with your notes.
 
 - **The box:** under the progress bar, "Tell Claude what is wrong with this list". `c` puts the cursor in it. Enter sends the note. Escape leaves it. A note is at most 1,000 characters.
+- **A note belongs to the job tab you tell it in.** Claude reads only that job's list with it, and its reply, its notes list and its verdicts show only in that tab. A note from before jobs had notes belongs to Everything.
 - **A note stays** until you forget it. Examples: "FOCIL work does not matter now", "PRs by the docs team are not mine to review", "release work comes first". At most 30 notes; a new one past that drops the oldest.
 - **What Claude does:** it reads your notes and the list, and says for each PR that a note is about: hide, down or up, with a short why. It leaves out every PR no note is about.
   - **Hide:** the item goes to a folded list, **Hidden by your notes**, with the why. Its panel says Claude hid it. To show it again, forget the note, or tell Claude it matters.
@@ -2974,7 +2976,7 @@ The rules in code do not know what matters to you this week. You tell Claude in 
 - **The panel** of any item has "Tell Claude about this one". It puts "About owner/name#N (title): " in the box.
 - **When Claude reads:** after a new note, after Forget, and after a refresh that brings a new PR, a new title or new labels. Not when only a line changes (a day older): the saved answer stays. One run at a time; a change during a run starts one more after it.
 - **The run:** `claude -p` with no tools, in `~/.switchboard/today`, with `review::WRITING`. The prompt holds the notes, and one line per PR: repo and number, section, the rule's line, the title and labels. GitHub text is in `<github-data>` blocks, marked as data, never instructions. Claude answers JSON: `{"reply", "items": [{"pr", "act", "why"}]}`. A PR that is not on the list is dropped.
-- **The store:** the notes in the setting `today.notes`, Claude's last answer in `today.judged` with a fingerprint of its input. A restart does not ask Claude again.
+- **The store:** the notes in the setting `today.notes`, each with its job. Claude's last answer for each job in `today.judged:<job>` (Everything: `today.judged`), with a fingerprint of its input. One run reads each job with notes whose list or notes changed. A restart does not ask Claude again.
 - **Agents:** `today_list` and `sb today` leave hidden items out, and end with "Hidden by the user's notes to Claude: #N, …".
 - Notes change only Switchboard's store, never GitHub. A Done or Later of a hidden item stays as it was.
 
