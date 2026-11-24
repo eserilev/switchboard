@@ -3165,3 +3165,334 @@ Each hub hands messages to its own agents. A message waits in the hub's queue fo
 - `mail` unit tests: addresses, machine names, the cleaned text, the wrap, the limit window, when to type.
 - `crates/sb/tests/mail.rs`: a server hub and a Mac hub with tmux each, linked by `sb msg watch` through `env` in place of ssh (`SB_MAIL_LINK`), and a stand-in `claude` that writes what it gets. The Mac's agent shows on the server, and `sb msg agents` on the Mac marks `you`. Refusals: itself, a bad address, an agent that does not run. Server to Mac, idle: typed with Enter after the agent settles, with the sender and the note, and handed on the server. Mac to server, working: nothing typed; the Stop hook blocks with the message, the lamp stays working, and the next Stop has nothing. The send limit.
 - Window checks: the inspector's list, in and out, with `waiting`; a new message's note and a reload; a mailbox on the server.
+
+## 41. Phone app, relay and devices
+
+Status: technical spec, not built. Revised after a review by a second agent (41.16). The phone design is in 42.
+
+You review on your phone, step by step, against the hub on your computer or server. Nobody opens a port, runs ssh or installs a VPN. Each device signs in once; a relay carries end-to-end encrypted traffic; the hub decides which devices may do what.
+
+### 41.1 Goals and limits
+
+- **Seamless:** install, sign in, approve the phone once on the computer. It then works on any network.
+- **The relay is not trusted.** It routes bytes. It can drop, delay, replay or reorder them, and it can send plain pushes (41.9). It can never read or change traffic, forge a command, or decide who may do what.
+- **The hub is the authority.** Its device list and the command table decide every command.
+- **Review first.** The default phone reads and reviews. Anything that makes an agent act (a message, a permit, Work on this PR) is code execution on the hub: off by default (41.7).
+- **Not in scope:** a hosted hub, a phone with no hub, desktop-to-desktop over the relay.
+
+### 41.2 The parts
+
+| Part | Where | Language | New? |
+|---|---|---|---|
+| Hub (`sb serve`, or the app's own hub) | Your computer or server | Rust | Changed: devices, several windows (41.8), relay link |
+| Relay and account service | Our servers, `relay.switchboard.dev` | Rust (tokio, axum) | New crate `crates/relay` |
+| Phone app | iOS, Android | Tauri 2 mobile with the `web/` code, plus native Swift and Kotlin plugins for the keychain, push and the iOS notification extension | New |
+| Desktop app | macOS, Linux | Tauri 2 | Changed: Add a phone, devices |
+
+The pure logic of each new protocol lives in small crates in the Aeneas subset (41.14). The async code around them reads, calls the pure function, and acts on its answer.
+
+### 41.3 Accounts and sign-in
+
+- **GitHub sign-in** through a GitHub OAuth App with no scopes (it reads only the user id). The relay holds the app secret and does the code exchange.
+  - The desktop app and `sb serve` use the device flow.
+  - The phone uses the web flow with PKCE and `state`, and the redirect is a claimed https link (an iOS universal link or an Android app link), never a custom scheme.
+  - The relay drops the GitHub token after it reads the user id.
+- **Sign in with Apple** is offered too on iOS (App Store guideline 4.8). An Apple account links to a GitHub account once, on the computer.
+- **The account** keeps only: the account id; its hubs (id, name, public key, last seen); its devices (id, name, platform, public keys, push token, created, last seen, revoked). No code, no reviews, no prompts.
+- **Delete my account** is in the app (guideline 5.1.1(v)): the relay drops the account, its devices and its push tokens.
+- **Relay tokens:** a random 256-bit value per device or hub, hashed at rest, 30 days. Rotation keeps the old token valid for 10 minutes after a new one is issued, so a drop during rotation never locks a client out. A reuse of a token older than that revokes the whole token family (a stolen token).
+- The account is a directory, not an authority: a hub accepts only the keys on its own list (41.4).
+
+### 41.4 Devices and pairing
+
+- **Keys.** Each hub and each phone has a static X25519 key pair for sessions, and each phone also has a separate X25519 push key pair (41.9).
+  - **iOS:** the Secure Enclave has no X25519, and `snow` needs the raw private key. The raw key lives in the Keychain as `WhenUnlockedThisDeviceOnly`, wrapped by a Secure Enclave P-256 key. The push key lives in a shared App Group keychain item with `AfterFirstUnlockThisDeviceOnly`, for the notification extension.
+  - **Android:** the raw key is wrapped by an AES key in the Android Keystore (XDH in the Keystore needs API 33; the wrap works from API 23).
+  - **Hub:** `~/.switchboard/device.key`, mode 0600; on macOS in the Keychain. The agent sandbox (31) and the pane Read rules deny `~/.switchboard/device.key` and the store, so an agent can't copy the hub's identity.
+- **The hub's device list** (store table `device`): id, name, session key, push key, scopes, paired at, last seen, revoked at, and a generation number.
+- **Who may pair.** Only you, at the computer:
+  - In the desktop app, **Add a phone** and **Allow** go through the window's own IPC (Tauri), never through a socket command.
+  - On a server, `sb pair` asks on the terminal (`/dev/tty`), never through the window socket.
+  - So an agent, which can reach the window socket (29.9), can never pair a key or change scopes. Neither can a relay window (41.7).
+- **Pairing mode.** The hub takes pairing requests only while Add a phone is open (at most 10 minutes). Outside it, a request gets no answer and shows nothing.
+- **QR pairing** (the camera can see the screen):
+  1. Add a phone makes a one-time secret `s` (32 random bytes, one use).
+  2. The QR holds the hub id, the hub's public key, `s` and the relay URL.
+  3. The phone runs Noise `IKpsk2` with `s` as the pre-shared key, and refuses any hub key that differs from the QR's.
+  4. Both screens show a short check code from the handshake hash. You check that they match, and the computer names the device (the phone's own name is only a suggestion).
+  5. **Allow** on the computer adds the key. A second phone that raced with a photo of the QR shows a different check code, and the secret is used up.
+- **Code pairing** (a headless server, or a computer with no camera nearby): the computer shows an 8-digit one-time code; you type it on the phone. The two run CPace (a balanced PAKE) on the code, then a Noise `XX` handshake bound to the CPace key. A relay in the middle gets one online guess per run; the hub allows 3 tries, then ends pairing mode. Then **Allow** on the computer, as above. (A 6-digit code compared on two screens with no commitment is not used: a relay can try a million keys until the digits match.)
+- **Remove a device** on the computer: under one lock, the hub sets `revoked`, raises the device's generation, and closes its sessions. A session checks the generation before each command, so a handshake that started before the revoke runs nothing after it. A revoked key can never pair again. Revoke is per hub: a phone paired to two hubs needs removing on both.
+- **A stolen phone.** The app lock (Face ID, fingerprint or passcode) is a screen lock only. Remove the phone on the computer. On its next start, a revoked phone deletes its review cache; until then the cache (encrypted with a Keychain-held key) is as safe as the phone's own lock.
+
+### 41.5 The session
+
+- **Handshake:** Noise `IK` with `25519_ChaChaPoly_BLAKE2s`, from the `snow` crate. The phone knows the hub key from pairing; the hub learns the phone key in message 1 and checks it, and its generation, against its list. An unknown or revoked key gets no answer.
+- **Message 1 carries no data**, and the hub registers the window only after the first transport frame (the hello) decrypts. So a relay that replays an old message 1 can't kick the real phone off.
+- **Prologue:** `"switchboard/1" ‖ hub id ‖ device id ‖ role`. The relay's channel id is not in it.
+- **Keys over time:** a fresh `IK` handshake every hour, which also renews forward secrecy. Within a session, `Rekey()` by message count only (every 2^20 messages), in step on both sides.
+- **The record layer:** a window frame (one JSON line of the window protocol, 29) can be larger than one Noise message (at most 65,535 bytes, 65,519 of payload). So a frame goes in chunks of up to 65,519 bytes, each with a "more" flag. The receiver joins them up to a maximum per frame: 1 MB for a command, 40 MB for `pane_image` and a review diff. A frame above its maximum ends the session. The join is a proved crate (41.14).
+- **Version:** the hello carries a protocol version range and feature flags. The hub accepts a phone whose range overlaps its own. `sb attach` keeps the exact version match.
+- **iOS in the background:** iOS stops the app about 30 s after you leave it. Each open is a new handshake and a resume (41.8): it has to take under a second.
+
+### 41.6 The relay protocol
+
+- **Transport:** WebSocket over TLS on 443, `wss://relay.switchboard.dev/v1`, one relay frame per WebSocket message. The hub dials out and reconnects with backoff (1, 2, 4 … 60 s, with jitter).
+- **Roles:** the first message says `hub` or `device`, with the relay token and the id.
+- **Frames:** binary `kind u8 | channel u32 | len u32 | payload[len]`, big-endian, `len ≤ 65535`. Kinds: `OPEN`, `ACCEPT`, `DATA`, `CREDIT`, `CLOSE`, `PING`, `PONG`, `ERROR`.
+- **Routes:** a device sends `OPEN(hub id)`; the relay checks the hub is of the same account and online, gives a channel id, and sends `OPEN` to the hub; the hub answers `ACCEPT` or `CLOSE`. Then the relay copies `DATA` both ways.
+- **Credit, end to end.** Each receiver grants credit to its sender with `CREDIT(n)`: the hub to the phone, the phone to the hub. Only `DATA` spends credit; `CREDIT`, `CLOSE`, `PING` and `PONG` never do. A receiver counts what it granted and ends the channel when more arrives: the hub does not trust the relay's count. A `CREDIT` that would overflow saturates at the window (256 KiB). The relay also never holds more for a channel than the receiver's last grant.
+- **The hub never blocks on one channel.** All relay windows share the hub's one WebSocket. The hub's reader puts each channel's data in that window's buffer (bounded by the credit it granted) and goes on. A window whose command waits on tmux holds back only its own channel's credit.
+- **Limits:** 8 channels per device, 64 per hub, 10 handshakes a minute per device. Over a limit, the relay refuses that `OPEN`, never the whole connection. Over 50 MB a minute per account, the relay slows the account by holding back credit, never by closing.
+- **Instances:** the relay routes by hub id to the instance that holds the hub's connection. A relay restart drops channels; both ends reconnect and resume (41.8).
+- **What the relay sees:** who connects, when, to which hub, how many bytes. The privacy page says so.
+
+### 41.7 What a device may do
+
+Every command of `dispatch` is in one table, by name, with its class and its argument checks. A command that is not in the table is refused. A relay window can never reach the `admin` class.
+
+| Class | Examples | Default for a phone |
+|---|---|---|
+| `read` | `panes`, `reviews`, `review_view`, `today`, `tasks`, `mail_list` | on |
+| `review` | step marks, `review_draft*`, `review_pin`, `today_done`, `today_later`, Finish review (posts to GitHub) | on |
+| `ask` | `review_ask` and other runs of Claude that only read | on, with the limits below |
+| `act` | messages to agents, `permit_answer`, `review_work`, `review_send_agent`, `sb resume`, `today_tell`, `today_job_save` | off. When on, the phone asks for Face ID or a fingerprint before each one. |
+| `terminal` | `pane_input`, `pane_expand`, `pane_attach`, `pane_image` | off |
+| `admin` | pairing, scopes, `settings_save`, `connection_set`, `trust_answer`, `hub_restart`, `pane_open`, `shell_open`, `nvim_open`, `layout_open`, `task_start_plan`, `handover_*` | never through the relay |
+
+- **The `act` class runs code.** A message or Work on this PR gives free text to an agent with Bash, and a permit answer approves a command. The phone's biometric check stops a person with your unlocked phone; it does not stop a broken or hacked phone app, which is why `act` is off until you turn it on at the computer.
+- **Argument checks:** for example `pane_open` is refused from a relay window whatever its arguments; `review_open` takes only a `github.com/<o>/<r>/pull/<n>` URL.
+- **Limits per device:** 4 commands at once per window; 3 Claude runs at once and 30 an hour per device. Over a limit, the command is refused with the reason.
+- **Events by class:** a relay window gets only the events its classes may read. Events for one window (a command's toast, `focus`, `paste_failed`, an Ask stream) go only to the window that asked (41.8).
+- **One path:** `remote::run` is the only way from a relay window to `dispatch`, and it calls the check first (a test checks both).
+
+### 41.8 Several windows on one hub
+
+Today the hub has one screen: `Hub.live` and the sizes are global, `expand` turns off the streams of every other pane, and a takeover or a window leaving calls `collapse()`. The phone and the desktop must both stay connected, each with its own view.
+
+- **A window** has an instance id (from its hello), its classes, its own command lane (`dispatch::ORDERED` per window), its own live pane and parts, and its own `outq` and writer.
+- **Watch counts:** each tmux pane has a count of the windows that show it. The hub streams a pane while its count is above 0. A window's collapse lowers only its own counts.
+- **The sink knows the window:** `Sink::output` and `reset` take a window id. One window's expand resets only its own queue for that pane.
+- **A fresh screen without a pause:** the hub keeps a terminal emulator (`alacritty_terminal` or `vt100`) for each streamed pane, fed by the same bytes. A window that needs a fresh screen (an expand, or a resync after dropped bytes) gets a snapshot from it. tmux is never paused for one window, so a slow phone never stops the bytes of another window.
+- **Sizes:** the desktop sets a pane's size, as now. The phone never resizes a pane; a `pane_size` event tells it the size, and it shows the screen scaled or in landscape.
+- **The app's own hub** (local mode) gets the same: its `AppSink` sends to the Tauri window and to the relay windows.
+- **Events** are of two kinds: broadcast (`panes`, `today`, `review`, …) and for one window (a command's toast, `focus`, `paste_failed`, Ask streams).
+- **Takeover** only on an explicit **Take it back**, by instance id. Two windows of one device both stay connected. The rule of 29.12, "no reconnect on its own after a takeover", goes: there is no takeover by default.
+- **Event sequence and resume:** each event gets `(boot id, n)`. A window that comes back sends the last one it saw. The hub keeps a ring folded to the newest event for each kind and id (for example the last `panes` and the last `review` of each review), so it covers hours, not minutes. A boot id from another start of the hub means a full resync.
+- **Every command that changes state has an idempotency key.** The hub stores the key with the command's answer, in the same store transaction as the effect, and marks a key as running before the effect starts. A retry of a done key gets the stored answer; a retry of a running key waits for it. Check and mark are one step under one lock, so two windows of a device can't both run a key.
+- **The model:** `models/windows.qnt` (41.14).
+
+### 41.9 Push notices
+
+- **What:** a review asked of you, an agent that needs you, a message to you, a guide that is ready.
+- **How:** the hub encrypts a short notice to the phone's push key with HPKE (RFC 9180: DHKEM-X25519, HKDF-SHA256, ChaCha20-Poly1305), under the 4 KB APNs limit, with a timestamp and a counter inside. The relay sends it through APNs (`mutable-content`) or FCM (a data message). The iOS notification extension or the Android handler decrypts it and drops a notice that is old or repeated.
+- **The relay can forge plain pushes:** it holds the APNs and FCM keys, so it can send a plain alert with no encrypted body. The app shows such a push only as "Switchboard: open the app", and a tap only opens the app, which then asks the hub. The threat table says so.
+- **Settings live on the hub.** An iOS extension can't drop a notice, so the phone tells the hub which kinds you want, and the hub sends only those. At most 1 notice a minute per kind; the rest fold into "and 3 more".
+- **A self-hosted relay** (41.15) can't push to the store app without the publisher's APNs key: it needs our push proxy.
+
+### 41.10 Offline actions
+
+- **The phone caches** the reviews it opened: guide, steps, the diffs of the steps. Encrypted with a key from the Keychain or Keystore. Deleted when the hub says the phone is revoked.
+- **Actions made offline** queue with their idempotency key (41.8), the review's head SHA, and the draft's version.
+- **Replay** goes through one serial lane per device: each action waits for its answer before the next.
+- **Conflicts:** a draft whose version changed on the desktop, or a comment whose head SHA is not the review's head any more, is refused. The phone shows the conflict: keep yours, keep theirs, or place the comment again. An action for a review that closed meanwhile says so.
+- **Finish review** never runs offline. Online, it first sends the queue, then gets the preview again, then asks you.
+
+### 41.11 Always on
+
+- **Keep awake:** "Keep the hub on while plugged in" holds a sleep lock (macOS `IOPMAssertion`, Linux `systemd-inhibit`).
+- The phone shows an offline hub with its last-seen time, and serves the cache meanwhile.
+
+### 41.12 Threats
+
+| Threat | What stops it | What is left |
+|---|---|---|
+| The relay reads traffic | End-to-end Noise | It sees metadata (41.6) |
+| The relay swaps keys at pairing | QR: `IKpsk2` with a secret it never saw, and a check code. Code: CPace, one guess per run, 3 tries | none known |
+| The relay forges, replays or reorders frames | Noise authenticates each message; nonces end a replay; message 1 carries nothing | It can drop or delay: the phone shows "reconnecting" |
+| The relay forges a push | HPKE body with time and counter; a plain push only opens the app | It can show "open the app" |
+| An agent pairs a key through the window socket | Pairing and scopes only through the window's IPC or `sb pair` on a TTY | none known |
+| An agent copies the hub's key | `device.key` and the store are denied to the sandbox and to Read | An agent with no sandbox and Bash still runs as you |
+| Someone takes over the GitHub account | The hub accepts only keys on its own list; pairing needs you at the computer | They see the hub list |
+| A stolen phone | App lock; remove it on the computer; `act` and `terminal` off by default | The review cache until the phone starts again; reading and draft comments until you remove it |
+| A paired phone sends a command outside its classes | The table refuses it (proved) | none known |
+| A phone spends your Claude usage | 3 runs at once, 30 an hour per device | Up to that limit |
+| An action runs twice after a reconnect | Stored idempotency keys (modelled) | none known |
+| A revoke races a handshake | Generation check before each command (modelled) | none known |
+| A downgrade | The prologue names the protocol; the hello checks the range | none known |
+
+Cryptography comes from audited crates: `snow`, `x25519-dalek`, `chacha20poly1305`, `blake2`, `hpke`, and a reviewed CPace crate. We write no primitive and prove none.
+
+### 41.13 Builds and stores
+
+- **Tauri 2 mobile** has no official Keychain or push plugin, and `tauri ios init` does not keep a notification extension. Native plugins in Swift and Kotlin do the keychain, push and the extension; they are in the repo with their own tests.
+- **A Tailscale or LAN listener** (build step 2) breaks the rule of 29, "nothing listens on a network port". It is off by default, listens only on the address you name, accepts only Noise `IK` from listed keys, and stops when that address is gone. 23 records it when built.
+
+### 41.14 Verification
+
+**Proved in Lean with Aeneas** (pure crates in the Aeneas subset: `Vec`, `while`, indexes, no iterators, no `from_be_bytes`; each with `scripts/check-proofs.sh`, `proofs/<Name>/Code` and statements in `proofs/Statements.lean`):
+
+| Crate | What it does | The statements |
+|---|---|---|
+| `record` | The hub's and the phone's decoder of relay frames, and the join of record-layer chunks | Never panics on any input. `decode(encode(f)) = f` for each frame with `len ≤ 65535`. It reads exactly `9 + len` bytes. A join never holds more than the frame's maximum, and a frame above it is an error. Chunks join in order to exactly the frame that was cut. |
+| `credit` | The credit a receiver granted and the data that arrived | Data accepted never exceeds credit granted. A `DATA` above the credit is refused and changes nothing. A `CREDIT` saturates at the window and never wraps. |
+| `scope-check` | `allowed(origin, classes, command, args)` over the command table | A command not in the table is refused. A relay origin never gets `admin`. Each `terminal` command needs `terminal`; each `act` command needs `act`. The argument checks hold (for example, `pane_open` from a relay origin is refused; a `review_open` URL is a GitHub PR URL). Adding a class never removes a command. A test checks that the table names every command of `dispatch`, and that `remote::run` calls `allowed` before `dispatch`. |
+| `evseq` | The event ring and "what did I miss" | For a `(boot, n)` of this boot in the ring, it returns exactly the later events of each kind and id, in order. For another boot, or an `n` older than the ring, it returns "resync". |
+
+**Checked with Quint** (`scripts/check-models.sh`):
+
+- `models/windows.qnt` (41.8): 2–3 windows and 2 panes; per-window live panes and lanes; the watch count of each pane, and streaming exactly while it is above 0; a fresh screen for one window loses nothing for another; the invariants of `remote.qnt` per window; and "no lost event": the events each connected window got are a prefix of the log with no gap.
+- `models/pairing.qnt` (41.4): no key joins the list without Allow on the computer; nothing pairs outside pairing mode; a used secret or a third wrong code pairs nothing; a revoked key never pairs again; after a revoke ends, no session of that key runs a command, also one whose handshake started before.
+- `models/relay.qnt` (41.6): routes, credits and closes; no frame on the wrong channel; a receiver never gets more than it granted; no deadlock: when data waits and the receiver has room, some credit is on its way; a hub that goes away closes its channels.
+- `models/replay.qnt` (41.8, 41.10): the phone's queue, a lost answer, a hub restart, two windows of one device with the same key, and commands that run at once. Each key has at most one effect, and the phone sees one answer for it.
+- The pairing protocols themselves (IKpsk2 with a check code; CPace then XX) follow published designs. A ProVerif or Tamarin model of them is welcome later; it is not a gate for the first build.
+
+**Tested:**
+- `cargo-fuzz` for `record`, and for the hub's handling of a relay stream.
+- Noise and HPKE test vectors through the crates.
+- End to end in Rust: a relay, a hub (`sb serve`) and a fake phone. Pairing by QR and by code (with a wrong code and a third try), a session, refused classes, the per-device limits, a resume with no lost answer, a revoke during a handshake, credits under a slow reader, and a relay restart.
+- The restart tests (29.12) gain a phone: a hub restart gives a resync (a new boot id), and no action runs twice.
+- Window checks for the phone screens (42) at 390 × 844.
+
+### 41.15 Build order
+
+1. **Several windows on one hub** (41.8) with `models/windows.qnt`: watch counts, per-window sinks, the terminal emulator for fresh screens, events by window, `(boot, n)` and idempotency keys. Useful at once for a second desktop window.
+2. **Devices and classes:** the device list, `scope-check`, pairing through IPC and `sb pair`, the sandbox deny of `device.key`, and a Noise listener on a Tailscale address (the expert option, and a real test of the session).
+3. **The relay and accounts:** `crates/relay`, `record`, `credit`, sign-in, QR and code pairing.
+4. **The phone app:** the review screens (42), the cache, offline replay, push with HPKE.
+5. **Keep awake**, then the store releases.
+
+### 41.16 The review
+
+A second agent reviewed the first version of this section against the code (`remote.rs`, `dispatch.rs`, `hub.rs`, `outq`, `models/remote.qnt`). Its findings and what changed:
+
+| # | Finding | Change |
+|---|---|---|
+| 1 | The default scopes let the phone run code: messages, permits and Work on this PR drive agents with Bash; the table named features, not commands; nothing limited Claude runs | Every command classed by name with argument checks; `act` off by default and asks for a biometric check; limits per window and device (41.7) |
+| 2 | A 6-digit code compared on two screens, with no commitment, falls to a relay that tries a million keys | Code pairing is now an 8-digit code typed on the phone, with CPace then XX (41.4) |
+| 3 | Any agent counts as a trusted window, and can read the hub's key | Pairing only through IPC or a TTY; `device.key` and the store denied to agents; a check code in QR mode (41.4) |
+| 4 | Window frames do not fit in one Noise message | A record layer with chunks, maximum sizes, and a proved join (41.5) |
+| 5 | The hub has one global screen: expand, collapse and resync act for all windows | Watch counts, per-window sinks, a terminal emulator for fresh screens, events by window, takeover only on request (41.8) |
+| 6 | Answers in flight are lost; the ring and the keys die with the hub; IK message 1 can be replayed | Idempotency keys with stored answers on every change; `(boot, n)`; a folded ring; register only after the hello (41.5, 41.8) |
+| 7 | Offline actions run out of order and overwrite newer edits | A serial lane per device; head SHA and versions; conflicts shown (41.10) |
+| 8 | Rekey by time goes out of step; the channel id in the prologue adds nothing | A new handshake every hour; rekey by count only; a new prologue (41.5) |
+| 9 | The relay can forge plain pushes; iOS can't drop a notice; one key for sessions and push | Plain pushes only open the app; settings on the hub; a separate push key; HPKE (41.9) |
+| 10 | Credit was unclear and the hub trusted the relay's count | End-to-end credit counted by the receiver; refuse an OPEN, never the connection; a deadlock check (41.6) |
+| 11 | A revoke can race a handshake; a revoked phone can still ask to pair | A generation check before each command; pairing mode; a revoked key never pairs (41.4) |
+| 12 | The key storage as written can't be built | Raw keys in the Keychain or wrapped by the Keystore; the app lock is a screen lock (41.4) |
+| 13 | The exact version match breaks store phones | A version range and feature flags (41.5) |
+| 14 | The phone's sign-in, token rotation and App Store rules were not set | Defined in 41.3 |
+| 15 | Some proofs prove little: `pair-code` is trivial, `once` misses persistence, the relay's decoder protects only the relay | `pair-code` removed; `once` is now `replay.qnt`; the proved decoder is the hub's and the phone's, with the join (41.14) |
+| 16 | Smaller: native plugins, the network listener rule, iOS background, relay instances | 41.5, 41.6, 41.13 |
+
+## 42. Phone app design
+
+Status: design, not built. The technical part is in 41. The HTML design: https://claude.ai/artifact/FS2RR1dfpP33FB5iLHvrMd (nine phone screens).
+
+The phone app is for the minutes away from the desk: review a PR step by step, judge Claude's notes, answer an agent, check Today. It is not a small desktop: no terminals by default, no file tree, no wide diffs.
+
+### 42.1 Principles
+
+- **One thing per screen.** A step, a note, a question. Never two panes side by side.
+- **The thumb does the work.** The actions sit at the bottom, in reach. Swipes for the frequent ones, buttons for the rest, and both always.
+- **Read first, then act.** Each step leads with what changed and what breaks if it is wrong, then the lines.
+- **Your place follows you.** Stop at step 4 on the phone; the desktop opens at step 4.
+- **Nothing posts by surprise.** Comments are drafts until Finish review, as on the desktop.
+- **Same words as the desktop**, and the same writing rules (terse, plain English).
+
+### 42.2 The tabs
+
+A bottom tab bar with four tabs:
+
+| Tab | What |
+|---|---|
+| **Today** | The ranked list of 39, by job. A badge counts what waits on you. |
+| **Reviews** | The open reviews: guide state, steps reviewed, drafts. A **+** opens a PR by link or from Today. |
+| **Agents** | The agents of the hub: name, repo, state (working, needs you, idle). Permits and messages. |
+| **You** | The hub, its link, devices, notices, app lock. |
+
+The hub's name and link state sit at the top of every tab: a green dot when linked, grey with "last seen 2 min ago" when not.
+
+### 42.3 Today
+
+- The sections and rows of 39, one column. A row: the PR or report number, the one line on what to do, the title, the severity chip or tags.
+- **Swipe right: Done. Swipe left: Later** (a sheet with Tomorrow, Monday, In a week). A short undo bar after each.
+- **Tap:** the item's sheet: what it found, Why it is here, and **Start review** or **Open on GitHub**.
+- The **Tell Claude** box sits at the top, as on the desktop, with a microphone.
+
+### 42.4 A review, step by step
+
+**The review's first screen** (the overview):
+- The PR title, number, author, and "9 steps · 2 reviewed · 1 draft".
+- Claude's take on the PR in two lines, with its notes counted by kind.
+- **Start at step 1**, or **Go on at step 3** when you were there.
+
+**A step screen** (the heart of the app), top to bottom:
+1. A thin progress bar of the steps, and "Step 3 of 9".
+2. The step's title.
+3. **What changed** (the guide's `what`) and **what breaks** (`why`), at most four lines, with **More** when longer.
+4. **What Claude looked into:** each finding on one line with ✓, ! or ?. Tap one for its full text.
+5. **The lines**, as a narrow diff (below).
+6. **Claude's notes** of the step, as cards (below).
+7. The bottom bar: **‹ Prev**, **Ask**, **Comment**, and **Reviewed ›** (gold). Swipe left on the step also goes on.
+
+**The narrow diff:**
+- One column. Removed lines in red, added in green, with old and new line numbers in a thin gutter.
+- Long lines wrap with a small ↪ mark, never a sideways scroll. The changed words inside a line are highlighted.
+- Only the step's ranges, with 3 lines of context. **Show 20 more** above and below.
+- A long-press on a line selects it; drag to select more. The selection opens **Comment** and **Ask about these lines**.
+- Pinch zooms the text only, not the layout. Landscape gives the diff the whole width.
+
+**Claude's notes as cards:**
+- Each note is a card: its kind (must, should, nit, question), the line, and the text.
+- **Swipe right: add as a comment** (it becomes a draft on that line). **Swipe left: dismiss.** Tap: **Ask** about it.
+- A card done shows a small tag (added, dismissed) and stays, so you can undo.
+
+**Ask:**
+- A sheet from the bottom with the step's context. Type or speak. The answer is short, as the Ask pane's rules say (11.15).
+- When the answer names lines, a **Show me** chip jumps the diff to them.
+
+**Comment:**
+- A sheet with the selected lines on top. Type, or hold the microphone and speak.
+- **Speak it:** the phone writes down what you said; Claude makes it one terse review comment; you see both and choose **Use Claude's** or **Use mine**. Nothing posts: it is a draft.
+- Drafts show as small cards under their lines, with Edit and Delete.
+
+**Finish review:**
+- After the last step, or from the overview: your drafts in one list (tap to edit), the verdict (**Approve**, **Comment**, **Request changes**), an optional summary (speak or type), and **Send to GitHub**.
+- Offline: "Sends when you're online", and the app asks again then.
+
+**Hand off** (needs the `act` class, 41.7; the phone asks for Face ID first): a step or a note has **Fix it**. It opens Work on this PR (11.16) with the task filled in from the note; you read it and tap **Start agent**. The Agents tab then shows the agent.
+
+### 42.5 Agents
+
+- A list of the hub's agents: title, repo and branch, state. **Needs you** first, with what it needs.
+- **A permit** shows the tool and what it wants to do, in plain words, with **Allow** and **Deny**. Same rules as 25. Permits and messages need the `act` class (41.7), off by default; with it on, the phone asks for Face ID before each one.
+- **A message** to the agent: a box at the bottom of its screen (40). Its recent messages above.
+- **The agent's screen:** a read-only view of its last lines. Typing into it needs the `terminal` scope (41.7), off by default; then a full terminal opens, landscape first.
+
+### 42.6 You
+
+- The hub: name, machine, linked or last seen, its version.
+- **Devices** of this hub are managed on the computer (41.4); here, only this phone's scopes, read-only, and **Remove this phone**.
+- **Notices:** a switch per kind (41.9).
+- **App lock:** Face ID or fingerprint, on by default.
+- **Sign out.**
+
+### 42.7 First run
+
+1. **Sign in with GitHub.**
+2. **Pick your hub** from your account's list. None: "Install Switchboard on your computer, then come back", with a link.
+3. **Pair:** "Open Switchboard on your computer and click *Add a phone*", with **Scan the code**, then check that the short check code matches on both screens. With no camera nearby: **Type a code** takes the 8-digit code the computer shows (41.4).
+4. **Notices:** allow them, or not now.
+5. Today opens.
+
+### 42.8 Look and feel
+
+- The desktop's dark theme and tokens, and a light theme that follows the phone.
+- Type: the body at 16 px; the diff in the mono font at 13 px, larger with pinch.
+- Touch targets at least 44 px. Every swipe has a button too, for one hand and for screen readers.
+- Haptic tick on Reviewed, Done and a swiped card.
+
+### 42.9 Tests
+
+Window checks at phone width (390 × 844) in the headless harness: the tabs; a step screen with what, why, findings, the narrow diff (wrap, no sideways scroll), the note cards with swipe and buttons; Comment with a draft; Ask with Show me; Finish review; Today swipes with undo; a permit; the offline banner and the queued action.
