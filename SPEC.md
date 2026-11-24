@@ -3388,7 +3388,7 @@ A second agent reviewed the first version of this section against the code (`rem
 
 ## 42. Phone app design
 
-Status: design, not built. The technical part is in 41. The HTML design: https://claude.ai/artifact/FS2RR1dfpP33FB5iLHvrMd (nine phone screens).
+Status: design, not built. The technical part is in 41. The HTML design: https://claude.ai/artifact/FS2RR1dfpP33FB5iLHvrMd (nine phone screens and two landscape ones).
 
 The phone app is for the minutes away from the desk: review a PR step by step, judge Claude's notes, answer an agent, check Today. It is not a small desktop: no terminals by default, no file tree, no wide diffs.
 
@@ -3444,6 +3444,15 @@ The hub's name and link state sit at the top of every tab: a green dot when link
 - A long-press on a line selects it; drag to select more. The selection opens **Comment** and **Ask about these lines**.
 - Pinch zooms the text only, not the layout. Landscape gives the diff the whole width.
 
+**Landscape** (turn the phone on its side, on any step):
+- The code takes the width. Lines don't wrap; old and new line numbers sit in a narrow gutter.
+- The step's text folds into a rail on the left: step number, title, what and why in short, the findings as one line each, and the notes count. A tap on **‹** folds the rail away for the whole width.
+- The actions move to a rail on the right edge, under the right thumb: **‹ Prev**, **Ask**, **Note**, and a tall gold **Reviewed ›**.
+- **Unified** or **Split**: Split shows old and new side by side, and long lines wrap there.
+- A note's marker on a line opens the note in the left rail, with **Dismiss** and **Comment**. Swipe up in the rail for the next note.
+- The place, the selection and the open note carry over when you turn the phone back.
+- With rotation lock on, a **Wide** button on the step screen opens the same view.
+
 **Claude's notes as cards:**
 - Each note is a card: its kind (must, should, nit, question), the line, and the text.
 - **Swipe right: add as a comment** (it becomes a draft on that line). **Swipe left: dismiss.** Tap: **Ask** about it.
@@ -3496,4 +3505,4 @@ The hub's name and link state sit at the top of every tab: a green dot when link
 
 ### 42.9 Tests
 
-Window checks at phone width (390 × 844) in the headless harness: the tabs; a step screen with what, why, findings, the narrow diff (wrap, no sideways scroll), the note cards with swipe and buttons; Comment with a draft; Ask with Show me; Finish review; Today swipes with undo; a permit; the offline banner and the queued action.
+Window checks at phone width (390 × 844) and in landscape (844 × 390) in the headless harness: the tabs; a step screen with what, why, findings, the narrow diff (wrap, no sideways scroll), the note cards with swipe and buttons; Comment with a draft; Ask with Show me; Finish review; Today swipes with undo; a permit; the offline banner and the queued action.
