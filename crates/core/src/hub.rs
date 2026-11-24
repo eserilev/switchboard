@@ -1916,6 +1916,18 @@ impl Hub {
                 Ok(()) => Ack::ok(),
                 Err(err) => Ack::err(err),
             }),
+            Request::ReviewWork { review, task } => match self.review_work(&review, &task) {
+                Ok(v) => {
+                    // The window shows the new agent.
+                    if let Some(p) = v["pane"].as_str() {
+                        self.sink.emit("focus", json!(p));
+                    }
+                    let mut v = v;
+                    v["ok"] = json!(true);
+                    v
+                }
+                Err(err) => json!(Ack::err(err)),
+            },
             Request::Task { pane, op } => self.task_socket(pane.as_deref(), op),
             Request::Board { pane } => self.board_socket(pane.as_deref()),
             Request::Today { pane, job, repo, number } => {
@@ -2192,6 +2204,7 @@ fn request_kind(r: &Request) -> &'static str {
         Request::GuideSet { .. } => "guide_set",
         Request::GuideUpdate { .. } => "guide_update",
         Request::ReviewShow { .. } => "review_show",
+        Request::ReviewWork { .. } => "review_work",
         Request::Task { .. } => "task",
         Request::Board { .. } => "board",
         Request::Today { .. } => "today",

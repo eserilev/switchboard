@@ -3215,6 +3215,41 @@ impl Hub {
     /// Writes Claude's take again: for one step, or for the PR when `step` is None.
     /// The guide session does it, with the notes you dismissed, so it does not repeat
     /// them (SPEC 11.12).
+    /// Work on this PR (SPEC 11.16): a new agent in a worktree on the PR's own
+    /// branch. `task` is its first message, pasted with no Enter: the user sends it.
+    /// Gives the new pane's id.
+    pub fn review_work(&self, id: &str, task: &str) -> Res<Value> {
+        self.pr_only(id)?;
+        let row = self.reviews.lock().unwrap().get(id).map(|r| r.row.clone()).ok_or("the review is closed")?;
+        let (owner, name) = row.repo.split_once('/').ok_or("the review has no GitHub repo")?;
+        let gh = self.gh.read().unwrap().clone();
+        let q = "query($o: String!, $n: String!, $num: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $num) { headRefName headRepository { nameWithOwner } } } }";
+        let data = gh
+            .graphql(q, json!({ "o": owner, "n": name, "num": row.number }))?
+            .ok_or("GitHub did not say where the PR's branch is.")?;
+        let pr = &data["repository"]["pullRequest"];
+        let branch = pr["headRefName"].as_str().unwrap_or("").to_owned();
+        let head_repo = pr["headRepository"]["nameWithOwner"].as_str().map(str::to_owned);
+        let (clone, base_remote) = self.find_clone(&row.repo)?;
+        let head = crate::pr_work::Head { number: row.number, branch: &branch, repo: head_repo.as_deref(), base_remote: &base_remote };
+        let p = crate::pr_work::prepare(&clone, &head)?;
+        tracing::info!(target: "sb::review", id, tree = %p.tree.display(), branch = %p.branch, reused = p.reused, "work on the PR");
+        let task = task.trim();
+        let first = (!task.is_empty()).then(|| crate::pr_work::first_message(row.number, &row.title, &p, task));
+        let title: String = format!("#{} {}", row.number, row.title).chars().take(60).collect();
+        let pane = self.open(crate::hub::OpenReq {
+            repo: clone.to_string_lossy().into(),
+            place: "tree".into(),
+            branch: None,
+            tree: Some(p.tree.to_string_lossy().into()),
+            run: "claude".into(),
+            title: Some(title),
+            task: None,
+            first,
+        })?;
+        Ok(json!({ "pane": pane.id, "tree": p.tree, "branch": p.branch, "push": p.push, "reused": p.reused, "note": p.note }))
+    }
+
     pub fn review_retake(&self, id: &str, step: Option<&str>) -> Res<()> {
         self.pr_only(id)?;
         if let Some(s) = step {

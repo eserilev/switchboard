@@ -93,6 +93,7 @@
       const act = e.target.closest("[data-act]")?.dataset.act;
       if (act === "finish") return local(id).finish ? closeFinish(id) : openFinish(id);
       if (act === "agent") return sendAgent(id);
+      if (act === "work") return workOnPr(id);
       if (act === "close") return askClose(id);
       // New commits, New changes and comments to place: the inspector says what to do.
       if (act === "newcommits" || act === "stale") return window.SBInsp.open();
@@ -356,6 +357,7 @@
     const n = r.drafts.length;
     const next = (r.round || 1) + 1;
     put($("#racts"), (r.new_head ? `<button type="button" class="btn sm ghost" data-act="newcommits" title="${r.new_head === r.empty_round ? "New commits with no file change since this round: Update guide" : `Commits the guide does not cover: Start round ${next} or Update guide`}">New commits</button>` : "") + place
+      + `<button type="button" class="btn sm ghost" data-act="work" title="Start a new agent in its own worktree on the PR's branch">Work on this PR</button>`
       + `<button type="button" class="btn big${l.finish ? "" : " primary"}" data-act="finish" aria-haspopup="dialog" aria-expanded="${!!l.finish}" title="Send your comments to GitHub as one review">Finish review · ${n}</button>${closeBtn()}`);
   }
 
@@ -1120,6 +1122,28 @@
     box.querySelectorAll("[data-b]").forEach((b) => (b.onclick = () => done(buttons[+b.dataset.b][1])));
     box.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape") done(null); };
     box.querySelector(".btn.primary")?.focus();
+  }
+
+  // Work on this PR (SPEC 11.16): a new agent in its own worktree on the PR's
+  // branch. The task waits in its prompt until you send it.
+  function workOnPr(id) {
+    const r = S.reviews.get(id);
+    if (!r) return;
+    let task = "";
+    showBox(id, `<h4>Work on #${esc(r.number)}</h4><p>A new agent starts in its own worktree on the PR's branch. If the branch is on your fork, the agent can push to it.</p>
+      <textarea class="wtask" rows="4" aria-label="What the agent does" placeholder="What the agent does. Leave empty to give it the task in the pane."></textarea>`,
+      [["Cancel", null], ["Start agent", "go"]], async (v) => {
+        if (v !== "go") return;
+        toast("Fetching the PR's branch…");
+        try {
+          const w = await call("review_work", { id, task });
+          await window.SB.refreshPanes();
+          window.SB.expand(w.pane);
+          toast(w.note || `${w.reused ? "The agent works in the worktree that has" : "New worktree on"} ${w.branch}${w.push ? `, pushes to ${w.push}` : ", cannot push"}.${task ? " Send the task in its prompt." : ""}`);
+        } catch (e) { toast(e); }
+      });
+    const ta = $("#rfinish .wtask");
+    if (ta) { ta.oninput = () => (task = ta.value); ta.focus(); }
   }
 
   // Starts the review again from the PR, against its base branch as it is now

@@ -375,6 +375,18 @@
   }
   check("guide text renders markdown", !!$("#rguide .what strong") && !!$("#rguide .checks code"));
   {
+    // Work on this PR (SPEC 11.16): a new agent on the PR's branch, with a task.
+    $('#rhead [data-act="work"]').click();
+    await wait(20);
+    check("Work on this PR asks what the agent does, with the cursor in the box", !$("#rfinish").hidden && document.activeElement === $("#rfinish .wtask") && $("#rfinish h4").textContent.startsWith("Work on #"));
+    $("#rfinish .wtask").value = "Make compact() commit first.";
+    $("#rfinish .wtask").dispatchEvent(new Event("input"));
+    [...$$("#rfinish [data-b]")].find((b) => b.textContent === "Start agent").click();
+    await wait(80);
+    const w = called("review_work").at(-1)?.[1];
+    check("Start agent sends the task and shows the new agent", w?.id === "r1" && w.task === "Make compact() commit first." && $("#rfinish").hidden && $("#toast").textContent.includes("redb-fixes, pushes to me"), JSON.stringify(w) + $("#toast").textContent);
+  }
+  {
     // A remote image would load at once and could carry the code out in its URL.
     const w = $("#rguide .what");
     check("guide markdown shows an image as text and keeps only http(s) links", !!w && !w.querySelector("img") && w.textContent.includes("leak") && !w.querySelector('a[href^="javascript"]') && !!w.querySelector('a[href="https://example.com/spec"]'), w?.innerHTML);

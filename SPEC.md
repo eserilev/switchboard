@@ -690,6 +690,22 @@ Tests:
 - `crates/sb/tests/review_show.rs`: a real hub, tmux and git, and a stand-in `claude` that writes its args. The Ask pane's flags and allow rule; Mentioned from `sb state turn`, from the answer and from the session file, and replaced by a new answer; `review_show` through `sb mcp --ask`, with bad paths and lines refused and the last places kept; the rows of a file the PR does not change; and the flags again after a resume.
 - Window checks: a link in the Claude column goes to the step and the line and keeps the keys there; Back; Mentioned chips, dashed and escaped, go to a step or to Files with a hidden line shown; the tour (in the file header, numbers in the diff and in the step tooltip, `⇧N` in the footer, `n`, `p` and `Shift+N`, a file outside the diff, Add as comment as an agent draft, Back); escaping of the notes.
 
+### 11.16 Work on this PR
+
+A review finds work to do on the PR. A new agent does it, in a folder of its own, on the PR's branch.
+
+- **Work on this PR** is a button in the review header. It asks what the agent does (it can be empty), then starts the agent. The window shows it.
+- **From the Ask pane:** the tool `review_work(task)`. Ask uses it when you ask it to hand work to an agent ("send this to an agent", "fix it"). It is in the pane's allow rules: nothing runs until you send the task. Ask never sends work to other sessions another way.
+- **The task waits** in the new agent's prompt with no Enter. You read it and send it. With a task, the first message says the PR, the branch and where it pushes, then the task.
+- **The folder** (`pr_work::prepare`), in the clone that the review uses:
+  - GitHub says the head branch and the head repo.
+  - A remote whose URL (as written in the config, not after `insteadOf`) is the head repo: fetch its branch. The local branch of the same name tracks it, so the agent can push.
+  - No such remote (a fork you do not have): fetch `pull/N/head` into `pr-N`. That branch cannot push; the first message says so.
+  - A worktree with that branch already: the agent works there. It moves to the PR head when that is a fast-forward.
+  - Else a new worktree next to the clone, `<clone>-<branch>`. A local branch that has commits the PR head does not stays as it is, with a note.
+- The main checkout and other worktrees never change branch. So other agents' work there stays where it is.
+- A review of local commits has no PR: no button, and the command refuses.
+
 ## 12. Agents
 
 | Where | How |

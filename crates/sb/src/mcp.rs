@@ -135,6 +135,16 @@ pub fn ask_tools() -> Value {
             },
             "required": ["points"]
         }
+    }, {
+        "name": "review_work",
+        "description": "Start a new agent that works on this PR: it gets its own worktree on the PR's branch (one that pushes to the reviewer's fork when they have it). The task is pasted into the new agent's prompt with no Enter: the reviewer reads it and sends it. Use it only when the reviewer asks you to hand work to an agent. Write the task so a new agent can act on it with no other context: what to change, where (path:line), and how to test it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task": { "type": "string", "description": "What the new agent must do." }
+            },
+            "required": ["task"]
+        }
     }])
 }
 
@@ -346,6 +356,10 @@ pub fn handle(
                     review: review.into(),
                     points: args.get("points").cloned().unwrap_or(Value::Null),
                 }),
+                "review_work" if ask => Some(Request::ReviewWork {
+                    review: review.into(),
+                    task: args.get("task").and_then(Value::as_str).unwrap_or("").into(),
+                }),
                 _ if ask => None,
                 "guide_set_steps" => Some(Request::GuideSet {
                     review: review.into(),
@@ -359,6 +373,9 @@ pub fn handle(
                 _ => None,
             };
             let (text, error) = match req.map(call) {
+                Some(Ok(Ack { ok: true, .. })) if ask && name == "review_work" => {
+                    ("A new agent started in its own worktree on the PR's branch, and the window shows it. The task waits in its prompt until the reviewer sends it. Tell the reviewer so in one line.".to_owned(), false)
+                }
                 Some(Ok(Ack { ok: true, .. })) if ask => ("The review window shows the places. Now answer in text too.".to_owned(), false),
                 Some(Ok(Ack { ok: true, .. })) => ("ok".to_owned(), false),
                 Some(Ok(Ack { error, .. })) => (error.unwrap_or_else(|| "refused".into()), true),
@@ -613,7 +630,7 @@ mod tests {
         let msg = |id: u32, name: &str, args: Value| json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":args}});
         let r = handle(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), "r3", Path::new("."), true, &call).unwrap();
         let names: Vec<&str> = r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, vec!["review_show"]);
+        assert_eq!(names, vec!["review_show", "review_work"]);
         // The guide tools and git are refused by name, and nothing goes to the app.
         for (name, args) in [
             ("guide_set_steps", json!({"steps": []})),

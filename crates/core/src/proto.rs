@@ -37,6 +37,11 @@ pub enum Request {
         review: String,
         points: Value,
     },
+    /// `review_work` of the Ask pane (SPEC 11.16): a new agent on the PR's branch.
+    ReviewWork {
+        review: String,
+        task: String,
+    },
     /// `sb task` (SPEC 27.7). `pane` is the caller's `SB_PANE`: a label, not proof.
     Task {
         #[serde(default)]

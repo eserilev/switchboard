@@ -23,6 +23,7 @@ const CONTEXT_ROWS: u32 = 15;
 
 /// The tool of the Ask pane, for its allow rules.
 pub const SHOW_TOOL: &str = "mcp__sb__review_show";
+pub const WORK_TOOL: &str = "mcp__sb__review_work";
 
 /// The rules of the Ask pane, added to Claude Code's system prompt. One line: the
 /// command goes through tmux.
@@ -34,7 +35,9 @@ How to answer: the answer first, in its first words: yes, no, the name, the line
 Most answers are 1 to 4 short sentences. No headings, no tables, and no list unless the reviewer asks for several things. \
 Do not repeat the question, do not sum up at the end, and do not offer more help. \
 Use plain words: when a term is not common, use a plainer word or explain it in a few words. \
-When the full answer is long, give the short answer and one line on what more you can show.";
+When the full answer is long, give the short answer and one line on what more you can show. \
+When the reviewer asks you to hand work to an agent (fix it, send it to an agent, start work on this), call mcp__sb__review_work with the task: it starts a new agent in its own worktree on the PR's branch, and the task waits in that pane until the reviewer sends it. \
+Write the task so a new agent can act on it with no other context: what to change, where (path:line), and how to test it. Never send work to other sessions by other means.";
 
 /// One place from `review_show`.
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -176,6 +179,7 @@ impl Hub {
         }}});
         let mut allow = crate::review::web_rules(&self.config().review.web_domains);
         allow.push(SHOW_TOOL.into());
+        allow.push(WORK_TOOL.into());
         (Some(cfg.to_string()), Some(format!("{ASK_SYSTEM} {}", crate::review::WRITING)), allow)
     }
 

@@ -173,6 +173,7 @@ commands! {
     today_looked(job: String) -> () => |h| h.today_looked(&job);
     today_tell(text: String) -> () => |h| h.today_tell(&text);
     hub_restart() -> () => |h| h.ask_restart();
+    review_work(id: String, task: String) -> Value => |h| h.review_work(&id, &task);
     today_forget(id: u64) -> () => |h| h.today_forget(id);
     pane_input(id: String, data: String, binary: bool) -> () => |h| {
         // `binary` data (mouse reports) is one byte per char.
