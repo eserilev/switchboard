@@ -935,6 +935,7 @@ fn signal_group(pid: u32, sig: libc::c_int) {
 pub const WRITING: &str = "How to write: for a busy reader. Terse, plain English, no jargon. \
 Short sentences, one fact each. Name the exact file, line or thing. \
 No recap, no praise, no filler, no hedging words. \
+No stock phrases such as ensures, robust, crucial, comprehensive, seamless, leverage, it matters because: say the specific fact. \
 If a term would be new to a newcomer, use a plainer word or explain it in a few words.";
 
 /// How to start one `claude -p` run.

@@ -380,10 +380,10 @@
     check("guide markdown shows an image as text and keeps only http(s) links", !!w && !w.querySelector("img") && w.textContent.includes("leak") && !w.querySelector('a[href^="javascript"]') && !!w.querySelector('a[href="https://example.com/spec"]'), w?.innerHTML);
   }
   // Why, Claude's answers to the checks, and Claude's take (SPEC 11.12).
-  check("the step leads with why it matters, and says why it is a step", $("#rguide .lead")?.textContent === "It matters because a wrong slot builds a block with the wrong inclusion list." && getComputedStyle($("#rguide .lead")).fontWeight === "600"
-    && $("#rguide .whysplit")?.textContent.includes("The only change on the proposal path"), $("#rguide .lead")?.textContent);
-  check("each check item shows Claude's answer in purple, with ✓ or !", [...$$("#rguide .checks .ans")].map((x) => x.textContent).join("|") === "✓ matches the spec|! see the note on line 11"
-    && getComputedStyle($("#rguide .checks .ans")).color === "rgb(179, 165, 220)", [...$$("#rguide .checks .ans")].map((x) => x.textContent).join("|"));
+  check("the step says what breaks as its own sentence, with no set lead and no step-of-its-own line", $("#rguide .lead")?.textContent === "A wrong slot builds a block with the wrong inclusion list." && getComputedStyle($("#rguide .lead")).fontWeight === "600"
+    && !$("#rguide .whysplit") && !$("#rguide").textContent.includes("It matters because"), $("#rguide .lead")?.textContent);
+  check("each finding shows in purple with ✓, ! or ?, with no Yes or label in front", [...$$("#rguide .checks .ans")].map((x) => x.textContent).join("|") === "✓ It matches the spec at line 4.|! See the note on line 11|? The spec says nothing on slot 0"
+    && getComputedStyle($("#rguide .checks .ans")).color === "rgb(179, 165, 220)" && $("#rguide .cklabel")?.textContent === "What Claude looked into", [...$$("#rguide .checks .ans")].map((x) => x.textContent).join("|"));
   check("the take line shows the opinion, the verdict and the counts", $("#rtake .tk-label")?.title.includes("not verified") && $("#rtake .verdict")?.textContent === "needs a change" && $$("#rtake > .sevchip").map((x) => x.textContent).join() === "1 must,1 should,1 nit", $("#rtake")?.textContent);
   check("severity has its own colors: should is teal, not the gold of needs you", getComputedStyle($("#rtake > .sevchip.sev-should")).borderTopColor === "rgb(108, 196, 192)" && getComputedStyle($("#rtake > .sevchip.sev-must")).borderTopColor === "rgb(236, 143, 184)");
   check("a note with a line shows under its line, with a dot", !!$('#rdiff tr.noted-must td.ln[data-ln="11"]') && $("#rdiff .tnote")?.textContent.includes("saturates") && !!$("#rdiff .tnote .sev-must"));

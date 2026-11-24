@@ -22,8 +22,8 @@ window.__data = {
     status: "ready", error: null, new_head: null,
     guide: { steps: [
       { id: "s1", title: "Read the PR description", file: null, what: "The PR adds ILs.", check: ["slot - 1"] },
-      { id: "s2", title: "Proposal path passes slot - 1", ranges: [{ file: "beacon_node/gloas.rs", side: "new", from: 11, to: 12 }, { file: "beacon_node/gloas.rs", side: "old", from: 11, to: 11 }], what: "Block production asks for the ILs of the slot **before** the proposal slot. ![leak](https://evil.example/x.png) [bad](javascript:window.__xss=4) [spec](https://example.com/spec)", check: ["The spec uses `slot - 1`. Does this match?", "What happens at slot 0?"],
-        why: "A wrong slot builds a block with the wrong inclusion list.", why_split: "The only change on the proposal path.", check_answers: ["matches the spec", "see the note on line 11"],
+      { id: "s2", title: "Proposal path passes slot - 1", ranges: [{ file: "beacon_node/gloas.rs", side: "new", from: 11, to: 12 }, { file: "beacon_node/gloas.rs", side: "old", from: 11, to: 11 }], what: "Block production asks for the ILs of the slot **before** the proposal slot. ![leak](https://evil.example/x.png) [bad](javascript:window.__xss=4) [spec](https://example.com/spec)", check: ["The spec uses `slot - 1`. Does this match?", "What happens at slot 0?", "Slot 0 in the spec"],
+        why: "A wrong slot builds a block with the wrong inclusion list.", why_split: "The only change on the proposal path.", check_answers: ["Yes. It matches the spec at line 4.", "Problem: see the note on line 11", "Open: the spec says nothing on slot 0"],
         take: { verdict: "change", notes: [
           { severity: "must", text: "`slot - 1` saturates at slot 0. Use `safe_sub`.", file: "beacon_node/gloas.rs", side: "new", line: 11 },
           { severity: "should", text: "No test covers slot 0." },

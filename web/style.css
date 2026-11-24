@@ -423,10 +423,11 @@ body.size-y, body.size-y * { cursor: row-resize !important; }
 .guide h4 { margin: 0; font: 700 18px/1.25 var(--body); }
 .guide .what { margin: 0; font: 400 13px/1.55 var(--body); color: #c9d0db; }
 .guide .lead { margin: 4px 0 0; font: 600 13px/1.5 var(--body); }
-.guide .whysplit { margin: 0; font: 400 12px/1.45 var(--body); color: var(--muted); }
-.guide .whysplit .wk { font-weight: 600; }
-.checks { margin: 2px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; font: 400 13px/1.45 var(--body); }
-.checks li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.guide .cklabel { margin-top: 6px; font: 600 11px/1 var(--body); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.checks { margin: 2px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; font: 400 13px/1.45 var(--body); }
+.checks li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 16px; }
+.checks .q { color: var(--soft); }
+.checks .g.open { color: var(--needs-fg); }
 .checks .ans { color: var(--claude-fg); }
 .checks .g { font-weight: 700; }
 .ctx { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }

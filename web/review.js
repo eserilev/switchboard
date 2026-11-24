@@ -462,7 +462,7 @@
   // Severity colors are their own (pink, teal, grey), never the gold of "needs you".
   const SEV = { must: "must fix", should: "should fix", nit: "nit" };
   const SEVS = ["must", "should", "nit"];
-  const VERDICT = { good: "looks good", change: "needs a change", question: "has a question" };
+  const VERDICT = { good: "no problems found", change: "needs a change", question: "has a question" };
   // A note's key names it for Dismiss: the step, the severity, the line and the text.
   const noteKey = (sid, n) => `${sid}|${n.severity}|${n.file || ""}:${n.line || ""}|${n.text}`;
   function takeNotes(r, sid, take) {
@@ -557,21 +557,27 @@
     $("#rctext")?.focus();
   }
 
-  // "It matters because …": the guide's why as one lead sentence.
+  // The guide's why as its own sentence. A guide written for the old "It matters
+  // because …" lead loses that start and gets a capital.
   function whyLead(why) {
-    let t = String(why).trim().replace(/^(it matters because|because)[:,]?\s*/i, "");
-    const w = /^[A-Za-z]+/.exec(t)?.[0] || "";
-    // "A wrong slot …" reads "a wrong slot …"; "ILs …" stays as it is.
-    if (w && w.slice(1) === w.slice(1).toLowerCase()) t = t[0].toLowerCase() + t.slice(1);
-    return t;
+    const t = String(why).trim().replace(/^(it matters because|because)[:,]?\s*/i, "");
+    return t ? t[0].toUpperCase() + t.slice(1) : t;
   }
-  // The mark before Claude's answer to a check: ✓ for a plain yes, ! for a problem,
-  // none when the words do not say. A guess from the words: Claude's text is the answer.
-  function answerMark(a) {
-    const t = String(a).trim().toLowerCase();
-    if (/^(no|not|only|partly|partially|unclear|unknown|missing|wrong|maybe|see the note|does not|doesn't|is not|isn't|it does not)\b/.test(t)) return `<b class="g warn" aria-label="a problem">!</b> `;
-    if (/^(yes|matches|correct|right|ok|it does|true|both|done)\b/.test(t)) return `<b class="g ok" aria-label="fine">✓</b> `;
-    return "";
+  // Claude's finding for a check: a mark, and the text with no "Yes." or label in
+  // front: the mark says it. ! for a problem, ? for open, ✓ for fine, none when the
+  // words do not say.
+  function answerParts(a) {
+    let t = String(a).trim();
+    const low = t.toLowerCase();
+    let mark = "";
+    if (/^problem\s*:/.test(low)) { mark = `<b class="g warn" aria-label="a problem">!</b> `; t = t.replace(/^problem\s*:\s*/i, ""); }
+    else if (/^open\s*:/.test(low)) { mark = `<b class="g open" aria-label="open">?</b> `; t = t.replace(/^open\s*:\s*/i, ""); }
+    else if (/^(no|not|only|partly|partially|unclear|unknown|missing|wrong|maybe|see the note|does not|doesn't|is not|isn't|it does not)\b/.test(low)) mark = `<b class="g warn" aria-label="a problem">!</b> `;
+    else if (/^(yes|matches|correct|right|ok|it does|true|both|done)\b/.test(low)) {
+      mark = `<b class="g ok" aria-label="fine">✓</b> `;
+      t = t.replace(/^yes\b[.,:;!]?\s*/i, "");
+    }
+    return { mark, text: t ? t[0].toUpperCase() + t.slice(1) : t };
   }
 
   function drawGuide(r) {
@@ -588,9 +594,11 @@
       <div class="eyebrow">Step ${l.cur + 1} of ${steps(r).length}</div>
       <h4>${mdi(s.title)}</h4>
       ${s.what ? `<div class="what md">${md(s.what)}</div>` : ""}
-      ${s.why ? `<p class="lead md">It matters because ${mdi(whyLead(s.why))}</p>` : ""}
-      ${s.why_split ? `<p class="whysplit"><span class="wk">A step of its own:</span> <span class="md">${mdi(s.why_split)}</span></p>` : ""}
-      ${s.check?.length ? `<ul class="checks md">${s.check.map((c, i) => `<li><span class="q">${mdi(c)}</span>${s.check_answers?.[i] ? `<span class="ans">${answerMark(s.check_answers[i])}${mdi(s.check_answers[i])}</span>` : ""}</li>`).join("")}</ul>` : ""}
+      ${s.why ? `<p class="lead md">${mdi(whyLead(s.why))}</p>` : ""}
+      ${s.check?.length ? `<div class="cklabel">What Claude looked into</div><ul class="checks md">${s.check.map((c, i) => {
+        const a = s.check_answers?.[i] ? answerParts(s.check_answers[i]) : null;
+        return `<li><span class="q">${mdi(c)}</span>${a ? `<span class="ans">${a.mark}${mdi(a.text)}</span>` : ""}</li>`;
+      }).join("")}</ul>` : ""}
       <div class="take" id="rtake"></div>
       ${pins.map((p) => `<div class="pinned" data-pin="${p.id}"><span class="md" contenteditable="true" data-raw="${esc(p.text)}">${mdi(p.text)}</span><button type="button" class="icon x" data-unpin="${p.id}" aria-label="Remove the pin">×</button></div>`).join("")}`);
     drawTake(r);
