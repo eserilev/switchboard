@@ -840,6 +840,7 @@ impl Hub {
             rust,
             allow: &allow,
             sandbox: sandboxed.then(|| crate::sandbox::block(&config.sandbox, tree)),
+            private: &[self.paths.data.to_string_lossy().into_owned()],
         };
         std::fs::write(&settings, hooks::settings(&pane).to_string()).map_err(e)?;
         tracing::info!(target: "sb::hub", pane = id, sandboxed, "pane settings");

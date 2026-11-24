@@ -122,6 +122,11 @@ impl Paths {
     pub fn store(&self) -> PathBuf {
         self.data.join("store.db")
     }
+    /// The hub's own key pair for device sessions (SPEC 41.4). It lives beside the
+    /// store, in the folder that agents can not read.
+    pub fn device_key(&self) -> PathBuf {
+        self.data.join("device.key")
+    }
     pub fn tmux_conf(&self) -> PathBuf {
         self.runtime.join("tmux.conf")
     }

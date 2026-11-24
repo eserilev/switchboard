@@ -2695,6 +2695,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "scope-check"
+version = "0.7.3"
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3070,6 +3074,7 @@ dependencies = [
  "libc",
  "outq",
  "rusqlite",
+ "scope-check",
  "serde",
  "serde_json",
  "toml 0.8.2",

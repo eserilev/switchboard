@@ -114,10 +114,35 @@ const SCHEMA: &[&str] = &[
        label TEXT NOT NULL, target TEXT NOT NULL, text TEXT NOT NULL, state TEXT NOT NULL,
        handed_at INTEGER);
      CREATE INDEX mail_target ON mail (target, state);",
+    // Version 16: the devices that may reach the hub (SPEC 41.4). A revoked row
+    // stays, so its key never pairs again. `generation` rises at each revoke.
+    "CREATE TABLE device (id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL,
+       session_key BLOB NOT NULL UNIQUE, push_key BLOB, classes INTEGER NOT NULL,
+       paired_at INTEGER NOT NULL, last_seen INTEGER, revoked_at INTEGER,
+       generation INTEGER NOT NULL DEFAULT 0);",
 ];
 
 pub struct Store {
     pub(crate) db: Connection,
+}
+
+/// A device on the hub's list (SPEC 41.4).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Device {
+    pub id: String,
+    pub name: String,
+    /// `ios`, `android`, or empty.
+    pub platform: String,
+    /// The X25519 public key of its sessions.
+    pub session_key: Vec<u8>,
+    /// The X25519 public key of its pushes.
+    pub push_key: Option<Vec<u8>>,
+    /// The classes of `scope_check`, as bits.
+    pub classes: u8,
+    pub paired_at: u64,
+    pub last_seen: Option<u64>,
+    pub revoked_at: Option<u64>,
+    pub generation: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -436,6 +461,76 @@ impl Store {
             params![p.id, p.kind, p.repo, p.tree, p.title, p.connection, p.session, p.lamp, p.unseen, p.summary, p.updated as i64],
         )?;
         Ok(())
+    }
+
+    // ---------- devices (SPEC 41.4) ----------
+
+    /// Adds a paired device. A key that is on the list already, revoked or not, is refused.
+    pub fn device_add(&self, d: &Device) -> R<()> {
+        self.db.execute(
+            "INSERT INTO device (id, name, platform, session_key, push_key, classes, paired_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![d.id, d.name, d.platform, d.session_key, d.push_key, d.classes as i64, d.paired_at as i64],
+        )?;
+        Ok(())
+    }
+
+    /// All devices, revoked ones too, the oldest first.
+    pub fn devices(&self) -> R<Vec<Device>> {
+        self.device_rows("SELECT * FROM device ORDER BY paired_at, id", &[])
+    }
+
+    /// The device with this session key, revoked or not.
+    pub fn device_by_key(&self, key: &[u8]) -> R<Option<Device>> {
+        Ok(self.device_rows("SELECT * FROM device WHERE session_key = ?1", &[&key])?.pop())
+    }
+
+    /// Revokes a device and raises its generation: a session that checks it runs
+    /// nothing more. Returns the new generation, or `None` for an unknown device.
+    pub fn device_revoke(&self, id: &str, at: u64) -> R<Option<u64>> {
+        self.db
+            .query_row(
+                "UPDATE device SET revoked_at = COALESCE(revoked_at, ?2), generation = generation + 1
+                 WHERE id = ?1 RETURNING generation",
+                params![id, at as i64],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()
+            .map(|g| g.map(|g| g as u64))
+    }
+
+    /// Sets the classes of a device. A revoked device keeps none.
+    pub fn device_classes_set(&self, id: &str, classes: u8) -> R<bool> {
+        let n = self.db.execute(
+            "UPDATE device SET classes = ?2 WHERE id = ?1 AND revoked_at IS NULL",
+            params![id, classes as i64],
+        )?;
+        Ok(n == 1)
+    }
+
+    /// The device reached the hub at `at`.
+    pub fn device_seen(&self, id: &str, at: u64) -> R<()> {
+        self.db.execute("UPDATE device SET last_seen = ?2 WHERE id = ?1", params![id, at as i64])?;
+        Ok(())
+    }
+
+    fn device_rows(&self, sql: &str, args: &[&dyn rusqlite::ToSql]) -> R<Vec<Device>> {
+        let mut q = self.db.prepare(sql)?;
+        let rows = q.query_map(args, |r| {
+            Ok(Device {
+                id: r.get("id")?,
+                name: r.get("name")?,
+                platform: r.get("platform")?,
+                session_key: r.get("session_key")?,
+                push_key: r.get("push_key")?,
+                classes: r.get::<_, i64>("classes")? as u8,
+                paired_at: r.get::<_, i64>("paired_at")? as u64,
+                last_seen: r.get::<_, Option<i64>>("last_seen")?.map(|t| t as u64),
+                revoked_at: r.get::<_, Option<i64>>("revoked_at")?.map(|t| t as u64),
+                generation: r.get::<_, i64>("generation")? as u64,
+            })
+        })?;
+        rows.collect()
     }
 
     // ---------- mail (SPEC 40) ----------
@@ -1057,6 +1152,41 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn device(id: &str, key: u8) -> Device {
+        Device {
+            id: id.into(),
+            name: format!("phone {id}"),
+            platform: "ios".into(),
+            session_key: vec![key; 32],
+            push_key: Some(vec![key ^ 1; 32]),
+            classes: 15,
+            paired_at: 100,
+            last_seen: None,
+            revoked_at: None,
+            generation: 0,
+        }
+    }
+
+    #[test]
+    fn a_revoked_key_never_pairs_again() {
+        let s = Store::memory().unwrap();
+        s.device_add(&device("d1", 7)).unwrap();
+        s.device_add(&device("d2", 8)).unwrap();
+        assert!(s.device_add(&device("d3", 7)).is_err(), "the same key twice");
+        assert_eq!(s.device_by_key(&[7; 32]).unwrap().unwrap().id, "d1");
+        assert!(s.device_classes_set("d1", 31).unwrap());
+        s.device_seen("d1", 150).unwrap();
+        assert_eq!(s.device_revoke("d1", 200).unwrap(), Some(1));
+        assert_eq!(s.device_revoke("d1", 300).unwrap(), Some(2), "a second revoke keeps the first time");
+        assert_eq!(s.device_revoke("nope", 300).unwrap(), None);
+        assert!(!s.device_classes_set("d1", 15).unwrap(), "a revoked device gets no classes");
+        let d1 = s.device_by_key(&[7; 32]).unwrap().unwrap();
+        assert_eq!((d1.revoked_at, d1.generation, d1.classes, d1.last_seen), (Some(200), 2, 31, Some(150)));
+        assert!(s.device_add(&Device { id: "d4".into(), ..device("d4", 7) }).is_err(), "a revoked key never pairs again");
+        assert_eq!(s.devices().unwrap().len(), 2);
+        assert!(s.device_by_key(&[9; 32]).unwrap().is_none());
+    }
 
     fn pane(id: &str) -> PaneRow {
         PaneRow {

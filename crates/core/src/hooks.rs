@@ -55,6 +55,9 @@ pub struct PaneSettings<'a> {
     pub allow: &'a [String],
     /// With none, Bash runs outside Claude Code's sandbox.
     pub sandbox: Option<Sandbox<'a>>,
+    /// The hub's own folders: the store and the hub's key (SPEC 41.4). No tool of
+    /// the agent reads or edits them, and Bash in the sandbox can not read them.
+    pub private: &'a [String],
 }
 
 /// The sandbox of one pane (SPEC 31).
@@ -114,15 +117,21 @@ pub fn settings(p: &PaneSettings) -> Value {
             "filesystem": {
                 "allowWrite": b.write,
                 "denyWrite": b.deny_write,
-                "denyRead": SECRET_DIRS,
+                "denyRead": SECRET_DIRS.iter().map(|d| d.to_string()).chain(p.private.iter().cloned()).collect::<Vec<_>>(),
             },
             "network": { "allowedDomains": b.domains },
         });
-        // The sandbox covers only Bash: these rules keep the Read and Edit tools out too.
-        let deny: Vec<String> = SECRET_DIRS
-            .iter()
-            .flat_map(|d| [format!("Read({d}/**)"), format!("Edit({d}/**)")])
-            .collect();
+    }
+    // The sandbox covers only Bash: these rules keep the Read and Edit tools out too.
+    // The hub's own folders are closed with no sandbox too. A full path takes `//`.
+    let secret = if p.sandbox.is_some() { &SECRET_DIRS[..] } else { &[] };
+    let deny: Vec<String> = secret
+        .iter()
+        .map(|d| d.to_string())
+        .chain(p.private.iter().map(|d| format!("/{d}")))
+        .flat_map(|d| [format!("Read({d}/**)"), format!("Edit({d}/**)")])
+        .collect();
+    if !deny.is_empty() {
         if !s["permissions"].is_object() {
             s["permissions"] = json!({});
         }
@@ -244,7 +253,16 @@ mod tests {
     use super::*;
 
     fn settings(sb: &Path, rust: bool, allow: &[String]) -> Value {
-        super::settings(&PaneSettings { sb, rust, allow, sandbox: None })
+        super::settings(&PaneSettings { sb, rust, allow, sandbox: None, private: &[] })
+    }
+
+    /// With no sandbox, the Read and Edit tools still keep out of the hub's store and key.
+    #[test]
+    fn the_hub_folder_is_closed_with_no_sandbox() {
+        let private = ["/d/switchboard".to_owned()];
+        let s = super::settings(&PaneSettings { sb: Path::new("/sb"), rust: true, allow: &[], sandbox: None, private: &private });
+        assert_eq!(s["permissions"]["deny"], json!(["Read(//d/switchboard/**)", "Edit(//d/switchboard/**)"]));
+        assert!(s.get("sandbox").is_none());
     }
 
     #[test]
@@ -264,6 +282,7 @@ mod tests {
                 write: vec!["/c/repo/.git".into()],
                 deny_write: vec!["/c/repo/.git/hooks".into()],
             }),
+            private: &["/home/u/.local/share/switchboard".to_owned()],
         });
         let b = &s["sandbox"];
         assert_eq!((&b["enabled"], &b["failIfUnavailable"], &b["allowUnsandboxedCommands"]), (&json!(true), &json!(true), &json!(false)));
@@ -271,11 +290,14 @@ mod tests {
         assert_eq!(b["excludedCommands"], json!(out));
         assert_eq!(b["filesystem"]["allowWrite"], json!(["/c/repo/.git"]));
         assert_eq!(b["filesystem"]["denyWrite"], json!(["/c/repo/.git/hooks"]));
-        assert_eq!(b["filesystem"]["denyRead"], json!(SECRET_DIRS));
+        let mut deny_read: Vec<String> = SECRET_DIRS.iter().map(|d| d.to_string()).collect();
+        deny_read.push("/home/u/.local/share/switchboard".into());
+        assert_eq!(b["filesystem"]["denyRead"], json!(deny_read));
         // The allow rules stay, and the Read tool can not read the keys either.
         assert_eq!(s["permissions"]["allow"], json!(allow));
         let deny = s["permissions"]["deny"].as_array().unwrap();
         assert!(deny.contains(&json!("Read(~/.ssh/**)")) && deny.contains(&json!("Edit(~/.aws/**)")), "{deny:?}");
+        assert!(deny.contains(&json!("Read(//home/u/.local/share/switchboard/**)")), "{deny:?}");
         // The hooks stay: they run outside the sandbox.
         assert!(s["hooks"]["PermissionRequest"].is_array());
     }

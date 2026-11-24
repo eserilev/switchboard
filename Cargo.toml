@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/sb", "crates/app", "crates/guide-check", "crates/outq", "crates/evseq", "crates/git-argcheck", "crates/diffparse"]
+members = ["crates/core", "crates/sb", "crates/app", "crates/guide-check", "crates/outq", "crates/evseq", "crates/scope-check", "crates/git-argcheck", "crates/diffparse"]
 
 [workspace.package]
 version = "0.7.3"

@@ -25,6 +25,7 @@ After a change to `guide-check`, `git-argcheck`, `diffparse` or `outq`, run `scr
 
 After a change to the permission flow (`sb permit`, `on_permit`, `permit_answer`, `answer_permits`), run `scripts/check-models.sh` and keep `models/permit.qnt` true (SPEC 25).
 After a change to remote mode or the screens of the windows (`remote.rs`: the windows, the writer, the screen thread; `screens.rs`; `events.rs` and `crates/evseq`; the screen lock and `expand_in`, `collapse_in`, `show`, `fresh_screen` in `hub.rs`; `dispatch::ORDERED`; the lane in the app; `expand` in `web/app.js`), run it too and keep `models/windows.qnt` true (SPEC 29, 41.8). All window traffic of `sb serve` goes through the writer thread: never write to the socket from another thread.
+The command table of SPEC 41.7 is `crates/scope-check`. A new command of `dispatch` goes in one of its class lists, or a test fails. `remote::answer` calls `gate` before `dispatch_in`; keep it the only call of `dispatch` in `remote.rs`. `scope-check` stays in the Aeneas subset.
 After a change to review close or worktree cleanup (`review_close`, `clean_after`, `sweep_closed`, `fetch`, `cleanup::verdict`), run it too and keep `models/review_close.qnt` true (SPEC 26).
 After a change to the local review load (`claim_local`, `spawn_local`, `local_refresh`, `review_open_local`, `review_mark_reviewed`, `turn_snapshot`, the local part of `review_tick`, `start_local`, `sweep_snap_refs`), run it too and keep `models/local_load.qnt` true (SPEC 26.1).
 

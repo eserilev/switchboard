@@ -1065,6 +1065,15 @@ Where the build differs from the text above:
   - Not built yet: idempotency keys. The spec stores the key and the answer in the store transaction of the command's effect, so each command that changes state needs its own change. It comes with the phone's command classes (step 2).
   - The app's own hub has one window, `LOCAL`. Relay windows on it come with the relay (step 3).
 
+- Devices and classes (41.4, 41.7), the first part of build step 2:
+  - Built: the command table in `crates/scope-check`, and `remote::gate`, which `answer` calls before `dispatch_in`. Tests check that the table names every command of `dispatch`, and that `answer` is the only call of `dispatch` in `remote.rs`. `scope-check` is in the Aeneas subset, but not proved yet: it is not in `proofs/CRATES`.
+  - The table classes the commands that 41.7 does not name: task and sprint edits, `pane_rename`, `pane_reorder` and `pane_seen` are `review`; `review_retake`, `review_restart` and `review_step_note` are `ask`; `connection_resume` and `task_resume` are `act`; `pane_close`, `pane_resize`, `part_resize`, `layout_save`, `review_term` and `review_nvim` are `admin` (the phone never sets a pane's size, 41.8).
+  - Every window of `sb serve`'s socket is trusted: whoever reaches the socket already runs as you. Device windows come with the Noise listener.
+  - A device's `review_open` takes only `https://github.com/<owner>/<repo>/pull/<n>`, then nothing or a `/`, `#` or `?`. A trusted window keeps the looser parser of the hub.
+  - Built: the `device` table (store version 16). A revoked row stays, so its key never pairs again; a revoke raises the generation.
+  - The hub's key is `device.key` in the data folder, beside the store, not in `~/.switchboard`. Every agent pane denies Read and Edit of that folder, also with no sandbox; the sandbox denies Bash reads of it too.
+  - Not built yet: pairing (IPC and `sb pair`), the Noise listener, events by class, the per-device limits, and idempotency keys.
+
 - `time` in a state message is seconds since the Unix epoch.
 - `idle_end_minutes` is 0 (off) by default. Ending a session is safe, because the tile resumes it, but it is a surprise the first time.
 - The guide session has no board tile. Its state shows in the review header.

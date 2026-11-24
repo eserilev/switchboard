@@ -96,6 +96,9 @@ struct Conn {
     epoch: u64,
     /// The instance id of its hello, or empty.
     instance: String,
+    /// `scope_check::TRUSTED` or `DEVICE`, and the classes of a device (SPEC 41.7).
+    origin: u8,
+    classes: u8,
     stream: UnixStream,
     lines: Mutex<VecDeque<String>>,
     out: Mutex<outq::Queue>,
@@ -266,6 +269,9 @@ fn window(hub: Arc<Hub>, sink: Arc<RemoteSink>, stream: UnixStream) {
     let conn = Arc::new(Conn {
         epoch: sink.next_epoch.fetch_add(1, Ordering::SeqCst) + 1,
         instance,
+        // The hub's socket is yours: whoever reaches it runs as you already.
+        origin: scope_check::TRUSTED,
+        classes: 0,
         stream,
         lines: Mutex::default(),
         out: Mutex::new(outq::new(BUDGET)),
@@ -384,7 +390,10 @@ fn answer(hub: &Hub, conn: &Conn, req: &Value) {
     let id = req["id"].clone();
     let cmd = req["cmd"].as_str().unwrap_or("");
     let args = req.get("args").cloned().unwrap_or(json!({}));
-    let out = dispatch::dispatch_in(hub, conn.epoch, cmd, &args);
+    let out = match gate(conn.origin, conn.classes, cmd, &args) {
+        Ok(()) => dispatch::dispatch_in(hub, conn.epoch, cmd, &args),
+        Err(e) => Err(e),
+    };
     if let Err(err) = &out {
         tracing::warn!(target: "sb::remote", cmd, %err, "command failed");
     }
@@ -392,6 +401,20 @@ fn answer(hub: &Hub, conn: &Conn, req: &Value) {
         Ok(v) => json!({ "id": id, "ok": v }),
         Err(e) => json!({ "id": id, "err": e }),
     });
+}
+
+/// The check of SPEC 41.7 before a command runs: the command table, the classes
+/// of a device, and the arguments. `answer` is the only way to `dispatch` from a
+/// window, and it calls this first.
+pub fn gate(origin: u8, classes: u8, cmd: &str, args: &Value) -> Result<(), String> {
+    let url = args.get("url").and_then(Value::as_str).unwrap_or("");
+    match scope_check::check(origin, classes, cmd.as_bytes(), url.as_bytes()) {
+        scope_check::OK => Ok(()),
+        scope_check::UNKNOWN => Err(format!("unknown command {cmd}")),
+        scope_check::NEVER => Err(format!("{cmd} runs only on the computer")),
+        scope_check::CLASS => Err(format!("this device may not run {cmd}")),
+        _ => Err(format!("{cmd}: the arguments are refused")),
+    }
 }
 
 /// Writes the lines and the pane bytes of one window. All I/O happens here, with
@@ -736,6 +759,55 @@ mod tests {
         // SAFETY: kill with signal 0 only asks whether the process exists.
         assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "the program still runs");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The table of SPEC 41.7 names every command of `dispatch`, and only those.
+    #[test]
+    fn the_table_names_every_command() {
+        for c in dispatch::COMMANDS {
+            assert_ne!(scope_check::class_of(c.as_bytes()), 0, "{c} is not in the table");
+        }
+        let lists = [
+            scope_check::READ_CMDS,
+            scope_check::REVIEW_CMDS,
+            scope_check::ASK_CMDS,
+            scope_check::ACT_CMDS,
+            scope_check::TERMINAL_CMDS,
+            scope_check::ADMIN_CMDS,
+        ];
+        for l in lists {
+            for n in std::str::from_utf8(l).unwrap().split(' ') {
+                assert!(dispatch::COMMANDS.contains(&n), "{n} is in the table but not a command");
+            }
+        }
+    }
+
+    /// `answer` calls `gate` before `dispatch_in`, and nothing else in this file calls `dispatch`.
+    #[test]
+    fn every_command_goes_through_the_gate() {
+        let src = include_str!("remote.rs");
+        let body = src.split("fn answer(").nth(1).unwrap().split("\n}\n").next().unwrap();
+        let g = body.find("gate(").expect("answer calls gate");
+        let d = body.find(concat!("dispatch::", "dispatch_in(")).expect("answer calls dispatch_in");
+        assert!(g < d);
+        let calls = |pat: &str| src.matches(pat).count();
+        // One call, in `answer`. The test builds its patterns, so they do not count.
+        assert_eq!(calls(concat!("dispatch::", "dispatch_in(")), 1);
+        assert_eq!(calls(concat!("dispatch::", "dispatch(")), 0);
+    }
+
+    #[test]
+    fn a_device_is_refused_with_a_reason() {
+        let d = scope_check::DEVICE;
+        assert!(gate(d, scope_check::PHONE, "panes", &json!({})).is_ok());
+        assert!(gate(d, scope_check::PHONE, "hub_restart", &json!({})).unwrap_err().contains("only on the computer"));
+        assert!(gate(d, scope_check::PHONE, "pane_input", &json!({})).unwrap_err().contains("may not"));
+        let bad = json!({ "url": "https://evil.example/o/r/pull/1" });
+        assert!(gate(d, scope_check::PHONE, "review_open", &bad).unwrap_err().contains("arguments"));
+        let good = json!({ "url": "https://github.com/o/r/pull/1" });
+        assert!(gate(d, scope_check::PHONE, "review_open", &good).is_ok());
+        assert!(gate(scope_check::TRUSTED, 0, "hub_restart", &json!({})).is_ok());
+        assert!(gate(scope_check::TRUSTED, 0, "nope", &json!({})).unwrap_err().contains("unknown"));
     }
 
     #[test]
