@@ -1813,7 +1813,7 @@ An agent on a remote hub cannot read the clipboard of the window's machine. So t
 
 - **Reconnect on its own.** A link that goes down connects again with no click: after 1 s, then 2, 4, 8, and every 15 s while it stays down. The banner says "Reconnecting on its own…", and Reconnect still works at once. `sb attach` starts `sb serve` when none runs, so a hub that stopped comes back with the link.
 - Not after a takeover: two windows would take the hub from each other for ever. "Take it back" stays a click.
-- **Restart** is in the host menu (a click on the host name at the foot of the rail, or on the machine shown when both run), also with no server in the config.
+- **Restart** is in the host menu (a click on the host name at the foot of the rail), also with no server in the config.
   - Remote mode: **Restart the hub on <host>** and **Restart this app**. The hub restart sends `hub_restart`. `sb serve` answers, stops its review runs, and starts again in place with `exec`: the same pid, with the `sb` binary on disk now. So an install on the server takes effect with one click. The link drops, and the window links back on its own.
   - Local mode: **Restart Switchboard**. The app starts again; its hub starts with it.
   - Agents keep running in tmux. The new hub takes them over, as after any start.
@@ -1823,13 +1823,13 @@ An agent on a remote hub cannot read the clipboard of the window's machine. So t
 You work on the server and on your computer, and switch between them with one click.
 
 - **What runs.** With `remote` in the config, the app starts the hub here and the link to the server, side by side. `SB_REMOTE` runs the server only. A hub here that does not start leaves the server alone, with the error in the log.
-- **The rail.** Its foot lists the two machines, this computer first: a dot (green, red with no link), the name (this computer's machine name of 40.1, the server's host after `@`), and the number of agents that wait on you there. The machine shown is lit. On the icon rail, the dot and the number; the name is in the tooltip.
-- **A click** on the other machine shows it at once: `machine_show` sets where the window's commands go, and the window loads that machine's panes, reviews and tasks again. The Board, Tasks and Today stay; another tab goes back to the Board. A click on the machine shown opens its menu, with Restart (29.12). Nothing stops: the agents of both keep running. The next start opens on the machine shown last (`remote_off` in the config).
+- **The rail.** On the wide rail, the two machines show under Board, as the open reviews show under Reviews, this computer first: a dot (green, red with no link), the name (this computer's machine name of 40.1, the server's host after `@`), and the number of agents that wait on you there. The machine shown is lit. A caret on the Board row folds them and shows them again; the window remembers it. The foot of the rail keeps the host name and its menu (29.12).
+- **A click** on the other machine shows it at once: `machine_show` sets where the window's commands go, and the window loads that machine's panes, reviews and tasks again. The Board, Tasks and Today stay; another tab goes back to the Board. A click on the machine shown goes to the Board. Nothing stops: the agents of both keep running. The next start opens on the machine shown last (`remote_off` in the config).
 - **The other machine.** Its news does not reach the window, except its panes, as `other_pane(s)`, for its number. `machine_other` loads its panes after a switch and when the server's link comes back.
 - **A lost link.** The banner shows only while the window shows the server. Its **Use this computer** shows this computer. The server's dot goes red.
 - **Messages** (40). The hub here always runs, so agents here get messages in both views.
 - **Handover** (38) shows this computer when it is done; no restart.
-- Window checks: both rows, the server down; Use this computer with no restart; the count of the other machine and its update; the menu of the machine shown; the switch back.
+- Window checks: both rows under Board, the server down; the caret folds and unfolds; Use this computer with no restart; the count of the other machine and its update; a click on the machine shown; the switch back.
 
 ## 30. Work environment
 

@@ -2160,8 +2160,12 @@
       window.__emit("link", { up: false, host: "box", why: "ssh: Host key verification failed.", taken: false });
       await wait(30);
       const rows = () => $$("#machines .machine");
-      check("the rail lists both machines, the server shown and marked down", !$("#machines").hidden && $("#host").hidden && rows().length === 2
-        && rows()[0].textContent.includes("mac") && rows()[1].textContent.includes("box") && rows()[1].classList.contains("on") && rows()[1].classList.contains("down"), $("#machines").innerHTML);
+      check("the machines show under Board, the server shown and marked down", !$("#machines").hidden && !$("#mtoggle").hidden && $("#machines").closest(".boardgrp")?.querySelector('[data-tab="board"]') && rows().length === 2
+        && rows()[0].textContent.includes("mac") && rows()[1].textContent.includes("box") && rows()[1].getAttribute("aria-pressed") === "true" && rows()[1].classList.contains("down"), $("#machines").innerHTML);
+      $("#mtoggle").click();
+      check("the caret folds the machines", $("#machines").hidden && $("#mtoggle").getAttribute("aria-expanded") === "false");
+      $("#mtoggle").click();
+      check("and unfolds them", !$("#machines").hidden && $("#mtoggle").getAttribute("aria-expanded") === "true");
       check("a lost link offers this computer", !$("#linklocal").hidden);
       const restarts = called("app_restart").length;
       window.__other = [{ id: "p9", lamp: "needs", unseen: true }];
@@ -2169,20 +2173,19 @@
       await wait(100);
       let m = called("machine_show");
       check("Use this computer shows this computer's agents, with no restart", m.length === 1 && m[0][1].remote === false && called("app_restart").length === restarts && !window.SB.LINK.remote, JSON.stringify(m));
-      check("the banner goes, and the board loads this computer's panes", $("#link").hidden && rows()[0].classList.contains("on") && called("panes").length > 0);
+      check("the banner goes, and the board loads this computer's panes", $("#link").hidden && rows()[0].getAttribute("aria-pressed") === "true" && called("panes").length > 0);
       check("the server's row counts the agents that wait on you there", rows()[1].querySelector(".mn")?.textContent === "1", $("#machines").innerHTML);
       window.__emit("other_pane", { id: "p8", lamp: "turn", unseen: true });
       await wait(20);
       check("the other machine's panes update its count", rows()[1].querySelector(".mn")?.textContent === "2");
       rows()[0].click();
       await wait(10);
-      check("a click on the machine shown opens its menu, with Restart", !$("#hostmenu").hidden && !!$("#hostmenu [data-restart]") && called("machine_show").length === 1);
-      $("#hostmenu").hidden = true;
+      check("a click on the machine shown goes to the Board", window.SB.S.tab === "board" && called("machine_show").length === 1);
       window.__boxUp = true;
       rows()[1].click();
       await wait(100);
       m = called("machine_show");
-      check("a click on the server shows it again", m.length === 2 && m[1][1].remote === true && window.SB.LINK.remote && rows()[1].classList.contains("on") && $("#link").hidden);
+      check("a click on the server shows it again", m.length === 2 && m[1][1].remote === true && window.SB.LINK.remote && rows()[1].getAttribute("aria-pressed") === "true" && $("#link").hidden);
       window.__other = null;
       window.__emit("link", { up: true, host: "box" });
       await wait(200);

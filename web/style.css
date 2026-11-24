@@ -796,18 +796,21 @@ body:not(.rail-wide) .host::before { margin: 0; }
 .host.here::before { color: var(--muted); }
 button.host { border: 0; background: transparent; padding: 4px 0; cursor: pointer; text-align: left; }
 button.host:hover { color: var(--fg); }
-/* The two machines, when both run (SPEC 29.13). The one shown is lit. */
-.machines { display: flex; flex-direction: column; gap: 2px; width: 100%; }
-.machine { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; border-radius: 6px; background: transparent; padding: 5px 8px; cursor: pointer; text-align: left; font: 600 11px/1 var(--mono); color: var(--muted); }
-.machine::before { content: "●"; color: var(--done); font-size: 11px; }
+/* The two machines under Board, when both run (SPEC 29.13). The caret folds them. */
+.boardgrp { display: flex; flex-direction: column; gap: 1px; }
+.navrow { position: relative; display: flex; align-items: center; }
+.navrow .nav { flex: 1; min-width: 0; }
+.mtoggle { display: none; }
+body.rail-wide .mtoggle:not([hidden]) { display: grid; place-items: center; position: absolute; right: 4px; width: 22px; height: 22px; border-radius: 5px; color: var(--muted); }
+body.rail-wide .mtoggle:hover { color: var(--fg); background: var(--panel); }
+.mtoggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
+body.rail-wide .boardgrp:has(.mtoggle:not([hidden])) .nav[data-tab="board"] { padding-right: 30px; }
+.msubs { display: none; }
+body.rail-wide .msubs:not([hidden]) { display: flex; flex-direction: column; gap: 1px; padding-left: 26px; }
+.machine::before { content: "●"; color: var(--done); font-size: 10px; }
 .machine.down::before { color: var(--error); }
-.machine:hover { color: var(--fg); }
-.machine.on { background: var(--panel-2); color: var(--fg); }
-.machine .mname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.machine .mn { color: var(--needs-fg); }
-/* On the icon rail a machine is its dot and its count; the name is in the tooltip. */
-body:not(.rail-wide) .machine { justify-content: center; padding: 5px 0; }
-body:not(.rail-wide) .machine .mname { display: none; }
+.machine[aria-pressed="true"] { color: var(--fg); }
+.machine .mn { font: 600 11px/1 var(--mono); color: var(--needs-fg); }
 #hostmenu .note { padding: 6px 10px 4px; color: var(--muted); font-size: 11px; max-width: 240px; }
 .link { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: color-mix(in srgb, var(--error) 18%, var(--panel)); border-bottom: 1px solid var(--line); font-size: 13px; }
 .link span { flex: 1; min-width: 0; }

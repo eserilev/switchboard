@@ -92,10 +92,20 @@ function linkChanged() {
 // number of agents that wait on you. A click shows that machine at once.
 const machineName = (host) => String(host || "server").split("@").pop();
 const waitsOn = (list) => list.filter((p) => p.unseen && URGENT.includes(p.lamp)).length;
+const machinesFolded = () => { try { return localStorage.getItem("sb.machines.folded") === "1"; } catch { return false; } };
+function foldMachines(folded) {
+  try { localStorage.setItem("sb.machines.folded", folded ? "1" : "0"); } catch {}
+  drawMachines();
+}
 function drawMachines() {
-  const on = LINK.both;
-  $("#machines").hidden = !on;
-  $("#host").hidden = on;
+  const el = $("#machines"), tg = $("#mtoggle");
+  if (!el) return;
+  const on = LINK.both, folded = machinesFolded();
+  tg.hidden = !on;
+  tg.setAttribute("aria-expanded", String(!folded));
+  const word = folded ? "Show the machines" : "Hide the machines";
+  if (tg.title !== word) { tg.title = word; tg.setAttribute("aria-label", word); }
+  el.hidden = !on || folded;
   if (!on) return;
   const box = LINK.box || {};
   const rows = [
@@ -104,8 +114,8 @@ function drawMachines() {
   ];
   setHTML($("#machines"), rows.map((m) => {
     const shown = m.remote === !!LINK.remote;
-    const tip = `${m.tip}${m.up ? "" : ": no link"}${shown ? ". Click for Restart." : ""}`;
-    return `<button type="button" class="machine${shown ? " on" : ""}${m.up ? "" : " down"}" data-remote="${m.remote}" aria-pressed="${shown}" title="${esc(tip)}"><span class="mname">${esc(m.name)}</span>${m.n ? `<span class="mn">${m.n}</span>` : ""}</button>`;
+    const tip = `${m.tip}${m.up ? "" : ": no link"}${m.n ? ` · ${m.n} wait${m.n > 1 ? "" : "s"} on you` : ""}`;
+    return `<button type="button" class="sub machine${m.up ? "" : " down"}" data-remote="${m.remote}" aria-pressed="${shown}"${shown && S.tab === "board" ? ' aria-current="page"' : ""} title="${esc(tip)}"><span class="sn">${esc(m.name)}</span>${m.n ? `<span class="mn">${m.n}</span>` : ""}</button>`;
   }).join(""));
 }
 function drawLink() {
@@ -251,7 +261,8 @@ function waiting() {
 }
 function drawTabs() {
   if (!$("#revtab")) {
-    $("#tabs").innerHTML = railItem("board", "Board") + railItem("tasks", "Tasks") + railItem("today", "Today") + railItem("work", "Work") +
+    // Board, with the machines under it when both run (SPEC 29.13): a caret folds them.
+    $("#tabs").innerHTML = `<div class="boardgrp"><div class="navrow">${railItem("board", "Board")}<button class="icon mtoggle" id="mtoggle" type="button" hidden aria-expanded="true" aria-controls="machines" aria-label="Hide the machines" title="Hide the machines">${svg(12, '<path d="M4 6l4 4 4-4"/>')}</button></div><div class="msubs" id="machines" hidden></div></div>` + railItem("tasks", "Tasks") + railItem("today", "Today") + railItem("work", "Work") +
       `<div class="revtab"><button class="nav" type="button" id="revtab" aria-haspopup="menu" aria-expanded="false">${ICON.reviews}<span class="nl">Reviews</span><i class="busy" hidden></i><span class="nc"></span><span class="rbadge"></span></button>` +
       '<div class="menu revmenu" id="revmenu" role="menu" hidden></div><div class="revsubs" id="revsubs"></div></div>';
   }
@@ -299,8 +310,16 @@ function drawTabs() {
     if (s.title !== (r.title || "")) s.title = r.title || "";
     setHTML(s, `<span class="sn">${reviewLabel(r)}</span>${r.status && r.status !== "ready" ? `<span class="ss">${esc(r.status)}</span>` : ""}`);
   });
+  drawMachines();
 }
 $("#tabs").addEventListener("click", (e) => {
+  if (e.target.closest("#mtoggle")) return foldMachines(!machinesFolded());
+  const m = e.target.closest("[data-remote]");
+  if (m) {
+    const remote = m.dataset.remote === "true";
+    if (remote === !!LINK.remote) return setTab("board");
+    return showMachine(remote);
+  }
   if (e.target.closest("#revtab")) { $("#revmenu").hidden = !$("#revmenu").hidden; $("#revtab").setAttribute("aria-expanded", String(!$("#revmenu").hidden)); return; }
   const shut = () => { $("#revmenu").hidden = true; $("#revtab").setAttribute("aria-expanded", "false"); };
   if (e.target.closest("[data-newreview]")) { shut(); return openLauncher(); }
@@ -1725,14 +1744,6 @@ listen("other_pane", (e) => {
   if (i < 0) OTHER.push(e.payload);
   else OTHER[i] = e.payload;
   drawMachines();
-});
-$("#machines").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-remote]");
-  if (!b) return;
-  const remote = b.dataset.remote === "true";
-  // The machine shown: its menu, with Restart.
-  if (remote === !!LINK.remote) $("#hostmenu").hidden = !$("#hostmenu").hidden;
-  else showMachine(remote);
 });
 $("#host").addEventListener("click", () => ($("#hostmenu").hidden = !$("#hostmenu").hidden));
 $("#hostmenu").addEventListener("click", (e) => {
