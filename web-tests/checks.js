@@ -701,6 +701,22 @@
   const cm = called("review_comment")[0]?.[1].comment;
   check("Add to review sends path, side, range, head and line text", cm && cm.path === "beacon_node/gloas.rs" && cm.side === "new" && cm.line === 12 && cm.start_line === 11 && cm.text === "Both lines need a test." && cm.head === "ac92ae9aaaa" && cm.line_text === "let b = 2;", JSON.stringify(cm));
   check("the form closes after the add", !$("#rcform"));
+  {
+    // A drag from a line's + over another line: one comment on the range, in either order.
+    const plus = (n) => $(`#rdiff [data-cm][data-side="new"][data-n="${n}"]`);
+    const at = (el) => { const b = el.getBoundingClientRect(); return { clientX: b.left + b.width / 2, clientY: b.top + b.height / 2, bubbles: true, button: 0, pointerId: 1 }; };
+    const from = plus(12), to = plus(11);
+    from.dispatchEvent(new PointerEvent("pointerdown", at(from)));
+    window.dispatchEvent(new PointerEvent("pointermove", at(to)));
+    await wait(20);
+    check("a drag over lines marks them", $$("#rdiff tr.dragsel").length === 2, $$("#rdiff tr.dragsel").length);
+    window.dispatchEvent(new PointerEvent("pointerup", at(to)));
+    to.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await wait(50);
+    check("letting go opens one form for the range, upward too", !!$("#rcform") && $("#rcform .cat").textContent.includes("gloas.rs:11-12") && !$$("#rdiff tr.dragsel").length, $("#rcform")?.textContent);
+    $("#rcform [data-ccancel]").click();
+    await wait(30);
+  }
   // Finish review: a popover under the header. Preview from GitHub, pick a type, send only on the click.
   $('#rhead [data-act="finish"]').click();
   await wait(150);

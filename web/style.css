@@ -493,6 +493,10 @@ tr.sel td.cm, tr.sel td.ln { background: color-mix(in srgb, var(--accent) 30%, t
 table.code td.cm { width: 1%; padding: 0 0 0 4px; }
 .cmb { visibility: hidden; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: var(--accent); color: var(--accent-fg); font: 700 13px/18px var(--mono); cursor: pointer; }
 tr:hover .cmb, .cmb:focus-visible, tr.sel .cmb { visibility: visible; }
+/* A drag from a line's + over more lines: the range of one comment. */
+.cmb { touch-action: none; cursor: ns-resize; }
+tr.dragsel td { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+tr.dragsel .cmb { visibility: visible; }
 /* One indent for every card under a line: a place, a note, a comment, the form. */
 tr.drow td, tr.crow td, tr.prow td { white-space: normal; padding: 6px 12px 8px 54px; background: var(--bg); font-family: var(--body); }
 .dcard, .ncard, .pbox { max-width: 720px; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: 6px; font: 400 12.5px/1.45 var(--body); }

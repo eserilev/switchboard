@@ -441,7 +441,7 @@ Cost: each fork sends the guide context again. The prompt cache lasts a few minu
 - **Pin** asks the fork for a one-line summary of its last answer. You can edit the pin. It goes under the step in the guide.
 - Pins live in the store, not in the guide. Each new fork of a step gets that step's pins in its prompt.
 - **Draft** makes a review comment from an answer: full path, line, side, and text. You can edit it. The window marks it as an agent draft.
-- You can also write a comment yourself. Hover a diff line and click **+**. Shift-click a second **+** on the same side to comment on a range. **Add to review** keeps the comment as a pending draft.
+- You can also write a comment yourself. Hover a diff line and click **+**. For a range, press on a line's **+** and drag over more lines of the same side, up or down, then let go: the form opens for those lines. Shift-click a second **+** does the same. **Add to review** keeps the comment as a pending draft.
 - The core accepts a comment only on a line that exists in the diff model at the reviewed head.
 - Every diff reply carries the head of the model that drew it. The window refetches a diff whose head is not the review's head, and shows "Loading the new commit" meanwhile: during an update the server loads the new model for a while. A **+** comment and a question on a line send the head of the diff on screen and the text of the clicked line. The core refuses both when the head or the text differs.
 - Drafts show under their lines in the diff, and in the list in the inspector with what you sent. You can edit or delete each one.

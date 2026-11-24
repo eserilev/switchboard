@@ -710,7 +710,7 @@
           <div class="dmeta"><span class="who">${x.agent ? "Agent draft" : "Your comment"}</span><span class="dim">pending</span>${x.start_line ? `<span>lines ${x.start_line}-${x.line}</span>` : ""}<button type="button" class="icon x" data-ddel="${x.id}" aria-label="Delete comment">×</button></div>
           <div class="dtext" contenteditable="true">${esc(x.text)}</div></div></td></tr>`).join("");
         const form = c && c.side === rowSide && c.line === num ? `<tr class="crow"><td colspan="3"><form class="cform" id="rcform">
-          <div class="cat">Comment on ${esc(c.path)}:${c.start < c.line ? `${c.start}-${c.line}` : c.line}${c.side === "old" ? " (old)" : ""} <span class="hint">Shift-click a + to choose a range</span></div>
+          <div class="cat">Comment on ${esc(c.path)}:${c.start < c.line ? `${c.start}-${c.line}` : c.line}${c.side === "old" ? " (old)" : ""} <span class="hint">Drag the + over more lines, or Shift-click a +, for a range</span></div>
           <textarea id="rctext" placeholder="Leave a comment">${esc(c.text || "")}</textarea>
           <div class="cbtns"><button type="button" class="btn small" data-ccancel>Cancel</button><button type="submit" class="btn small primary">Add to review</button></div>
         </form></td></tr>` : "";
@@ -738,7 +738,40 @@
     if (changed) wireComments(r, d);
     // A click on the tour leaves the keys where they are, in the terminal too.
     box.onmousedown = (e) => { if (e.target.closest("[data-tour]")) e.preventDefault(); };
+    // Drag from a line's + over more lines of the same side: one comment on the range.
+    box.onpointerdown = (e) => {
+      const b = e.target.closest("[data-cm]");
+      if (!b || e.button !== 0 || e.shiftKey) return;
+      e.preventDefault();
+      const drag = { sec: b.dataset.sec, side: b.dataset.side, start: +b.dataset.n, end: +b.dataset.n, b, moved: false };
+      const mark = () => {
+        const lo = Math.min(drag.start, drag.end), hi = Math.max(drag.start, drag.end);
+        box.querySelectorAll("tr.dragsel").forEach((t) => t.classList.remove("dragsel"));
+        box.querySelectorAll(`[data-cm][data-sec="${drag.sec}"][data-side="${drag.side}"]`).forEach((x) => {
+          const n = +x.dataset.n;
+          if (n >= lo && n <= hi) x.closest("tr").classList.add("dragsel");
+        });
+      };
+      const move = (ev) => {
+        const tr = document.elementFromPoint(ev.clientX, ev.clientY)?.closest("tr");
+        const x = tr?.querySelector(`[data-cm][data-sec="${drag.sec}"][data-side="${drag.side}"]`);
+        if (x && +x.dataset.n !== drag.end) { drag.end = +x.dataset.n; drag.moved = true; mark(); }
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        box.querySelectorAll("tr.dragsel").forEach((t) => t.classList.remove("dragsel"));
+        if (!drag.moved) return;
+        // The click that follows the release must not open a one-line form.
+        l.dragDone = true;
+        commentRange(r, d, drag);
+      };
+      mark();
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    };
     box.onclick = async (e) => {
+      if (l.dragDone) { l.dragDone = false; if (e.target.closest("[data-cm]")) return; }
       const tb = e.target.closest("[data-tour]")?.dataset.tour;
       if (tb) { if (tb === "prev") tourStep(r.id, -1); if (tb === "next") tourStep(r.id, 1); if (tb === "back") back(r.id); return; }
       const padd = e.target.closest("[data-padd]");
@@ -898,6 +931,19 @@
     } else {
       l.compose = { sec: sec.path, path, side, start: n, line: n, text: c?.text || l.placing?.text || "" };
     }
+    drawDiff(r);
+    $("#rctext")?.focus();
+  }
+
+  // A comment on the lines of a drag: from its first to its last line, the
+  // order of the drag does not matter.
+  function commentRange(r, d, drag) {
+    const l = local(r.id);
+    const sec = d.sections[+drag.sec];
+    const side = drag.side;
+    const path = side === "old" ? sec.old_path || sec.path : sec.path;
+    const c = l.compose;
+    l.compose = { sec: sec.path, path, side, start: Math.min(drag.start, drag.end), line: Math.max(drag.start, drag.end), text: c?.text || l.placing?.text || "" };
     drawDiff(r);
     $("#rctext")?.focus();
   }
