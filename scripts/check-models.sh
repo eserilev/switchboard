@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Check the Quint models: the permission flow (SPEC 25), review close (SPEC 26),
-# the load cycle of a local review (SPEC 26.1) and remote mode (SPEC 29).
+# the load cycle of a local review (SPEC 26.1) and several windows (SPEC 29, 41.8).
 # SAMPLES sets the number of random runs for each step profile (default 100000).
 # STEPS sets the length of each run (default 50).
 set -euo pipefail
@@ -90,29 +90,31 @@ for old in stepOldClaim stepPollOldTick stepNoSweep stepNoRepair stepNoLook; do
     local_must_fail "$old" Always
 done
 
-# Remote mode (SPEC 29): takeover, a lost link, drops and fresh screens. The
-# witnesses must fail: else the runs never reach a resync, a stale command, or a
-# quiet screen after a lost link. The old code must fail too: no owner check,
-# commands in threads of their own, and any expand answer that draws.
-quint typecheck remote.qnt
-quint typecheck remote_test.qnt
-# The fixed traces: the first screen thread leaves a pane streaming; the fix does not.
-quint test remote_test.qnt
-echo "== remote step: $samples runs of $steps steps"
-quint run remote.qnt --step=step --invariants Always \
+# Several windows on one hub (SPEC 29, 41.8): screens per window, the screen
+# lock, lost links, drops and fresh screens from the emulator. The witnesses must
+# fail: else the runs never reach a fresh screen, a fresh screen of a shared pane,
+# or a quiet state with two windows on one pane. The old code must fail too:
+# commands in threads of their own, any expand answer that draws, a collapse
+# with no screen lock, and a fresh screen that pauses the pane.
+quint typecheck windows.qnt
+quint typecheck windows_test.qnt
+quint test windows_test.qnt
+echo "== windows step: $samples runs of $steps steps"
+quint run windows.qnt --step=step --invariants Always \
     --max-samples="$samples" --max-steps="$steps" --verbosity=1
 must_fail() {
-    if quint run remote.qnt "$@" --max-samples="$samples" --max-steps="$steps" \
+    if quint run windows.qnt "$@" --max-samples="$samples" --max-steps="$steps" \
         --verbosity=0 > /dev/null 2>&1; then
-        echo "error: remote $* passed: the model lost that path" >&2
+        echo "error: windows $* passed: the model lost that path" >&2
         exit 1
     fi
-    echo "== remote $* fails, as it must"
+    echo "== windows $* fails, as it must"
 }
-for w in NoResync NoStaleError NoQuietShow; do
+for w in NoResync NoSharedResync NoQuietShare NoQuietShareAfterResync; do
     must_fail --step=step --invariant="$w"
 done
-must_fail --step=stepNoOwnerCheck --invariant=Always
 must_fail --step=stepAnyOrder --invariant=Always
 must_fail --init=initAnyAnswer --step=step --invariant=Always
+must_fail --step=stepNoScreenLock --invariant=Always
+must_fail --step=stepPause --invariant=Always
 echo "models ok"

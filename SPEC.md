@@ -1051,9 +1051,17 @@ Where the build differs from the text above:
   - `.github/workflows/release.yml`: a `v*` tag builds `switchboard-linux-x86_64.tar.gz` (Ubuntu 22.04) and `Switchboard-macos-arm64.zip`, and puts them on a GitHub release.
   - `.github/workflows/macos.yml` checks that the Lean of the verified crates came from the Rust in the tree (`scripts/check-proof-source.sh`, a hash that `scripts/extract.sh` writes), runs clippy, the tests with tmux from Homebrew, the window checks in Chrome, and the app build on a macOS runner. It runs when the repo is on GitHub.
   - `.github/workflows/proofs.yml` runs `scripts/check-proofs.sh` on Ubuntu when a verified crate, `proofs/` or the proof scripts change, and every week. Charon and Aeneas build once for each `proofs/TOOLS` (`scripts/install-proof-tools.sh`) and stay in the cache; Mathlib comes from `lake exe cache get`.
-  - `.github/workflows/models.yml` runs `scripts/check-models.sh` on Ubuntu with Quint from npm, when a model or the code it describes changes (the files CLAUDE.md names) and every night: the full 100,000 random runs for each profile (about 3 minutes). With 20,000, the witness `initAnyAnswer` of the remote model could pass, and with 2,000 so could `NoResync`: the count must stay high enough to reach them.
+  - `.github/workflows/models.yml` runs `scripts/check-models.sh` on Ubuntu with Quint from npm, when a model or the code it describes changes (the files CLAUDE.md names) and every night: the full 100,000 random runs for each profile (about 3 minutes). With 20,000, the witness `initAnyAnswer` of the remote model (now `models/windows.qnt`) could pass, and with 2,000 so could `NoResync`: the count must stay high enough to reach them.
   - The verified crates are listed in `proofs/CRATES`; the proof scripts read the list.
   - From Linux, `cargo clippy --target aarch64-apple-darwin` checks the macOS code. A C compiler that does nothing lets the SQLite build step pass, because a check does not link.
+
+- Several windows (41.8), the first part (build step 1 of 41.15):
+  - Built: a screen per window, watch counts, a sink per window (`Sink::output_to`, `reset_for`), the screen lock, fresh screens from a `vt100` emulator with no pause, the instance id in the hello, and `models/windows.qnt` in place of `models/remote.qnt`.
+  - No takeover at all, also no explicit one: a window that comes back with its instance id replaces its own old link, and other windows stay. "Take it back" is not built.
+  - News goes to every window. No event is for one window yet: a toast is in its command's answer, and the window drops an Ask stream it did not ask for.
+  - Each window sets the size of the panes it shows; the last resize wins. The phone rule ("the phone never resizes a pane") comes with the phone.
+  - Not built yet: the event sequence `(boot, n)` with its ring, and idempotency keys.
+  - The app's own hub has one window, `LOCAL`. Relay windows on it come with the relay (step 3).
 
 - `time` in a state message is seconds since the Unix epoch.
 - `idle_end_minutes` is 0 (off) by default. Ending a session is safe, because the tile resumes it, but it is a surprise the first time.
@@ -1720,14 +1728,16 @@ One JSON object per line, on the window socket. `sb attach` copies its stdin and
 - One table in `crates/core/src/dispatch.rs` holds every command, for the app and for `sb serve`.
 - In remote mode only `log`, `open_url`, `clip_write` (29.11), `handover_check` and `handover_in` (38.2), `link_state`, `link_reconnect`, `machine_show` and `machine_other` (29.13) and `app_restart` (29.12) run on your computer. A test keeps that list short. So a server can make the app do nothing else on your computer: it can write your clipboard, never read it.
 
-### 29.3 One window at a time
+### 29.3 Several windows
 
-- Each attach gets a new epoch. The new window takes over: under the owner lock, it becomes the owner and the current window, and the screen collapses.
-- The old window gets the `taken_over` event, then its socket closes. Only the writer shuts the socket, after its last line, so `taken_over` always goes first. Its banner says that another window took over, with Take it back.
-- After the takeover, the hub reads no more lines of the old window, so late keys never reach a pane. A writer that blocks on a dead link gets its socket shut after 5 s.
-- The screen commands (`pane_expand`, `pane_attach`, `pane_detach`, `pane_collapse`, `pane_resize`, `part_resize`) run under the owner lock, and only for the owner. A command of a window that lost a takeover gets an error and changes nothing.
-- A command of the old window that runs at the takeover still runs, if it is not a screen command. A permit click carries its permit id, so it answers only the request that its tile showed (25, P2).
-- When the owner's link goes, the hub collapses the screen. The agents keep running.
+The first build had one window at a time, with a takeover. Since 41.8, several windows stay attached at once.
+
+- Each attach gets a new epoch: the window's id on the hub. Each window has its own screen (a live pane and its parts), its own queue and its own writer. The news goes to every window.
+- The hello carries an instance id, new for each start of the app. A window that comes back with the instance id of a window still attached replaces it: that old link is dead. Other windows stay.
+- A pane streams while at least one window shows it. A window's collapse takes away only its own screen.
+- One screen lock covers each change of a screen and the streams it starts or stops. Without it, a collapse in one window can stop the stream of a pane that another window just put on its screen.
+- After a window's end, the hub reads no more of its lines, so late keys never reach a pane. A writer that blocks on a dead link gets its socket shut after 5 s.
+- When a window's link goes, the hub takes its screen away. The agents and the other windows keep running.
 
 ### 29.4 Order
 
@@ -1741,8 +1751,8 @@ One JSON object per line, on the window socket. `sb attach` copies its stdin and
 - The hub never waits for the window. A writer thread for each window does all its I/O, with no lock held.
 - Answers and news never drop. When more than 20,000 lines wait, the window does not read, and the hub closes it.
 - Pane bytes go through the queue of `crates/outq`. A pane can hold 2 MB. Past that, its bytes drop, and the pane takes no more bytes until a fresh screen comes.
-- The writer then asks a screen thread for a fresh screen. The screen thread pauses the pane, so every earlier byte is in the queue already. Then it takes the visible screen and the cursor, puts the screen in the queue as the first bytes, and lets the stream go on. A size change makes the program draw its whole screen again, as after an expand (23).
-- The screen thread holds the owner lock for all of that, and works only while its window owns the screen. So no collapse comes between its check and its stream on, and a window that lost a takeover never pauses a pane of the new one.
+- The writer then asks a screen thread for a fresh screen. It comes from the pane's terminal emulator (`vt100`, in `crates/core/src/screens.rs`), which the hub feeds with the same bytes as the windows. The reader thread feeds the emulator and queues the bytes under one lock, and the screen thread takes the snapshot and fills the queue under that lock. So the screen holds every byte before it, and the queue every byte after it.
+- tmux never pauses for a fresh screen. The first build paused the pane, and a pause stops the bytes for every window.
 
 ### 29.6 A lost link
 
@@ -1763,19 +1773,17 @@ One JSON object per line, on the window socket. `sb attach` copies its stdin and
   - **Q6.** The fresh screen goes first, and the pane is live again.
   - **Q7.** `take` gives all waiting bytes and keeps the state.
   - **Q8.** `want_screen` says yes once for each drop.
-- `models/remote.qnt` models the takeover, stale commands, a lost link, drops, the screen thread, and what the xterm shows. Its invariant `Always`:
-  - **R1.** A screen command runs only while its window owns the screen.
-  - **R2.** The current window is the owner.
-  - **R3.** A live pane in a queue never holds more than the budget.
-  - **R4.** A pane that waits for a fresh screen holds no bytes.
-  - **R5.** When all is quiet, the window shows the pane that the hub has on screen.
-  - **R6.** When all is quiet, only the pane on screen streams.
-  - **R7.** When all is quiet and the program draws its screen again on a size change, the window shows the pane as it is, with no hole.
-- Three witnesses must fail, so the runs reach a resync, a stale command, and a quiet screen after a lost link. Three old versions must fail too: no owner check, commands in threads of their own, and any expand answer that draws.
-- `models/remote_test.qnt` holds fixed traces: the first screen thread, with no owner lock, leaves a pane off screen streaming (R6). The random runs reach that order only rarely. The fix does not, and a window that lost a takeover never pauses a pane of the new one.
-- The model is wider than the code in one place: an old window's commands can still run after the takeover. The checks hold also so.
+- `models/windows.qnt` models several windows, the screen lock, lost links, drops, fresh screens from the emulator, and what each xterm shows. It replaces `models/remote.qnt`, the model of one window with takeovers. Its invariant `Always`:
+  - **W1.** A live pane in a queue never holds more than the budget.
+  - **W2.** A pane that waits for a fresh screen holds no bytes.
+  - **W3.** Outside an expand, a pane streams exactly while a window shows it, and its emulator follows it exactly then. So a fresh screen for one window never stops the bytes of another.
+  - **W4.** When all is quiet, each window shows the pane that the hub has on its screen.
+  - **W5.** When all is quiet, only the panes on some screen stream.
+  - **W6.** When all is quiet and the program draws its screen again on a size change, each window shows its pane as it is, with no hole.
+- Four witnesses must fail, so the runs reach a fresh screen, a fresh screen of a pane that two windows show, and a quiet state with two windows on one pane, also after such a fresh screen. Four old versions must fail too: commands in threads of their own, any expand answer that draws, a collapse that stops its streams after the screen lock, and a fresh screen that pauses the pane.
+- `models/windows_test.qnt` holds fixed traces: both windows get the bytes; a fresh screen keeps the stream of the other window, and the old pause stops it; a collapse keeps the stream of the other window, and with no screen lock it stops it.
 - `models/permit.qnt` has two windows and lost clicks. P1 to P6 and T1 to T4 still hold.
-- `crates/sb/tests/remote.rs` runs `sb serve`, `sb attach` and the client on a real tmux, with no ssh: an end-to-end run with a takeover and a lost link, a flood that drops bytes, two hubs on one home, and the order of commands and keys. The order test failed before the lane.
+- `crates/sb/tests/remote.rs` runs `sb serve`, `sb attach` and the client on a real tmux, with no ssh: an end-to-end run with two windows, a window that comes back and a lost link; a flood that drops bytes; a fresh screen while another window reads every byte; two hubs on one home; and the order of commands and keys. The order test failed before the lane.
 
 ### 29.8 Findings
 
@@ -1832,7 +1840,7 @@ An agent on a remote hub cannot read the clipboard of the window's machine. So t
 ### 29.12 Reconnect and restart
 
 - **Reconnect on its own.** A link that goes down connects again with no click: after 1 s, then 2, 4, 8, and every 15 s while it stays down. The banner says "Reconnecting on its own…", and Reconnect still works at once. `sb attach` starts `sb serve` when none runs, so a hub that stopped comes back with the link.
-- Not after a takeover: two windows would take the hub from each other for ever. "Take it back" stays a click.
+- No takeover happens since 41.8, so `taken` stays false and "Take it back" never shows. The code for it stays until the phone needs it.
 - **Restart** is in the host menu (a click on the host name at the foot of the rail), also with no server in the config.
   - Remote mode: **Restart the hub on <host>** and **Restart this app**. The hub restart sends `hub_restart`. `sb serve` answers, stops its review runs, and starts again in place with `exec`: the same pid, with the `sb` binary on disk now. So an install on the server takes effect with one click. The link drops, and the window links back on its own.
   - Local mode: **Restart Switchboard**. The app starts again; its hub starts with it.
@@ -1990,7 +1998,7 @@ Notes:
 - **`agent_turn`.** `working` comes on every `PreToolUse` and every prompt (13.2). The hub sets `working_at` only when the lamp changes into Working, so a turn is timed once.
 - **`agent_waits`.** The prompt hook (`UserPromptSubmit`) sends `state working`, the same as a tool call. The hook changes to `sb state prompt`, which the hub treats as `working` and also uses for `agent_waits`. A pane that started before the change has the old hook: for it, the first `working` after a `turn` counts as the prompt. This is the main "agent waits for you" number. `lamp_seen` is only when you looked.
 - **`answer=pane`.** A tile permit that you answer in the pane ends with `answer_permits(None)` (hub.rs `on_state`): the hub can not see if you allowed it. `pane` is its own answer. The allow share counts only tile answers, and the summary shows the `pane` share next to it. No number in a summary says "never denied" when a `pane` answer exists.
-- **`lamp_seen` and expand.** `seen` also runs in `show()`, from `pane_expand`, which is in `dispatch::ORDERED`. The event only records: it adds no field to the command and changes no state, and `record` takes no lock. It still touches the expand path, so the build runs `scripts/check-models.sh` and keeps `models/remote.qnt` true.
+- **`lamp_seen` and expand.** `seen` also runs in `show()`, from `pane_expand`, which is in `dispatch::ORDERED`. The event only records: it adds no field to the command and changes no state, and `record` takes no lock. It still touches the expand path, so the build runs `scripts/check-models.sh` and keeps `models/remote.qnt` (now `models/windows.qnt`) true.
 - **Sandbox.** A sandbox file block fails inside Bash, and no hook sees it: not logged. A sandbox site ask is a `permit` with `sandbox=1`, when the hook shows it (31: not verified).
 - **Cut from version 1.** Clicks, window focus rows, and sequences of actions. They are noisy and big. The app has no command palette.
 
@@ -3342,7 +3350,7 @@ Cryptography comes from audited crates: `snow`, `x25519-dalek`, `chacha20poly130
 
 **Checked with Quint** (`scripts/check-models.sh`):
 
-- `models/windows.qnt` (41.8): 2–3 windows and 2 panes; per-window live panes and lanes; the watch count of each pane, and streaming exactly while it is above 0; a fresh screen for one window loses nothing for another; the invariants of `remote.qnt` per window; and "no lost event": the events each connected window got are a prefix of the log with no gap.
+- `models/windows.qnt` (41.8): 2–3 windows and 2 panes; per-window live panes and lanes; the watch count of each pane, and streaming exactly while it is above 0; a fresh screen for one window loses nothing for another; the invariants of `remote.qnt` per window (built: W1–W6, 29.7); and "no lost event": the events each connected window got are a prefix of the log with no gap.
 - `models/pairing.qnt` (41.4): no key joins the list without Allow on the computer; nothing pairs outside pairing mode; a used secret or a third wrong code pairs nothing; a revoked key never pairs again; after a revoke ends, no session of that key runs a command, also one whose handshake started before.
 - `models/relay.qnt` (41.6): routes, credits and closes; no frame on the wrong channel; a receiver never gets more than it granted; no deadlock: when data waits and the receiver has room, some credit is on its way; a hub that goes away closes its channels.
 - `models/replay.qnt` (41.8, 41.10): the phone's queue, a lost answer, a hub restart, two windows of one device with the same key, and commands that run at once. Each key has at most one effect, and the phone sees one answer for it.

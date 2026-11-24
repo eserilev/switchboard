@@ -3,6 +3,7 @@
 //! camelCase names that Tauri uses, or the snake_case names.
 
 use crate::hub::{Hub, OpenReq};
+use crate::screens::{Win, LOCAL};
 use crate::hub_review::{Anchor, NewComment};
 use crate::tasks::{NewSprint, NewTask, Place, TaskFields, TaskMove};
 use base64::engine::general_purpose::STANDARD as B64;
@@ -52,18 +53,37 @@ pub const ORDERED: &[&str] = &[
     "pane_image",
 ];
 
+/// The hub, and the window that sent the command (SPEC 41.8). A command body
+/// reads the hub through it; a screen command passes the window on.
+pub struct Ctx<'a> {
+    pub hub: &'a Hub,
+    pub win: Win,
+}
+
+impl std::ops::Deref for Ctx<'_> {
+    type Target = Hub;
+    fn deref(&self) -> &Hub {
+        self.hub
+    }
+}
+
 macro_rules! commands {
     ($( $name:ident ( $($a:ident : $ty:ty),* ) -> $ret:ty => |$h:ident| $body:expr; )*) => {
         /// The name of every command that [`dispatch`] knows.
         pub const COMMANDS: &[&str] = &[$(stringify!($name)),*];
 
-        /// Runs one command of the window on the hub. It can block: call it off the UI thread.
+        /// Runs one command of the app's own window on the hub. It can block: call it off the UI thread.
         pub fn dispatch(hub: &Hub, name: &str, args: &Value) -> Res<Value> {
+            dispatch_in(hub, LOCAL, name, args)
+        }
+
+        /// Runs one command of a window on the hub. It can block: call it off the UI thread.
+        pub fn dispatch_in(hub: &Hub, win: Win, name: &str, args: &Value) -> Res<Value> {
             match name {
                 $(
                     stringify!($name) => {
                         $( let $a: $ty = arg(args, stringify!($a))?; )*
-                        let $h: &Hub = hub;
+                        let $h = Ctx { hub, win };
                         let out: Res<$ret> = $body;
                         out.and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string()))
                     }
@@ -77,11 +97,11 @@ macro_rules! commands {
 commands! {
     panes() -> Value => |h| Ok(json!(h.views()));
     pane_open(req: OpenReq) -> Value => |h| h.open(req).map(|v| json!(v));
-    pane_expand(id: String) -> String => |h| h.expand(&id).map(|s| b64(&s));
-    pane_collapse() -> () => |h| { h.collapse(); Ok(()) };
-    pane_resize(cols: u16, rows: u16) -> () => |h| h.resize(cols, rows);
-    pane_attach(id: String, owner: String, cols: u16, rows: u16) -> String => |h| h.attach(&id, &owner, cols, rows).map(|s| b64(&s));
-    pane_detach(id: String) -> () => |h| { h.detach(&id); Ok(()) };
+    pane_expand(id: String) -> String => |h| h.expand_in(h.win, &id).map(|s| b64(&s));
+    pane_collapse() -> () => |h| { h.collapse_in(h.win); Ok(()) };
+    pane_resize(cols: u16, rows: u16) -> () => |h| h.resize_in(h.win, cols, rows);
+    pane_attach(id: String, owner: String, cols: u16, rows: u16) -> String => |h| h.attach_in(h.win, &id, &owner, cols, rows).map(|s| b64(&s));
+    pane_detach(id: String) -> () => |h| { h.detach_in(h.win, &id); Ok(()) };
     part_resize(id: String, cols: u16, rows: u16) -> () => |h| h.part_resize(&id, cols, rows);
     shell_open(tree: String) -> String => |h| h.shell_open(std::path::Path::new(&tree));
     pane_seen(id: String) -> () => |h| h.seen(&id);

@@ -36,6 +36,7 @@ pub mod pr_work;
 pub mod review;
 pub mod review_git;
 pub mod sandbox;
+pub mod screens;
 pub mod store;
 pub mod take;
 pub mod tasks;

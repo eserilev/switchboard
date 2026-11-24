@@ -12,6 +12,7 @@ use crate::nvim;
 use crate::paths::Paths;
 use crate::proto::{Ack, PermitReply, Request, StateMsg};
 use crate::repos::{self, Repo};
+use crate::screens::{Screens, Terms, Win, LOCAL};
 use crate::store::{PaneRow, Store};
 use crate::tmux::{self, Tmux};
 use crate::{expand, now};
@@ -29,10 +30,19 @@ use std::time::Duration;
 /// Where the hub sends news for the window.
 pub trait Sink: Send + Sync + 'static {
     fn emit(&self, event: &str, payload: Value);
-    /// Bytes from the live pane.
+    /// Bytes from a pane on screen.
     fn output(&self, pane: &str, data: &[u8]);
     /// A pane goes on screen with a full screen: bytes that wait for it are old.
     fn reset(&self, _pane: &str) {}
+    /// Bytes from a pane on the screen of one window (SPEC 41.8). A sink with one
+    /// window takes [`Sink::output`].
+    fn output_to(&self, _win: Win, pane: &str, data: &[u8]) {
+        self.output(pane, data)
+    }
+    /// [`Sink::reset`] for one window.
+    fn reset_for(&self, _win: Win, pane: &str) {
+        self.reset(pane)
+    }
 }
 
 /// The text of Claude's folder trust dialog. A test pins it (SPEC 6.6).
@@ -163,9 +173,9 @@ pub struct ConnItem {
     pub limit_until: Option<u64>,
 }
 
-/// (our id, tmux id) of each pane on screen. The first is the live pane; the
-/// others are its parts, nvim and the shell (SPEC 28).
-type Live = Arc<Mutex<Vec<(String, String)>>>;
+/// The screen of each window: (our id, tmux id) of each pane on it. The first is
+/// the live pane; the others are its parts, nvim and the shell (SPEC 28, 41.8).
+type Live = Arc<Mutex<Screens>>;
 
 pub struct Hub {
     pub paths: Paths,
@@ -173,8 +183,18 @@ pub struct Hub {
     pub(crate) tmux: Arc<Tmux>,
     pub(crate) store: Mutex<Store>,
     pub(crate) panes: Mutex<Vec<Pane>>,
-    /// The panes on screen. The tmux reader thread reads it.
+    /// The panes on the screen of each window. The tmux reader thread reads it.
     live: Live,
+    /// A terminal emulator for each streamed pane, for fresh screens (SPEC 41.8).
+    /// Lock order: `terms`, then the sink's queues. The reader thread feeds it and
+    /// queues the same bytes under it, so a snapshot and the bytes after it agree.
+    terms: Arc<Mutex<Terms>>,
+    /// Held while the screen of a window changes: a change and the streams it
+    /// starts or stops are one step. Else a collapse in one window can stop the
+    /// stream of a pane that another window just put on its screen
+    /// (models/windows.qnt). The tmux reader thread never takes it.
+    /// Lock order: `screen`, then `live`, `terms` and `panes`.
+    screen: Mutex<()>,
     /// Waiting `sb permit` requests: permit id -> (pane id, reply channel).
     /// Lock order: `permits`, then `panes`, then `store`. `on_permit`,
     /// `permit_answer` and `answer_permits` hold `permits` while they change
@@ -194,8 +214,8 @@ pub struct Hub {
     /// review out. So a removal never meets a checkout of the same folder (SPEC 11.10).
     /// Lock order: `trees`, then `reviews`.
     pub(crate) trees: Mutex<()>,
-    /// The last size the window asked for.
-    size: Mutex<(u16, u16)>,
+    /// The last size each window asked for.
+    size: Mutex<HashMap<Win, (u16, u16)>>,
     /// The size of each window on screen, by tmux id. The redraw after a show
     /// reads it again, so a resize in the meantime stays (SPEC 28).
     sizes: Arc<Mutex<HashMap<String, (u16, u16)>>>,
@@ -329,19 +349,20 @@ impl Hub {
         let store = Store::open(&paths.store()).map_err(|err| format!("{}: {err}", paths.store().display()))?;
 
         let live: Live = Arc::default();
+        let terms: Arc<Mutex<Terms>> = Arc::default();
         let reader_live = Arc::clone(&live);
+        let reader_terms = Arc::clone(&terms);
         let reader_sink = Arc::clone(&sink);
         let socket = std::env::var("SB_TMUX_SOCKET").unwrap_or_else(|_| "switchboard".into());
         let tmux = Tmux::start(&socket, &paths.tmux_conf(), move |ev| match ev {
             tmux::Event::Output { pane, data } => {
-                let id = reader_live
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .find(|(_, t)| *t == pane)
-                    .map(|(id, _)| id.clone());
-                if let Some(id) = id {
-                    reader_sink.output(&id, &data);
+                let to = reader_live.lock().unwrap().watchers(&pane);
+                if !to.is_empty() {
+                    let mut terms = reader_terms.lock().unwrap();
+                    terms.feed(&pane, &data);
+                    for (win, id) in &to {
+                        reader_sink.output_to(*win, id, &data);
+                    }
                 }
             }
             tmux::Event::Exit(reason) => reader_sink.emit("tmux_exit", json!(reason)),
@@ -356,13 +377,15 @@ impl Hub {
             store: Mutex::new(store),
             panes: Mutex::default(),
             live,
+            terms,
+            screen: Mutex::default(),
             permits: Mutex::default(),
             next_permit: AtomicU64::new(1),
             spawns: AtomicU64::new(0),
             sink,
             sb,
             reviews: Mutex::default(),
-            size: Mutex::new((200, 50)),
+            size: Mutex::default(),
             sizes: Arc::default(),
             resuming: Mutex::default(),
             stopping: Mutex::default(),
@@ -593,7 +616,7 @@ impl Hub {
     // ---------- views ----------
 
     fn view(&self, p: &Pane) -> PaneView {
-        let live = self.live.lock().unwrap().iter().any(|(id, _)| id == &p.row.id);
+        let live = self.live.lock().unwrap().shows(&p.row.id);
         PaneView {
             id: p.row.id.clone(),
             kind: p.row.kind.clone(),
@@ -874,18 +897,13 @@ impl Hub {
             self.sizes.lock().unwrap().remove(&t);
         }
         // The live pane takes its parts with it. A part goes alone.
-        let off: Vec<(String, String)> = {
+        let _screen = self.screen.lock().unwrap();
+        let off = {
             let mut live = self.live.lock().unwrap();
-            if live.first().map(|(l, _)| l == id).unwrap_or(false) {
-                std::mem::take(&mut *live)
-            } else {
-                live.retain(|(l, _)| l != id);
-                vec![]
-            }
+            let gone = live.close(id);
+            live.unwatched(gone)
         };
-        for (_, t) in off.iter().skip(1) {
-            let _ = self.tmux.set_streaming(t, false);
-        }
+        self.stop_streams(&off);
         self.store
             .lock()
             .unwrap()
@@ -955,18 +973,40 @@ impl Hub {
 
     // ---------- the live pane ----------
 
-    /// Makes a pane live and returns its screen: the scrollback, then the cursor.
-    /// The parts of the old live pane leave the screen too.
+    /// Makes a pane live in the app's own window. See [`Hub::expand_in`].
     pub fn expand(&self, id: &str) -> Res<Vec<u8>> {
-        tracing::info!(target: "sb::hub", pane = id, "expand");
+        self.expand_in(LOCAL, id)
+    }
+
+    /// Makes a pane live in one window and returns its screen: the scrollback, then
+    /// the cursor. The parts of the window's old live pane leave its screen too.
+    /// Other windows keep their screens (SPEC 41.8).
+    pub fn expand_in(&self, win: Win, id: &str) -> Res<Vec<u8>> {
+        tracing::info!(target: "sb::hub", win, pane = id, "expand");
         self.resume_if_ended(id)?;
+        let _screen = self.screen.lock().unwrap();
         let tid = self.tmux_id(id)?;
-        let old = std::mem::replace(&mut *self.live.lock().unwrap(), vec![(id.to_owned(), tid.clone())]);
-        for (_, t) in old.iter().filter(|(_, t)| *t != tid) {
+        let off = {
+            let mut live = self.live.lock().unwrap();
+            let old = std::mem::replace(live.of_mut(win), vec![(id.to_owned(), tid.clone())]);
+            live.unwatched(old.into_iter().map(|(_, t)| t))
+        };
+        self.stop_streams(&off);
+        let (cols, rows) = self.size_of(win);
+        self.show(win, id, &tid, cols, rows)
+    }
+
+    /// The last size a window asked for.
+    fn size_of(&self, win: Win) -> (u16, u16) {
+        self.size.lock().unwrap().get(&win).copied().unwrap_or((200, 50))
+    }
+
+    /// The streams of tmux panes that no window shows any more stop.
+    fn stop_streams(&self, tids: &[String]) {
+        for t in tids {
             let _ = self.tmux.set_streaming(t, false);
+            self.terms.lock().unwrap().stop(t);
         }
-        let (cols, rows) = *self.size.lock().unwrap();
-        self.show(id, &tid, cols, rows)
     }
 
     /// An ended Claude pane with a session starts again before it shows, so a click
@@ -995,116 +1035,134 @@ impl Hub {
         res
     }
 
-    /// Adds a part (nvim or the shell) to the screen, at its own size, and returns
-    /// its screen (SPEC 28). The window sizes its terminal first.
+    /// Adds a part to the screen of the app's own window. See [`Hub::attach_in`].
+    pub fn attach(&self, id: &str, owner: &str, cols: u16, rows: u16) -> Res<Vec<u8>> {
+        self.attach_in(LOCAL, id, owner, cols, rows)
+    }
+
+    /// Adds a part (nvim or the shell) to the screen of a window, at its own size,
+    /// and returns its screen (SPEC 28). The window sizes its terminal first.
     /// `owner` is the live pane the window shows, so a late attach never adds a
     /// part to another agent.
-    pub fn attach(&self, id: &str, owner: &str, cols: u16, rows: u16) -> Res<Vec<u8>> {
-        tracing::info!(target: "sb::hub", pane = id, owner, cols, rows, "attach");
+    pub fn attach_in(&self, win: Win, id: &str, owner: &str, cols: u16, rows: u16) -> Res<Vec<u8>> {
+        tracing::info!(target: "sb::hub", win, pane = id, owner, cols, rows, "attach");
+        let _screen = self.screen.lock().unwrap();
         let tid = self.tmux_id(id)?;
         {
             let mut live = self.live.lock().unwrap();
-            if live.first().map(|(l, _)| l != owner).unwrap_or(true) {
+            let screen = live.of_mut(win);
+            if screen.first().map(|(l, _)| l != owner).unwrap_or(true) {
                 return Err(format!("{owner} is not the live pane"));
             }
-            if !live.iter().any(|(l, _)| l == id) {
-                live.push((id.to_owned(), tid.clone()));
+            if !screen.iter().any(|(l, _)| l == id) {
+                screen.push((id.to_owned(), tid.clone()));
             }
         }
-        self.show(id, &tid, cols, rows)
+        self.show(win, id, &tid, cols, rows)
     }
 
-    /// Takes a part off the screen. Its process keeps running.
+    /// Takes a part off the screen of the app's own window. See [`Hub::detach_in`].
     pub fn detach(&self, id: &str) {
-        tracing::info!(target: "sb::hub", pane = id, "detach");
-        let taken: Vec<(String, String)> = {
+        self.detach_in(LOCAL, id)
+    }
+
+    /// Takes a part off the screen of a window. Its process keeps running.
+    pub fn detach_in(&self, win: Win, id: &str) {
+        tracing::info!(target: "sb::hub", win, pane = id, "detach");
+        let _screen = self.screen.lock().unwrap();
+        let off = {
             let mut live = self.live.lock().unwrap();
+            let screen = live.of_mut(win);
             // The live pane itself goes only with a collapse.
-            let keep_first = live.first().map(|(l, _)| l == id).unwrap_or(false);
-            if keep_first {
+            if screen.first().map(|(l, _)| l == id).unwrap_or(false) {
                 return;
             }
-            let (out, keep): (Vec<_>, Vec<_>) = live.drain(..).partition(|(l, _)| l == id);
-            *live = keep;
-            out
+            let (out, keep): (Vec<_>, Vec<_>) = screen.drain(..).partition(|(l, _)| l == id);
+            *screen = keep;
+            live.unwatched(out.into_iter().map(|(_, t)| t))
         };
-        for (_, t) in taken {
-            let _ = self.tmux.set_streaming(&t, false);
-        }
+        self.stop_streams(&off);
     }
 
-    /// The screen of a pane that goes on screen, and its stream on.
-    fn show(&self, id: &str, tid: &str, cols: u16, rows: u16) -> Res<Vec<u8>> {
-        self.sink.reset(id);
+    /// Sets the size of a tmux pane, and of its terminal emulator.
+    fn set_pane_size(&self, tid: &str, cols: u16, rows: u16) -> Res<()> {
         self.sizes.lock().unwrap().insert(tid.to_owned(), (cols, rows));
-        let _ = self.tmux.set_window_size(tid, cols, rows);
+        self.terms.lock().unwrap().resize(tid, cols, rows);
+        self.tmux.set_window_size(tid, cols, rows).map_err(e)
+    }
+
+    /// The screen of a pane that goes on the screen of a window, and its stream on.
+    fn show(&self, win: Win, id: &str, tid: &str, cols: u16, rows: u16) -> Res<Vec<u8>> {
+        self.sink.reset_for(win, id);
+        let _ = self.set_pane_size(tid, cols, rows);
         let lines = self.tmux.capture(tid, "-").map_err(e)?;
         let (x, y) = self.tmux.cursor(tid).map_err(e)?;
-        self.tmux.set_streaming(tid, true).map_err(e)?;
         let mut screen = b"\x1b[H\x1b[2J\x1b[3J".to_vec();
         screen.extend(lines.join("\r\n").into_bytes());
         screen.extend(format!("\x1b[{};{}H", y + 1, x + 1).into_bytes());
+        // The emulator starts before the stream: no byte of the stream misses it.
+        // A pane that streams for another window already keeps its emulator.
+        self.terms.lock().unwrap().start(tid, cols, rows, &screen);
+        self.tmux.set_streaming(tid, true).map_err(e)?;
         self.seen(id)?;
         // Output in the gap between the capture and `continue` is lost. A size
         // change makes the program in the pane draw its whole screen again.
         // The size is read again before each step: the window can resize meanwhile.
         let tmux = Arc::clone(&self.tmux);
         let sizes = Arc::clone(&self.sizes);
+        let terms = Arc::clone(&self.terms);
         let tid = tid.to_owned();
         std::thread::spawn(move || {
             let now = || sizes.lock().unwrap().get(&tid).copied().unwrap_or((cols, rows));
+            let set = |c: u16, r: u16| {
+                terms.lock().unwrap().resize(&tid, c, r);
+                let _ = tmux.set_window_size(&tid, c, r);
+            };
             std::thread::sleep(Duration::from_millis(80));
             let (c, r) = now();
-            let _ = tmux.set_window_size(&tid, c, r.saturating_sub(1).max(2));
+            set(c, r.saturating_sub(1).max(2));
             std::thread::sleep(Duration::from_millis(80));
             let (c, r) = now();
-            let _ = tmux.set_window_size(&tid, c, r);
+            set(c, r);
         });
         Ok(screen)
     }
 
-    /// A fresh screen of a pane on screen, for a remote window that lost bytes
-    /// (SPEC 29). It pauses the pane first. tmux sends the reply to the pause after
-    /// all output of the pane before it, and the reader thread passes output on
-    /// before it reads the next line. So every byte before the pause is in the queue
-    /// already, and the capture holds every byte after it. Call [`Hub::resume`] next.
-    pub fn screen_for_resync(&self, id: &str) -> Res<Vec<u8>> {
-        let tid = self.on_screen(id).ok_or("not on screen")?;
-        self.tmux.set_streaming(&tid, false).map_err(e)?;
-        let lines = self.tmux.capture(&tid, "0").map_err(e)?;
-        let (x, y) = self.tmux.cursor(&tid).map_err(e)?;
-        let mut screen = b"\x1b[H\x1b[2J".to_vec();
-        screen.extend(lines.join("\r\n").into_bytes());
-        screen.extend(format!("\x1b[{};{}H", y + 1, x + 1).into_bytes());
-        Ok(screen)
+    /// A fresh screen of a pane on the screen of a window, for a window that lost
+    /// bytes (SPEC 41.8). It comes from the pane's terminal emulator, so tmux never
+    /// pauses and no other window loses a byte. `f` gets the screen, or `None` when
+    /// the window does not show the pane. It runs under the lock that the reader
+    /// thread holds while it queues bytes: so the screen holds every byte before it,
+    /// and the queue gets every byte after it.
+    pub fn fresh_screen<T>(&self, win: Win, id: &str, f: impl FnOnce(Option<Vec<u8>>) -> T) -> T {
+        let tid = self.live.lock().unwrap().tid_in(win, id);
+        let terms = self.terms.lock().unwrap();
+        f(tid.and_then(|t| terms.snapshot(&t)))
     }
 
-    /// The stream of a pane again after [`Hub::screen_for_resync`], when it is still
-    /// on screen. A size change makes the program draw what the gap lost.
-    pub fn resume_stream(&self, id: &str) {
-        let Some(tid) = self.on_screen(id) else { return };
-        let _ = self.tmux.set_streaming(&tid, true);
-        let size = self.sizes.lock().unwrap().get(&tid).copied();
-        if let Some((cols, rows)) = size {
-            let _ = self.tmux.set_window_size(&tid, cols, rows.saturating_sub(1).max(2));
-            let _ = self.tmux.set_window_size(&tid, cols, rows);
-        }
-    }
-
-    fn on_screen(&self, id: &str) -> Option<String> {
-        self.live.lock().unwrap().iter().find(|(l, _)| l == id).map(|(_, t)| t.clone())
-    }
-
+    /// Takes the screen of the app's own window away. See [`Hub::collapse_in`].
     pub fn collapse(&self) {
-        tracing::info!(target: "sb::hub", "collapse");
+        self.collapse_in(LOCAL)
+    }
+
+    /// Takes the screen of a window away: when it leaves, or shows no pane. The
+    /// screens of other windows stay.
+    pub fn collapse_in(&self, win: Win) {
+        tracing::info!(target: "sb::hub", win, "collapse");
+        // A panic under the lock poisons it: the value is still good. A window that
+        // leaves after a panic collapses too.
+        let _screen = self.screen.lock().unwrap_or_else(|e| e.into_inner());
         // Take the value first: an `if let` on the guard keeps the lock for the whole block.
-        let taken = std::mem::take(&mut *self.live.lock().unwrap());
-        for (_, t) in &taken {
-            let _ = self.tmux.set_streaming(t, false);
-        }
-        if let Some((id, _)) = taken.first() {
+        let (first, off) = {
+            let mut live = self.live.lock().unwrap();
+            let taken = live.take(win);
+            let first = taken.first().map(|(id, _)| id.clone());
+            (first, live.unwatched(taken.into_iter().map(|(_, t)| t)))
+        };
+        self.stop_streams(&off);
+        if let Some(id) = first {
             if let Ok(panes) = self.panes.lock() {
-                if let Some(p) = panes.iter().find(|p| p.row.id == *id) {
+                if let Some(p) = panes.iter().find(|p| p.row.id == id) {
                     self.emit_pane(p, false);
                 }
             }
@@ -1161,15 +1219,19 @@ impl Hub {
         Ok(())
     }
 
-    /// The size of the live pane's terminal. New windows take it too.
+    /// The size of the live pane's terminal in the app's own window. See [`Hub::resize_in`].
     pub fn resize(&self, cols: u16, rows: u16) -> Res<()> {
-        tracing::debug!(target: "sb::hub", cols, rows, "resize");
-        *self.size.lock().unwrap() = (cols, rows);
+        self.resize_in(LOCAL, cols, rows)
+    }
+
+    /// The size of the live pane's terminal in a window. Its next expand takes it too.
+    pub fn resize_in(&self, win: Win, cols: u16, rows: u16) -> Res<()> {
+        tracing::debug!(target: "sb::hub", win, cols, rows, "resize");
+        self.size.lock().unwrap().insert(win, (cols, rows));
         self.tmux.set_size(cols, rows).map_err(e)?;
-        let first = self.live.lock().unwrap().first().map(|(_, t)| t.clone());
+        let first = self.live.lock().unwrap().of(win).first().map(|(_, t)| t.clone());
         if let Some(t) = first {
-            self.sizes.lock().unwrap().insert(t.clone(), (cols, rows));
-            self.tmux.set_window_size(&t, cols, rows).map_err(e)?;
+            self.set_pane_size(&t, cols, rows)?;
         }
         Ok(())
     }
@@ -1178,8 +1240,7 @@ impl Hub {
     pub fn part_resize(&self, id: &str, cols: u16, rows: u16) -> Res<()> {
         tracing::debug!(target: "sb::hub", pane = id, cols, rows, "part resize");
         let tid = self.tmux_id(id)?;
-        self.sizes.lock().unwrap().insert(tid.clone(), (cols, rows));
-        self.tmux.set_window_size(&tid, cols, rows).map_err(e)
+        self.set_pane_size(&tid, cols, rows)
     }
 
     pub fn seen(&self, id: &str) -> Res<()> {
@@ -1418,18 +1479,25 @@ impl Hub {
                 t
             }
         };
-        let live = self.live.lock().unwrap().iter().any(|(l, _)| l == id);
+        let screen = self.screen.lock().unwrap();
+        let live = self.live.lock().unwrap().shows(id);
+        if live {
+            // The new process draws its screen from the start.
+            let (cols, rows) = self.sizes.lock().unwrap().get(&tid).copied().unwrap_or_else(|| self.size_of(LOCAL));
+            let mut terms = self.terms.lock().unwrap();
+            terms.stop(&tid);
+            terms.start(&tid, cols, rows, b"");
+            drop(terms);
+            // The screens follow the new tmux pane before its stream starts.
+            self.live.lock().unwrap().retarget(id, &tid);
+        }
         let _ = self.tmux.set_streaming(&tid, live);
+        drop(screen);
         let pid = self
             .tmux
             .display(&tid, "#{pane_pid}")
             .ok()
             .and_then(|p| p.parse().ok());
-        if live {
-            for l in self.live.lock().unwrap().iter_mut().filter(|(l, _)| l == id) {
-                l.1 = tid.clone();
-            }
-        }
         let sandboxed = self.sandbox_file_on(id);
         let spawn = self.next_spawn();
         self.with_pane(id, false, |p| {

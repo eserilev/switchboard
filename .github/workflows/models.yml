@@ -1,4 +1,4 @@
-# Checks the Quint models (SPEC 25, 26, 26.1, 29) with scripts/check-models.sh, at the
+# Checks the Quint models (SPEC 25, 26, 26.1, 29, 41.8) with scripts/check-models.sh, at the
 # full count of random runs: with 20,000 a broken model (initAnyAnswer) can pass.
 # It runs when a model or the code it describes changes (CLAUDE.md), and nightly.
 name: models
@@ -13,6 +13,7 @@ on:
       - "crates/core/src/review.rs"
       - "crates/core/src/cleanup.rs"
       - "crates/core/src/remote.rs"
+      - "crates/core/src/screens.rs"
       - "crates/core/src/dispatch.rs"
       - "crates/sb/src/**"
       - "crates/app/src/main.rs"
@@ -27,6 +28,7 @@ on:
       - "crates/core/src/review.rs"
       - "crates/core/src/cleanup.rs"
       - "crates/core/src/remote.rs"
+      - "crates/core/src/screens.rs"
       - "crates/core/src/dispatch.rs"
       - "crates/sb/src/**"
       - "crates/app/src/main.rs"

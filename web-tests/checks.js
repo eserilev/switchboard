@@ -2105,7 +2105,7 @@
   }
 
   // Two expands of one pane: only the newest answer draws, also when the older
-  // one comes last (models/remote.qnt, R7).
+  // one comes last (models/windows.qnt, W6).
   {
     let n = 0;
     window.__expandHook = () => {

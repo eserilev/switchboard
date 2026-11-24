@@ -116,10 +116,17 @@ impl Got {
     }
 }
 
+/// A new window: each call is another window, with its own instance id.
 fn connect(home: &Home) -> (Arc<Client>, Arc<Got>) {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    connect_as(home, &format!("test-{}-{n}", std::process::id()))
+}
+
+fn connect_as(home: &Home, instance: &str) -> (Arc<Client>, Arc<Got>) {
     let got = Arc::new(Got::default());
     let g = Arc::clone(&got);
-    let client = Client::connect(&home.argv(), move |n| match n {
+    let client = Client::connect_as(&home.argv(), instance, move |n| match n {
         News::Event(e, p) => g.events.lock().unwrap().push((e, p)),
         News::Down { why, taken } => *g.down.lock().unwrap() = Some((why, taken)),
     })
@@ -164,21 +171,36 @@ fn a_remote_window_end_to_end() {
     }
     assert!(a.is_up(), "a refused window takes nothing over");
 
-    // A second window takes over: the first one hears so and goes down.
+    // A second window: both stay up, each with its own screen (SPEC 41.8).
     let (b, got_b) = connect(&home);
-    wait_for("the first window goes down", 5, || got_a.down.lock().unwrap().is_some());
-    let (why, taken) = got_a.down.lock().unwrap().clone().unwrap();
-    assert!(taken, "{why}");
-    assert!(a.call("panes", json!({})).is_err());
-    // The new window gets the panes, and its own screen.
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(a.is_up(), "the first window stays");
     let panes = b.call("panes", json!({})).unwrap();
     assert!(panes.as_array().unwrap().iter().any(|p| p["id"] == id));
     b.call("pane_expand", json!({ "id": id })).unwrap();
     b.call("pane_input", json!({ "id": id, "data": "echo two-$((1+1))\r", "binary": false })).unwrap();
-    wait_for("output in the new window", 5, || got_b.output_of(&id).contains("two-2"));
-    assert!(!got_a.output_of(&id).contains("two-2"));
+    wait_for("output in both windows", 5, || got_b.output_of(&id).contains("two-2") && got_a.output_of(&id).contains("two-2"));
+    // The first window leaves the pane: the second keeps it, and its bytes.
+    a.call("pane_collapse", json!({})).unwrap();
+    b.call("pane_input", json!({ "id": id, "data": "echo three-$((1+2))\r", "binary": false })).unwrap();
+    wait_for("output in the second window", 5, || got_b.output_of(&id).contains("three-3"));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!got_a.output_of(&id).contains("three-3"), "a window with no screen gets no bytes");
+    // The first window's link drops: the second keeps its screen.
+    a.close();
+    wait_for("the first window is down", 5, || got_a.down.lock().unwrap().is_some());
+    assert!(!got_a.down.lock().unwrap().clone().unwrap().1, "no takeover");
+    b.call("pane_input", json!({ "id": id, "data": "echo four-$((2+2))\r", "binary": false })).unwrap();
+    wait_for("output after the other window left", 5, || got_b.output_of(&id).contains("four-4"));
 
-    // The link drops in the middle: the hub and the pane keep running.
+    // The same window comes back on a new link: the hub ends the old link.
+    let (b2, _got_b2) = connect_as(&home, "same-window");
+    let (b3, _got_b3) = connect_as(&home, "same-window");
+    wait_for("the old link of the window goes", 10, || !b2.is_up());
+    assert!(b3.is_up() && b.is_up());
+    b3.close();
+
+    // All links drop: the hub and the pane keep running.
     b.close();
     wait_for("the window is down", 5, || got_b.down.lock().unwrap().is_some());
     std::thread::sleep(Duration::from_millis(300));
@@ -189,8 +211,62 @@ fn a_remote_window_end_to_end() {
     c.close();
 }
 
+/// A window that lost bytes gets a fresh screen from the pane's emulator, and the
+/// pane never pauses: another window loses nothing meanwhile (SPEC 41.8).
+#[test]
+fn a_fresh_screen_never_pauses_another_window() {
+    let home = Home::new("fresh");
+    let (a, got_a) = connect(&home);
+    let id = open_shell(&a, &home);
+    a.call("pane_resize", json!({ "cols": 100, "rows": 30 })).unwrap();
+    a.call("pane_expand", json!({ "id": id })).unwrap();
+    a.call("pane_input", json!({ "id": id, "data": "clear; echo marker-$((3+4))\r", "binary": false })).unwrap();
+    wait_for("the marker", 5, || got_a.output_of(&id).contains("marker-7"));
+
+    // A raw window that does not read, while numbers flood the pane.
+    let mut s = UnixStream::connect(home.window_sock()).unwrap();
+    writeln!(s, "{}", remote::hello_as("raw")).unwrap();
+    let mut r = BufReader::new(s.try_clone().unwrap());
+    let mut line = String::new();
+    r.read_line(&mut line).unwrap();
+    writeln!(s, "{}", json!({ "id": 1, "cmd": "pane_expand", "args": { "id": id } })).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let flood = "seq 1 400000; echo done-$((5+5))\r";
+    a.call("pane_input", json!({ "id": id, "data": flood, "binary": false })).unwrap();
+    wait_for("the flood in the window that reads", 30, || got_a.output_of(&id).contains("done-10"));
+    // Every number reached the window that reads: no pause cut its stream.
+    let out = got_a.output_of(&id);
+    for n in ["1\r\n", "199999\r\n", "400000\r\n"] {
+        assert!(out.contains(n), "{n:?} is missing");
+    }
+
+    // The raw window reads now: a fresh screen comes with the end of the flood.
+    let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
+    let mut fresh = String::new();
+    let end = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < end && !fresh.contains("done-10") {
+        line.clear();
+        match r.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => continue,
+        }
+        let v: Value = serde_json::from_str(&line).unwrap();
+        if v["event"] == "pane_output" && v["payload"]["pane"] == id.as_str() {
+            let b = B64.decode(v["payload"]["data"].as_str().unwrap()).unwrap();
+            if b.starts_with(b"\x1b[H\x1b[2J") {
+                fresh = String::from_utf8_lossy(&b).into_owned();
+            } else if !fresh.is_empty() {
+                fresh.push_str(&String::from_utf8_lossy(&b));
+            }
+        }
+    }
+    assert!(fresh.contains("done-10"), "a fresh screen came, then the rest");
+    a.close();
+}
+
 /// Commands that change the screen or type run in the order of the lines, also
-/// when the window does not wait for each answer (models/remote.qnt, R5).
+/// when the window does not wait for each answer (models/windows.qnt, W4).
 #[test]
 fn screen_commands_and_keys_keep_their_order() {
     let home = Home::new("order");
