@@ -3177,7 +3177,7 @@ You review on your phone, step by step, against the hub on your computer or serv
 - **Seamless:** install, sign in, approve the phone once on the computer. It then works on any network.
 - **The relay is not trusted.** It routes bytes. It can drop, delay, replay or reorder them, and it can send plain pushes (41.9). It can never read or change traffic, forge a command, or decide who may do what.
 - **The hub is the authority.** Its device list and the command table decide every command.
-- **Review first.** The default phone reads and reviews. Anything that makes an agent act (a message, a permit, Work on this PR) is code execution on the hub: off by default (41.7).
+- **Review first.** The phone is built for reviews. It can also make agents act (a message, a permit, Work on this PR), which is code execution on the hub (41.7).
 - **Not in scope:** a hosted hub, a phone with no hub, desktop-to-desktop over the relay.
 
 ### 41.2 The parts
@@ -3223,7 +3223,8 @@ The pure logic of each new protocol lives in small crates in the Aeneas subset (
   5. **Allow** on the computer adds the key. A second phone that raced with a photo of the QR shows a different check code, and the secret is used up.
 - **Code pairing** (a headless server, or a computer with no camera nearby): the computer shows an 8-digit one-time code; you type it on the phone. The two run CPace (a balanced PAKE) on the code, then a Noise `XX` handshake bound to the CPace key. A relay in the middle gets one online guess per run; the hub allows 3 tries, then ends pairing mode. Then **Allow** on the computer, as above. (A 6-digit code compared on two screens with no commitment is not used: a relay can try a million keys until the digits match.)
 - **Remove a device** on the computer: under one lock, the hub sets `revoked`, raises the device's generation, and closes its sessions. A session checks the generation before each command, so a handshake that started before the revoke runs nothing after it. A revoked key can never pair again. Revoke is per hub: a phone paired to two hubs needs removing on both.
-- **A stolen phone.** The app lock (Face ID, fingerprint or passcode) is a screen lock only. Remove the phone on the computer. On its next start, a revoked phone deletes its review cache; until then the cache (encrypted with a Keychain-held key) is as safe as the phone's own lock.
+- **The app lock.** Face ID, fingerprint or passcode when the app opens, and again after 5 minutes in the background. Actions never ask again. It is a screen lock only: it guards the app on an unlocked phone, not the keys.
+- **A stolen phone.** Remove the phone on the computer. On its next start, a revoked phone deletes its review cache; until then the cache (encrypted with a Keychain-held key) is as safe as the phone's own lock.
 
 ### 41.5 The session
 
@@ -3256,11 +3257,11 @@ Every command of `dispatch` is in one table, by name, with its class and its arg
 | `read` | `panes`, `reviews`, `review_view`, `today`, `tasks`, `mail_list` | on |
 | `review` | step marks, `review_draft*`, `review_pin`, `today_done`, `today_later`, Finish review (posts to GitHub) | on |
 | `ask` | `review_ask` and other runs of Claude that only read | on, with the limits below |
-| `act` | messages to agents, `permit_answer`, `review_work`, `review_send_agent`, `sb resume`, `today_tell`, `today_job_save` | off. When on, the phone asks for Face ID or a fingerprint before each one. |
+| `act` | messages to agents, `permit_answer`, `review_work`, `review_send_agent`, `sb resume`, `today_tell`, `today_job_save` | on; one tap each |
 | `terminal` | `pane_input`, `pane_expand`, `pane_attach`, `pane_image` | off |
 | `admin` | pairing, scopes, `settings_save`, `connection_set`, `trust_answer`, `hub_restart`, `pane_open`, `shell_open`, `nvim_open`, `layout_open`, `task_start_plan`, `handover_*` | never through the relay |
 
-- **The `act` class runs code.** A message or Work on this PR gives free text to an agent with Bash, and a permit answer approves a command. The phone's biometric check stops a person with your unlocked phone; it does not stop a broken or hacked phone app, which is why `act` is off until you turn it on at the computer.
+- **The `act` class runs code.** A message or Work on this PR gives free text to an agent with Bash, and a permit answer approves a command. A tap is enough: the app lock (41.4) already keeps out a person who picks up your phone. You can turn `act` off on the computer for a phone you trust less.
 - **Argument checks:** for example `pane_open` is refused from a relay window whatever its arguments; `review_open` takes only a `github.com/<o>/<r>/pull/<n>` URL.
 - **Limits per device:** 4 commands at once per window; 3 Claude runs at once and 30 an hour per device. Over a limit, the command is refused with the reason.
 - **Events by class:** a relay window gets only the events its classes may read. Events for one window (a command's toast, `focus`, `paste_failed`, an Ask stream) go only to the window that asked (41.8).
@@ -3314,7 +3315,7 @@ Today the hub has one screen: `Hub.live` and the sizes are global, `expand` turn
 | An agent pairs a key through the window socket | Pairing and scopes only through the window's IPC or `sb pair` on a TTY | none known |
 | An agent copies the hub's key | `device.key` and the store are denied to the sandbox and to Read | An agent with no sandbox and Bash still runs as you |
 | Someone takes over the GitHub account | The hub accepts only keys on its own list; pairing needs you at the computer | They see the hub list |
-| A stolen phone | App lock; remove it on the computer; `act` and `terminal` off by default | The review cache until the phone starts again; reading and draft comments until you remove it |
+| A stolen phone | The app lock; remove it on the computer; `terminal` off by default | Until you remove it: whatever its classes allow, behind the app lock |
 | A paired phone sends a command outside its classes | The table refuses it (proved) | none known |
 | A phone spends your Claude usage | 3 runs at once, 30 an hour per device | Up to that limit |
 | An action runs twice after a reconnect | Stored idempotency keys (modelled) | none known |
@@ -3368,7 +3369,7 @@ A second agent reviewed the first version of this section against the code (`rem
 
 | # | Finding | Change |
 |---|---|---|
-| 1 | The default scopes let the phone run code: messages, permits and Work on this PR drive agents with Bash; the table named features, not commands; nothing limited Claude runs | Every command classed by name with argument checks; `act` off by default and asks for a biometric check; limits per window and device (41.7) |
+| 1 | The default scopes let the phone run code: messages, permits and Work on this PR drive agents with Bash; the table named features, not commands; nothing limited Claude runs | Every command classed by name with argument checks; driving an agent is its own class, `act`, which the computer can turn off; limits per window and device (41.7). (A biometric check before each action was tried and dropped: the app lock covers the same threat, and the app has to stay fast.) |
 | 2 | A 6-digit code compared on two screens, with no commitment, falls to a relay that tries a million keys | Code pairing is now an 8-digit code typed on the phone, with CPace then XX (41.4) |
 | 3 | Any agent counts as a trusted window, and can read the hub's key | Pairing only through IPC or a TTY; `device.key` and the store denied to agents; a check code in QR mode (41.4) |
 | 4 | Window frames do not fit in one Noise message | A record layer with chunks, maximum sizes, and a proved join (41.5) |
@@ -3461,12 +3462,12 @@ The hub's name and link state sit at the top of every tab: a green dot when link
 - After the last step, or from the overview: your drafts in one list (tap to edit), the verdict (**Approve**, **Comment**, **Request changes**), an optional summary (speak or type), and **Send to GitHub**.
 - Offline: "Sends when you're online", and the app asks again then.
 
-**Hand off** (needs the `act` class, 41.7; the phone asks for Face ID first): a step or a note has **Fix it**. It opens Work on this PR (11.16) with the task filled in from the note; you read it and tap **Start agent**. The Agents tab then shows the agent.
+**Hand off** (the `act` class, 41.7): a step or a note has **Fix it**. It opens Work on this PR (11.16) with the task filled in from the note; you read it and tap **Start agent**. The Agents tab then shows the agent.
 
 ### 42.5 Agents
 
 - A list of the hub's agents: title, repo and branch, state. **Needs you** first, with what it needs.
-- **A permit** shows the tool and what it wants to do, in plain words, with **Allow** and **Deny**. Same rules as 25. Permits and messages need the `act` class (41.7), off by default; with it on, the phone asks for Face ID before each one.
+- **A permit** shows the tool and what it wants to do, in plain words, with **Allow** and **Deny**. Same rules as 25. Permits and messages are the `act` class (41.7): one tap each.
 - **A message** to the agent: a box at the bottom of its screen (40). Its recent messages above.
 - **The agent's screen:** a read-only view of its last lines. Typing into it needs the `terminal` scope (41.7), off by default; then a full terminal opens, landscape first.
 
