@@ -1060,7 +1060,9 @@ Where the build differs from the text above:
   - No takeover at all, also no explicit one: a window that comes back with its instance id replaces its own old link, and other windows stay. "Take it back" is not built.
   - News goes to every window. No event is for one window yet: a toast is in its command's answer, and the window drops an Ask stream it did not ask for.
   - Each window sets the size of the panes it shows; the last resize wins. The phone rule ("the phone never resizes a pane") comes with the phone.
-  - Not built yet: the event sequence `(boot, n)` with its ring, and idempotency keys.
+  - Built: the event sequence `(boot, n)`, the ring in `crates/evseq` and the replay on hello (29.2). `evseq` is in the Aeneas subset, but not proved yet: it is not in `proofs/CRATES`.
+  - The desktop app still loads everything after a reconnect, and sends no `since`. The phone uses `since` first.
+  - Not built yet: idempotency keys. The spec stores the key and the answer in the store transaction of the command's effect, so each command that changes state needs its own change. It comes with the phone's command classes (step 2).
   - The app's own hub has one window, `LOCAL`. Relay windows on it come with the relay (step 3).
 
 - `time` in a state message is seconds since the Unix epoch.
@@ -1724,7 +1726,8 @@ One JSON object per line, on the window socket. `sb attach` copies its stdin and
 
 - The window sends `{"hello":{"proto":1,"version":"0.1.0"}}` first. The hub answers `{"hello":{"ok":true,...}}`. A hub with another proto or version answers `{"hello":{"ok":false,"why":...}}` and closes. The window shows the why.
 - A command: `{"id":7,"cmd":"pane_open","args":{...}}`. Its answer: `{"id":7,"ok":<value>}` or `{"id":7,"err":"..."}`. Answers can come out of order.
-- News: `{"event":"panes","payload":...}`. Pane bytes: `{"event":"pane_output","payload":{"pane":"p3","data":"<base64>"}}`.
+- News: `{"event":"panes","payload":...,"seq":[boot,n]}`. Pane bytes: `{"event":"pane_output","payload":{"pane":"p3","data":"<base64>"}}`.
+- Since 41.8 the hello also carries `instance` (29.3) and, for a window that comes back, `since`: the last `seq` it saw. The answer carries `boot` and `resumed`. With `resumed: true`, the hub sends the events the window missed, the newest of each kind and id, before any new event. Else the window loads everything again. The ring (`crates/evseq`) keeps 2,000 events; `focus` is not kept, because it asks a window to act now.
 - One table in `crates/core/src/dispatch.rs` holds every command, for the app and for `sb serve`.
 - In remote mode only `log`, `open_url`, `clip_write` (29.11), `handover_check` and `handover_in` (38.2), `link_state`, `link_reconnect`, `machine_show` and `machine_other` (29.13) and `app_restart` (29.12) run on your computer. A test keeps that list short. So a server can make the app do nothing else on your computer: it can write your clipboard, never read it.
 
@@ -1780,8 +1783,9 @@ The first build had one window at a time, with a takeover. Since 41.8, several w
   - **W4.** When all is quiet, each window shows the pane that the hub has on its screen.
   - **W5.** When all is quiet, only the panes on some screen stream.
   - **W6.** When all is quiet and the program draws its screen again on a size change, each window shows its pane as it is, with no hole.
-- Four witnesses must fail, so the runs reach a fresh screen, a fresh screen of a pane that two windows show, and a quiet state with two windows on one pane, also after such a fresh screen. Four old versions must fail too: commands in threads of their own, any expand answer that draws, a collapse that stops its streams after the screen lock, and a fresh screen that pauses the pane.
-- `models/windows_test.qnt` holds fixed traces: both windows get the bytes; a fresh screen keeps the stream of the other window, and the old pause stops it; a collapse keeps the stream of the other window, and with no screen lock it stops it.
+  - **W7.** No lost event: each window that is in has every event after the number it started from, once, in order, with no gap. This holds because the replay of a window that comes back and its join are one step under the log lock. The fold by kind and id is the part of `evseq`.
+- Five witnesses must fail, so the runs reach a fresh screen, a fresh screen of a pane that two windows show, a quiet state with two windows on one pane (also after such a fresh screen), and a replay of missed events. Five old versions must fail too: commands in threads of their own, any expand answer that draws, a collapse that stops its streams after the screen lock, a fresh screen that pauses the pane, and a replay and a join with no log lock.
+- `models/windows_test.qnt` holds fixed traces: both windows get the bytes; a fresh screen keeps the stream of the other window, and the old pause stops it; a collapse keeps the stream of the other window, and with no screen lock it stops it; a window that comes back gets what it missed, and with no log lock it loses an event.
 - `models/permit.qnt` has two windows and lost clicks. P1 to P6 and T1 to T4 still hold.
 - `crates/sb/tests/remote.rs` runs `sb serve`, `sb attach` and the client on a real tmux, with no ssh: an end-to-end run with two windows, a window that comes back and a lost link; a flood that drops bytes; a fresh screen while another window reads every byte; two hubs on one home; and the order of commands and keys. The order test failed before the lane.
 

@@ -754,6 +754,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "evseq"
+version = "0.7.3"
+
+[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3060,6 +3064,7 @@ version = "0.7.3"
 dependencies = [
  "base64 0.22.1",
  "diffparse",
+ "evseq",
  "git-argcheck",
  "guide-check",
  "libc",

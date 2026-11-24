@@ -19,7 +19,12 @@
 //   A chunk of a paused pane is lost.
 // - The hub (crates/core/src/hub.rs, screens.rs and remote.rs). The reader
 //   thread, the screen lock, a writer and a screen thread for each window.
-// - The windows (web/app.js). Each attach is a new window with a new epoch.
+// - The windows (web/app.js). Each attach is a new window with a new epoch. A
+//   window that comes back is a new epoch with the last event number of an old one.
+// - The numbered events (events.rs, evseq): each new event reaches every window
+//   that joined, and a window that comes back gets the events after its number.
+//   The ring folds events by kind and id; `evseq` proves that part, so here each
+//   event has its own id.
 //
 // The queue of each window is the proved `outq` (proofs/OutQ): here it is a list
 // of chunks with the same states and the same budget rule.
@@ -110,7 +115,16 @@ module windows {
     // Ghosts: the fresh screens that filled a pane on screen, and those that
     // filled one while another window showed the same pane.
     filled: int,
-    shared: int
+    shared: int,
+    // The numbered events (remote.rs `RemoteSink.log`): the number of the newest
+    // event; for each window, the number it started after and the numbers it got,
+    // in order; and a window that got its replay and did not join yet (0: none).
+    evN: int,
+    evFrom: int -> int,
+    evGot: int -> List[int],
+    joining: int,
+    // Ghost: the replays that held at least one event.
+    replayed: int
   }
 
   var s: State
@@ -204,11 +218,45 @@ module windows {
   // ---------- the hub ----------
 
   // remote.rs:window, the attach of window `e`. No takeover: the other windows stay.
-  action Attach: bool = all {
+  // With `back` an old window, the new one comes back with the last number the
+  // old one got, and gets the events after it first. Under the log lock (`locked`),
+  // the replay and the join are one step. Else a new event can come between them.
+  pure def lastOf(st: State, e: int): int =
+    if (st.evGot.get(e).length() == 0) st.evFrom.get(e) else st.evGot.get(e)[st.evGot.get(e).length() - 1]
+
+  action Attach(back: int, locked: bool): bool = all {
     s.nextEpoch <= 3,
     s.n < MAX_EVENTS,
+    s.joining == 0,
+    back == 0 or (back < s.nextEpoch and s.gone.get(back)),
     val e = s.nextEpoch
-    s' = { ...s, nextEpoch: e + 1, attached: s.attached.set(e, true), n: s.n + 1 }
+    val since = if (back == 0) s.evN else lastOf(s, back)
+    val st = { ...s,
+      nextEpoch: e + 1,
+      evFrom: s.evFrom.set(e, since),
+      evGot: s.evGot.set(e, range(since + 1, s.evN + 1)),
+      replayed: if (back != 0 and since < s.evN) s.replayed + 1 else s.replayed,
+      n: s.n + 1
+    }
+    s' = if (locked) { ...st, attached: st.attached.set(e, true) } else { ...st, joining: e }
+  }
+
+  // The join, after the replay, with no log lock.
+  action Join: bool = all {
+    s.joining != 0,
+    s' = { ...s, attached: s.attached.set(s.joining, true), joining: 0 }
+  }
+
+  // RemoteSink::emit: a new event gets the next number and reaches each window
+  // that joined and did not leave, in one step under the log lock.
+  action Emit: bool = all {
+    s.n < MAX_EVENTS,
+    val k = s.evN + 1
+    s' = { ...s,
+      evN: k,
+      evGot: EPOCHS.mapBy(e => if (s.attached.get(e) and not(s.exited.get(e))) s.evGot.get(e).append(k) else s.evGot.get(e)),
+      n: s.n + 1
+    }
   }
 
   // remote.rs:Leave, the end of the read loop: the socket is shut, and the
@@ -466,7 +514,12 @@ module windows {
       term: EPOCHS.mapBy(_ => { upTo: 0, hole: false }),
       n: 0,
       filled: 0,
-      shared: 0
+      shared: 0,
+      evN: 0,
+      evFrom: EPOCHS.mapBy(_ => 0),
+      evGot: EPOCHS.mapBy(_ => List()),
+      joining: 0,
+      replayed: 0
     }
   }
 
@@ -477,15 +530,22 @@ module windows {
   // With `ordered` false, each command runs in a thread of its own. With
   // `locked` false, a collapse stops its streams after the screen lock. With
   // `pause` true, a fresh screen pauses the pane. Each is the code before a fix.
-  action stepWith(ordered: bool, locked: bool, pause: bool): bool = {
+  action stepWith(ordered: bool, locked: bool, pause: bool): bool = stepWithLog(ordered, locked, pause, true)
+
+  // With `logLocked` false, the replay of a window that comes back and its join
+  // are two steps.
+  action stepWithLog(ordered: bool, locked: bool, pause: bool, logLocked: bool): bool = {
     nondet p = PANES.oneOf()
     nondet e = EPOCHS.oneOf()
+    nondet back = 0.to(3).oneOf()
     nondet i = 0.to(3).oneOf()
     any {
       Make(p),
       Redraw(p),
       Read,
-      Attach,
+      Attach(back, logLocked),
+      Join,
+      Emit,
       Exit(e, locked),
       StopStream(p),
       CmdStart(e, i, ordered, locked),
@@ -507,6 +567,7 @@ module windows {
   action stepAnyOrder = stepWith(false, true, false)
   action stepNoScreenLock = stepWith(true, false, false)
   action stepPause = stepWith(true, true, true)
+  action stepNoLogLock = stepWithLog(true, true, false, false)
 
   // ---------- properties that must hold ----------
 
@@ -524,6 +585,11 @@ module windows {
     s.streaming.get(p) == watched(p),
     s.emu.get(p).on == s.streaming.get(p)
   })
+
+  // W7. No lost event: each window that is in has every event after the number
+  // it started from, once, in order, with no gap.
+  val NoLostEvent = EPOCHS.forall(e => (s.attached.get(e) and not(s.exited.get(e))) implies
+    s.evGot.get(e) == range(s.evFrom.get(e) + 1, s.evN + 1))
 
   // Nothing is in flight, and each window read all its lines.
   val quiet = and {
@@ -567,9 +633,12 @@ module windows {
   val NoQuietShare = not(quiet and EPOCHS.exists(a => EPOCHS.exists(b =>
     a < b and shows(a) and shows(b) and s.wlive.get(a) == s.wlive.get(b) and s.wlive.get(a) == s.live.get(a) and s.wlive.get(b) == s.live.get(b))))
 
+  // A window came back and got a replay of at least one event it missed.
+  val NoReplay = s.replayed == 0
+
   // The same, after a fresh screen of a pane that two windows showed: W6 then
   // checks both windows on that path.
   val NoQuietShareAfterResync = not(s.shared > 0) or NoQuietShare
 
-  val Always = and { QueueInBudget, NoBytesWhileWaiting, StreamsWhileWatched, WindowMatchesHub, OnlyWatchedStreams, Fresh }
+  val Always = and { QueueInBudget, NoBytesWhileWaiting, StreamsWhileWatched, WindowMatchesHub, OnlyWatchedStreams, Fresh, NoLostEvent }
 }

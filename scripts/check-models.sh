@@ -93,9 +93,10 @@ done
 # Several windows on one hub (SPEC 29, 41.8): screens per window, the screen
 # lock, lost links, drops and fresh screens from the emulator. The witnesses must
 # fail: else the runs never reach a fresh screen, a fresh screen of a shared pane,
-# or a quiet state with two windows on one pane. The old code must fail too:
-# commands in threads of their own, any expand answer that draws, a collapse
-# with no screen lock, and a fresh screen that pauses the pane.
+# a quiet state with two windows on one pane, or a replay of missed events. The
+# old code must fail too: commands in threads of their own, any expand answer that
+# draws, a collapse with no screen lock, a fresh screen that pauses the pane, and
+# a replay and a join with no log lock.
 quint typecheck windows.qnt
 quint typecheck windows_test.qnt
 quint test windows_test.qnt
@@ -110,11 +111,12 @@ must_fail() {
     fi
     echo "== windows $* fails, as it must"
 }
-for w in NoResync NoSharedResync NoQuietShare NoQuietShareAfterResync; do
+for w in NoResync NoSharedResync NoQuietShare NoQuietShareAfterResync NoReplay; do
     must_fail --step=step --invariant="$w"
 done
 must_fail --step=stepAnyOrder --invariant=Always
 must_fail --init=initAnyAnswer --step=step --invariant=Always
 must_fail --step=stepNoScreenLock --invariant=Always
 must_fail --step=stepPause --invariant=Always
+must_fail --step=stepNoLogLock --invariant=Always
 echo "models ok"

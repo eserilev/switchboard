@@ -10,6 +10,7 @@ pub mod control;
 pub mod coverage;
 pub mod diff;
 pub mod dispatch;
+pub mod events;
 pub mod gh;
 pub mod handover;
 pub mod hooks;

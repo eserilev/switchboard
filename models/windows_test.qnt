@@ -16,7 +16,7 @@ module windows_test {
   action show(e: int, p: str): bool = showWith(e, p, true)
 
   // Two windows show pane A.
-  action twoOnA = Attach.then(Attach).then(show(1, "A")).then(show(2, "A"))
+  action twoOnA = Attach(0, true).then(Attach(0, true)).then(show(1, "A")).then(show(2, "A"))
 
   // Both windows get each chunk of the pane.
   run bothWindowsGetTheBytesTest =
@@ -48,10 +48,25 @@ module windows_test {
   // With no screen lock, a collapse decides to stop pane A, window 2 shows it
   // meanwhile, and then the stop comes: window 2 shows a pane with no stream.
   run aCollapseWithNoLockStopsTheOtherTest =
-    init.then(Attach).then(Attach).then(show(1, "A"))
+    init.then(Attach(0, true)).then(Attach(0, true)).then(show(1, "A"))
       .then(WinCollapse(1))
       .then(CmdStart(1, 0, true, false))
       .then(showWith(2, "A", false))
       .then(StopStream("A"))
       .expect(s.live.get(2) == "A" and not(s.streaming.get("A")))
+
+  // Window 1 sees an event, leaves, and comes back as window 2 after two more.
+  action backAfterTwo(locked: bool): bool =
+    Attach(0, true).then(Emit).then(LinkDrop(1)).then(Exit(1, true))
+      .then(Emit).then(Emit).then(Attach(1, locked))
+
+  // Under the log lock, the window that comes back gets the two it missed, then new ones.
+  run aWindowThatComesBackGetsWhatItMissedTest =
+    init.then(backAfterTwo(true)).then(Emit)
+      .expect(s.evGot.get(2) == List(2, 3, 4) and NoLostEvent)
+
+  // With no log lock, an event between the replay and the join is lost.
+  run anEventBetweenReplayAndJoinIsLostTest =
+    init.then(backAfterTwo(false)).then(Emit).then(Join)
+      .expect(s.evGot.get(2) == List(2, 3) and s.evN == 4 and not(NoLostEvent))
 }

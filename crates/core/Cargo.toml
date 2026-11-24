@@ -17,6 +17,7 @@ guide-check = { path = "../guide-check" }
 libc = "0.2"
 base64 = "0.22"
 outq = { path = "../outq" }
+evseq = { path = "../evseq" }
 # The fresh screen of a pane for one window, with no pause of tmux (SPEC 41.8).
 vt100 = "0.18"
 git-argcheck = { path = "../git-argcheck" }

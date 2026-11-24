@@ -124,9 +124,13 @@ fn connect(home: &Home) -> (Arc<Client>, Arc<Got>) {
 }
 
 fn connect_as(home: &Home, instance: &str) -> (Arc<Client>, Arc<Got>) {
+    connect_since(home, instance, None)
+}
+
+fn connect_since(home: &Home, instance: &str, since: Option<(u64, u64)>) -> (Arc<Client>, Arc<Got>) {
     let got = Arc::new(Got::default());
     let g = Arc::clone(&got);
-    let client = Client::connect_as(&home.argv(), instance, move |n| match n {
+    let client = Client::connect_as(&home.argv(), instance, since, move |n| match n {
         News::Event(e, p) => g.events.lock().unwrap().push((e, p)),
         News::Down { why, taken } => *g.down.lock().unwrap() = Some((why, taken)),
     })
@@ -209,6 +213,47 @@ fn a_remote_window_end_to_end() {
     assert!(panes.as_array().unwrap().iter().any(|p| p["id"] == id), "the shell still runs");
     assert!(!panes.as_array().unwrap().iter().any(|p| p["live"] == true), "a new window starts with no screen");
     c.close();
+}
+
+/// A window that comes back gets the events it missed, the newest of each kind and
+/// id, before any new event. Another start of the hub means a full load (SPEC 41.8).
+#[test]
+fn a_window_that_comes_back_gets_what_it_missed() {
+    let home = Home::new("since");
+    let (a, _got_a) = connect(&home);
+    let first = open_shell(&a, &home);
+    wait_for("a numbered event", 5, || a.seq().is_some());
+    std::thread::sleep(Duration::from_millis(300));
+    let seen = a.seq().unwrap();
+    assert!(!a.resumed(), "a first link has nothing to resume");
+    a.close();
+
+    // Meanwhile another window makes news: a second shell.
+    let (b, _) = connect(&home);
+    let second = open_shell(&b, &home);
+    std::thread::sleep(Duration::from_millis(300));
+
+    let (back, got) = connect_since(&home, "back", Some(seen));
+    assert!(back.resumed());
+    wait_for("the missed panes", 5, || {
+        got.events.lock().unwrap().iter().any(|(e, p)| e == "panes" && p.as_array().unwrap().iter().any(|x| x["id"] == second.as_str()))
+    });
+    // Nothing it saw comes again: each panes event it got has the second shell.
+    let evs = got.events.lock().unwrap().clone();
+    for (_, p) in evs.iter().filter(|(e, _)| e == "panes") {
+        assert!(p.as_array().unwrap().iter().any(|x| x["id"] == second.as_str()), "an old event came again: {p}");
+        assert!(p.as_array().unwrap().iter().any(|x| x["id"] == first.as_str()));
+    }
+    assert!(back.seq().unwrap().1 > seen.1);
+
+    // Another start of the hub, or a number it never gave: a full load.
+    let (other, _) = connect_since(&home, "other", Some((seen.0 ^ 1, seen.1)));
+    assert!(!other.resumed());
+    let (late, _) = connect_since(&home, "late", Some((seen.0, 1 << 40)));
+    assert!(!late.resumed());
+    for c in [b, back, other, late] {
+        c.close();
+    }
 }
 
 /// A window that lost bytes gets a fresh screen from the pane's emulator, and the

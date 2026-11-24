@@ -6,8 +6,11 @@
 //!   `{"hello":{"ok":true,...}}`, or `{"hello":{"ok":false,"why":...}}` and closes.
 //! - A command: `{"id":7,"cmd":"pane_open","args":{...}}`. Its answer:
 //!   `{"id":7,"ok":<value>}` or `{"id":7,"err":"..."}`. Answers can come out of order.
-//! - News from the hub: `{"event":"panes","payload":...}`, and pane bytes as
-//!   `{"event":"pane_output","payload":{"pane":"p3","data":"<base64>"}}`.
+//! - News from the hub: `{"event":"panes","payload":...,"seq":[boot,n]}`, and pane
+//!   bytes as `{"event":"pane_output","payload":{"pane":"p3","data":"<base64>"}}`.
+//!   A window that comes back puts the last `seq` it saw in its hello as `since`.
+//!   The hello answer says `resumed: true` when the hub sends it what it missed,
+//!   before any new event; else the window loads everything again (SPEC 41.8).
 //!
 //! Several windows at once (SPEC 41.8). Each has its own screen, its own queue
 //! and its own writer; the news goes to all of them. A window that comes back with
@@ -20,6 +23,7 @@
 //! drop; when too many wait, the window is too slow and the hub closes it.
 
 use crate::dispatch;
+use crate::events::EventLog;
 use crate::hub::{Hub, Sink};
 use crate::screens::Win;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -47,7 +51,21 @@ pub fn hello() -> Value {
 
 /// The first line of a window with its own instance id.
 pub fn hello_as(instance: &str) -> Value {
-    json!({ "hello": { "proto": PROTO, "version": env!("CARGO_PKG_VERSION"), "instance": instance } })
+    hello_since(instance, None)
+}
+
+/// The first line of a window that comes back: `since` is the last `(boot, n)` it saw.
+pub fn hello_since(instance: &str, since: Option<(u64, u64)>) -> Value {
+    let mut h = json!({ "proto": PROTO, "version": env!("CARGO_PKG_VERSION"), "instance": instance });
+    if let Some((b, n)) = since {
+        h["since"] = json!([b, n]);
+    }
+    json!({ "hello": h })
+}
+
+/// The `seq` of an event line: `(boot, n)`.
+fn seq_of(v: &Value) -> Option<(u64, u64)> {
+    Some((v["seq"][0].as_u64()?, v["seq"][1].as_u64()?))
 }
 
 /// The id of this process as a window: the same for each link it makes, and new
@@ -97,9 +115,13 @@ impl Conn {
     }
 
     fn line(&self, v: &Value) {
+        self.line_str(v.to_string())
+    }
+
+    fn line_str(&self, line: String) {
         let n = {
             let mut l = self.lines.lock().unwrap();
-            l.push_back(v.to_string());
+            l.push_back(line);
             l.len()
         };
         if n > MAX_LINES {
@@ -120,7 +142,11 @@ impl Conn {
 /// The sink of a hub with remote windows.
 #[derive(Default)]
 pub struct RemoteSink {
-    /// The windows, by epoch. A leaf lock: nothing else is locked under it.
+    /// The numbered events, for windows that come back. Lock order: `log`, then
+    /// `conns`: an event gets its number and reaches the windows in one step, so
+    /// each window gets the events in the order of their numbers.
+    log: Mutex<EventLog>,
+    /// The windows, by epoch. Nothing else is locked under it.
     conns: Mutex<BTreeMap<Win, Arc<Conn>>>,
     next_epoch: AtomicU64,
     /// The `outq` key of each pane id.
@@ -154,9 +180,11 @@ impl RemoteSink {
 
 impl Sink for RemoteSink {
     fn emit(&self, event: &str, payload: Value) {
-        let line = json!({ "event": event, "payload": payload });
+        let mut log = self.log.lock().unwrap();
+        let boot = log.boot;
+        let (_, line) = log.record(event, &payload, |n| json!({ "event": event, "payload": payload, "seq": [boot, n] }).to_string());
         for c in self.all() {
-            c.line(&line);
+            c.line_str(line.clone());
         }
     }
 
@@ -246,10 +274,21 @@ fn window(hub: Arc<Hub>, sink: Arc<RemoteSink>, stream: UnixStream) {
         closed: AtomicBool::new(false),
         ending: AtomicBool::new(false),
     });
-    // The answer goes first, before any news can reach this window.
-    conn.line(&json!({ "hello": { "ok": true, "proto": PROTO, "version": env!("CARGO_PKG_VERSION") } }));
+    let since = seq_of(&json!({ "seq": hello["hello"]["since"] }));
     // A window that comes back: its old link is dead, and it goes. Other windows stay.
     let stale: Vec<Arc<Conn>> = {
+        // Under the log lock: no event comes between the replay and the join.
+        let log = sink.log.lock().unwrap();
+        let missed = since.and_then(|(b, n)| log.since(b, n));
+        // The answer goes first, then what the window missed, then new news.
+        conn.line(&json!({ "hello": {
+            "ok": true, "proto": PROTO, "version": env!("CARGO_PKG_VERSION"),
+            "boot": log.boot, "resumed": missed.is_some(),
+        } }));
+        tracing::info!(target: "sb::remote", ?since, missed = missed.as_ref().map(Vec::len), "hello");
+        for l in missed.unwrap_or_default() {
+            conn.line_str(l);
+        }
         let mut conns = sink.conns.lock().unwrap();
         let stale = if conn.instance.is_empty() {
             vec![]
@@ -467,6 +506,10 @@ impl Drop for KillOnDrop {
 
 /// A window's link to a remote hub, through a program such as `ssh host sb attach`.
 pub struct Client {
+    /// The last `(boot, n)` of an event, for the hello of the next link.
+    seq: Arc<Mutex<Option<(u64, u64)>>>,
+    /// The hub sent what this window missed since the `since` of its hello.
+    resumed: bool,
     input: Mutex<Box<dyn Write + Send>>,
     waiting: Arc<Mutex<HashMap<u64, Waiter>>>,
     next: AtomicU64,
@@ -478,12 +521,18 @@ impl Client {
     /// Runs `argv` (for example `ssh -T host sb attach`), says hello, and waits for
     /// the answer. `news` gets the events and the end of the link.
     pub fn connect(argv: &[String], news: impl Fn(News) + Send + 'static) -> Result<Arc<Client>, String> {
-        Self::connect_as(argv, instance(), news)
+        Self::connect_as(argv, instance(), None, news)
     }
 
     /// [`Client::connect`] as the window `instance`. Two links with one instance
-    /// are one window: the hub keeps the newer link only.
-    pub fn connect_as(argv: &[String], instance: &str, news: impl Fn(News) + Send + 'static) -> Result<Arc<Client>, String> {
+    /// are one window: the hub keeps the newer link only. `since` is the last
+    /// `(boot, n)` the window saw, from [`Client::seq`] of its old link.
+    pub fn connect_as(
+        argv: &[String],
+        instance: &str,
+        since: Option<(u64, u64)>,
+        news: impl Fn(News) + Send + 'static,
+    ) -> Result<Arc<Client>, String> {
         let (prog, rest) = argv.split_first().ok_or("no remote command")?;
         tracing::info!(target: "sb::remote", ?argv, "connect");
         let child = std::process::Command::new(prog)
@@ -499,7 +548,7 @@ impl Client {
         let mut stdin = c.stdin.take().ok_or("no stdin")?;
         let stdout = c.stdout.take().ok_or("no stdout")?;
         let stderr = c.stderr.take().ok_or("no stderr")?;
-        writeln!(stdin, "{}", hello_as(instance)).map_err(|e| e.to_string())?;
+        writeln!(stdin, "{}", hello_since(instance, since)).map_err(|e| e.to_string())?;
         let _ = stdin.flush();
         // The last stderr lines tell why ssh failed.
         let errs: Arc<Mutex<VecDeque<String>>> = Arc::default();
@@ -537,13 +586,15 @@ impl Client {
             return Err(answer["hello"]["why"].as_str().unwrap_or("the hub refused the window").to_owned());
         }
         let client = Arc::new(Client {
+            seq: Arc::new(Mutex::new(since)),
+            resumed: answer["hello"]["resumed"] == true,
             input: Mutex::new(Box::new(stdin)),
             waiting: Arc::default(),
             next: AtomicU64::new(1),
             up: Arc::new(AtomicBool::new(true)),
             child: Mutex::new(child.0.take()),
         });
-        let (waiting, up) = (Arc::clone(&client.waiting), Arc::clone(&client.up));
+        let (waiting, up, seq) = (Arc::clone(&client.waiting), Arc::clone(&client.up), Arc::clone(&client.seq));
         let errs = Arc::clone(&errs);
         std::thread::spawn(move || {
             let mut taken = false;
@@ -565,6 +616,9 @@ impl Client {
                         let _ = w.send(r);
                     }
                 } else if let Some(ev) = v["event"].as_str() {
+                    if let Some(sq) = seq_of(&v) {
+                        *seq.lock().unwrap() = Some(sq);
+                    }
                     if ev == "taken_over" {
                         taken = true;
                     }
@@ -580,6 +634,16 @@ impl Client {
             news(News::Down { why, taken });
         });
         Ok(client)
+    }
+
+    /// The last `(boot, n)` of an event this window got, on this link or before.
+    pub fn seq(&self) -> Option<(u64, u64)> {
+        *self.seq.lock().unwrap()
+    }
+
+    /// True when the hub sent what the window missed since its last link: no full load needed.
+    pub fn resumed(&self) -> bool {
+        self.resumed
     }
 
     pub fn is_up(&self) -> bool {
