@@ -176,6 +176,8 @@ async function resync() {
     await refreshPanes();
     await refreshReviews();
     window.SBTasks?.refresh();
+    // Today's answer can be lost with the link: ask again, so it never stays on "refreshing…".
+    if (window.SBToday?.D.v) window.SBToday.refresh();
     if (!live || !paneById(live)) return;
     if (!host) return expand(live);
     if (S.tab !== host) return;

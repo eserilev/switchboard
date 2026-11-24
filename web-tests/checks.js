@@ -2151,6 +2151,10 @@
     await wait(60);
     check("a failed reconnect says why", !$("#link").hidden && $("#linktext").textContent.includes("Could not resolve") && called("link_reconnect").length === 1);
     window.__linkFail = null;
+    const stubToday = { job: "Everything", jobs: [], sections: [], done: [], later: [], hidden: [], notes: [], loaded: true };
+    window.SBToday.D.v = structuredClone(stubToday);
+    window.__today = stubToday;
+    const todayCalls = called("today").length;
     const n = { settings: called("settings").length, panes: called("panes").length, reviews: called("reviews").length, tasks: called("tasks").length, expand: called("pane_expand").length };
     $("#linkgo").click();
     await wait(30);
@@ -2160,6 +2164,9 @@
     check("a reconnect loads everything again", called("settings").length > n.settings && called("panes").length > n.panes && called("reviews").length > n.reviews && called("tasks").length > n.tasks,
       JSON.stringify(n) + " " + called("panes").length);
     check("a reconnect opens the live pane again", called("pane_expand").length > n.expand && window.SB.S.live === "p1");
+    check("a reconnect asks for Today again, so it never stays on refreshing", called("today").length > todayCalls);
+    window.SBToday.D.v = null;
+    window.__today = undefined;
     window.__emit("link", { up: false, host: "box", why: "another window took over", taken: true });
     await wait(30);
     check("a takeover says so and offers to take it back", $("#linktext").textContent.includes("took over") && $("#linkgo").textContent === "Take it back");
