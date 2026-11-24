@@ -217,6 +217,8 @@ pub struct Hub {
     pub(crate) gh: RwLock<Arc<dyn crate::gh::Gh>>,
     /// Today (SPEC 39): the last refresh.
     pub(crate) today: Mutex<crate::hub_today::TodayState>,
+    /// A window asked `sb serve` to start again (SPEC 29.12).
+    restart: std::sync::atomic::AtomicBool,
     /// The pending review sync runs. Off with `SB_HOME` set (tests), until a test
     /// gives a fake GitHub: a test never writes to GitHub.
     pub(crate) gh_sync: std::sync::atomic::AtomicBool,
@@ -372,6 +374,7 @@ impl Hub {
             mail: Mutex::default(),
             gh: RwLock::new(Arc::new(crate::gh::RealGh)),
             today: Mutex::default(),
+            restart: Default::default(),
             gh_sync: std::sync::atomic::AtomicBool::new(std::env::var_os("SB_HOME").is_none()),
             _lock: lock,
         });
@@ -395,6 +398,18 @@ impl Hub {
 
     pub(crate) fn arc(&self) -> Arc<Hub> {
         self.me.upgrade().expect("the hub is alive")
+    }
+
+    /// `hub_restart`: asks `sb serve` to start again with its newest build. The
+    /// app's own hub ignores it: the app restarts itself.
+    pub fn ask_restart(&self) -> Result<(), String> {
+        tracing::info!(target: "sb::hub", "a restart is asked");
+        self.restart.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    pub fn restart_asked(&self) -> bool {
+        self.restart.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn config(&self) -> Config {

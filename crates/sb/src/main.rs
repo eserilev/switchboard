@@ -294,15 +294,37 @@ fn serve() -> i32 {
         let (hub, sink) = (Arc::downgrade(&hub), sink.clone());
         std::thread::spawn(move || remote::serve(listener, hub, sink));
     }
-    while !STOP.load(std::sync::atomic::Ordering::SeqCst) {
+    while !STOP.load(std::sync::atomic::Ordering::SeqCst) && !hub.restart_asked() {
         std::thread::sleep(Duration::from_millis(200));
     }
-    tracing::info!(target: "sb::serve", "sb serve stops");
+    let restart = hub.restart_asked();
+    tracing::info!(target: "sb::serve", restart, "sb serve stops");
+    if restart {
+        // The answer to the window goes out first.
+        std::thread::sleep(Duration::from_millis(300));
+    }
     // Review runs have process groups of their own: stop them, as the app does on quit.
     hub.stop_runs();
     let _ = std::fs::remove_file(&wsock);
     let _ = std::fs::remove_file(&pid);
+    if restart {
+        // The same pid and session, with the binary that is on disk now (SPEC 29.12).
+        // Every file of ours closes on exec, the hub lock too. The agents run on in tmux.
+        let err = std::os::unix::process::CommandExt::exec(std::process::Command::new(serve_exe()).arg("serve"));
+        tracing::error!(target: "sb::serve", %err, "the restart failed; the next sb attach starts sb serve");
+        return 1;
+    }
     0
+}
+
+/// The `sb` binary on disk. After an install, `/proc/self/exe` names the old,
+/// deleted file: drop that mark, so the new one at the same path runs.
+fn serve_exe() -> std::path::PathBuf {
+    let exe = std::env::current_exe().unwrap_or_else(|_| "sb".into());
+    match exe.to_str().and_then(|s| s.strip_suffix(" (deleted)")) {
+        Some(s) => s.into(),
+        None => exe,
+    }
 }
 
 /// The link of a remote window: stdin and stdout to the window socket. With no

@@ -87,25 +87,39 @@ function linkChanged() {
 function drawLink() {
   // `switch`: the server of this computer's config, when the app can switch.
   const sw = LINK.switch;
-  $("#hostsw").hidden = !LINK.remote && !sw;
+  $("#hostsw").hidden = false;
   const name = LINK.remote ? LINK.host : "This computer";
   $("#host").textContent = name;
   const tip = LINK.remote ? `The hub runs on ${LINK.host}` : "The hub runs on this computer";
-  $("#host").title = sw ? `${tip}. Click to switch.` : tip;
+  $("#host").title = `${tip}. Click to ${sw ? "switch or restart" : "restart"}.`;
   $("#host").classList.toggle("down", !LINK.up);
   $("#host").classList.toggle("here", !LINK.remote);
-  $("#host").disabled = !sw;
-  setHTML($("#hostmenu"), sw ? [
-    `<button role="menuitemradio" aria-checked="${!LINK.remote}" data-mode="local">This computer</button>`,
-    `<button role="menuitemradio" aria-checked="${!!LINK.remote}" data-mode="remote">${esc(sw)}</button>`,
-    `<div class="note">Switchboard restarts. Agents keep running where they are.${LINK.remote ? "" : " Review runs here stop."}</div>`,
-  ].join("") : "");
+  $("#host").disabled = false;
+  // Restart (SPEC 29.12): the hub on the server, or this app. Agents keep running.
+  const restart = LINK.remote ? [
+    `<button role="menuitem" data-restart="hub">Restart the hub on ${esc(LINK.host)}</button>`,
+    `<button role="menuitem" data-restart="app">Restart this app</button>`,
+    `<div class="note">The hub starts again with its newest build, and the window links back on its own. Agents keep running. Review runs on the server stop.</div>`,
+  ] : [
+    `<button role="menuitem" data-restart="app">Restart Switchboard</button>`,
+    `<div class="note">Switchboard starts again with its newest build. Agents keep running. Review runs stop.</div>`,
+  ];
+  setHTML($("#hostmenu"), [
+    ...(sw ? [
+      `<button role="menuitemradio" aria-checked="${!LINK.remote}" data-mode="local">This computer</button>`,
+      `<button role="menuitemradio" aria-checked="${!!LINK.remote}" data-mode="remote">${esc(sw)}</button>`,
+      `<div class="note">Switchboard restarts. Agents keep running where they are.${LINK.remote ? "" : " Review runs here stop."}</div>`,
+      `<hr>`,
+    ] : []),
+    ...restart,
+  ].join(""));
   $("#link").hidden = LINK.up;
   if (LINK.up) return;
   const connecting = LINK.why === "connecting";
   $("#linklocal").hidden = connecting || !sw;
   $("#linktext").textContent = connecting ? `Connecting to ${LINK.host}…`
     : LINK.taken ? `Another window took over the hub on ${LINK.host}. Your agents run on there.`
+    : LINK.retry ? `No link to ${LINK.host}: ${LINK.why || "the link is down"}. Reconnecting on its own… Your agents run on there.`
     : `No link to ${LINK.host}: ${LINK.why || "the link is down"}. Your agents run on there.`;
   $("#linkgo").hidden = connecting;
   $("#linkgo").textContent = LINK.taken ? "Take it back" : "Reconnect";
@@ -1643,7 +1657,7 @@ listen("focus", (e) => refreshPanes().then(() => expand(e.payload)));
 listen("tmux_exit", () => toast("The Switchboard tmux server ended. Restart the app to start it again."));
 listen("link", (e) => {
   linkNews++;
-  Object.assign(LINK, { remote: true, why: null, taken: false }, e.payload);
+  Object.assign(LINK, { remote: true, why: null, taken: false, retry: false }, e.payload);
   linkChanged();
   if (!LINK.up) $("#toast").hidden = true;
 });
@@ -1663,7 +1677,18 @@ $("#host").addEventListener("click", () => ($("#hostmenu").hidden = !$("#hostmen
 $("#hostmenu").addEventListener("click", (e) => {
   const b = e.target.closest("[data-mode]");
   if (b) switchHub(b.dataset.mode === "remote");
+  const r = e.target.closest("[data-restart]");
+  if (r) restartSb(r.dataset.restart === "hub");
 });
+async function restartSb(hub) {
+  $("#hostmenu").hidden = true;
+  try {
+    await invoke("app_restart", { hub });
+    toast(hub ? `Restarting the hub on ${LINK.host}. The window links back on its own.` : "Restarting Switchboard…");
+  } catch (e) {
+    toast(e);
+  }
+}
 document.addEventListener("click", (e) => { if (!e.target.closest("#hostsw")) $("#hostmenu").hidden = true; });
 $("#linklocal").addEventListener("click", () => switchHub(false));
 listen("error", (e) => toast(e.payload.message || e.payload));

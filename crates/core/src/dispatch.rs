@@ -172,6 +172,7 @@ commands! {
     today_later(repo: String, number: u64, changed: bool, until: Option<u64>) -> () => |h| h.today_later(&repo, number, changed, until);
     today_looked(job: String) -> () => |h| h.today_looked(&job);
     today_tell(text: String) -> () => |h| h.today_tell(&text);
+    hub_restart() -> () => |h| h.ask_restart();
     today_forget(id: u64) -> () => |h| h.today_forget(id);
     pane_input(id: String, data: String, binary: bool) -> () => |h| {
         // `binary` data (mouse reports) is one byte per char.

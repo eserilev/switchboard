@@ -2107,7 +2107,25 @@
     await wait(30);
     check("a lost link shows a banner with the host and the reason", !$("#link").hidden && $("#linktext").textContent.includes("box") && $("#linktext").textContent.includes("timed out") && $("#linkgo").textContent === "Reconnect");
     check("the top bar names the host, marked down", !$("#hostsw").hidden && $("#host").textContent === "box" && $("#host").classList.contains("down"));
-    check("with no server in this computer's config, no switch", $("#host").disabled && $("#linklocal").hidden);
+    check("with no server in this computer's config, no switch", $("#linklocal").hidden && !$("#hostmenu [data-mode]"));
+    window.__emit("link", { up: false, host: "box", why: "the hub on the server stopped", taken: false, retry: true });
+    await wait(30);
+    check("a lost link says it reconnects on its own (SPEC 29.12)", $("#linktext").textContent.includes("Reconnecting on its own") && $("#linkgo").textContent === "Reconnect");
+    {
+      // Restart (SPEC 29.12): the hub on the server, or this app.
+      $("#host").click();
+      await wait(10);
+      const r = $$("#hostmenu [data-restart]");
+      check("the host menu offers a restart of the hub and of this app", !$("#hostmenu").hidden && r.length === 2 && r[0].textContent === "Restart the hub on box" && r[1].textContent === "Restart this app");
+      r[0].click();
+      await wait(30);
+      const a = called("app_restart").at(-1)?.[1];
+      check("Restart the hub asks the app to restart the server's hub", a?.hub === true && $("#hostmenu").hidden && $("#toast").textContent.includes("links back on its own"), JSON.stringify(a));
+      $("#host").click();
+      $$("#hostmenu [data-restart]")[1].click();
+      await wait(30);
+      check("Restart this app restarts the app", called("app_restart").at(-1)?.[1].hub === false);
+    }
     check("the banner keeps the board in its place", $("#view-board").getBoundingClientRect().top >= $("#link").getBoundingClientRect().bottom - 1);
     {
       // A command while the link is down: the banner says it, no toast.

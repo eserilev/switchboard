@@ -4,7 +4,8 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use std::sync::{mpsc, Arc, Mutex};
 use switchboard_core::config::Config;
 use switchboard_core::dispatch;
@@ -145,6 +146,8 @@ struct Remote {
     /// on Reconnect) never run at once: the second could take over the first,
     /// and the window would keep the client that was taken over.
     connecting: Mutex<()>,
+    /// Another window took the hub. The link then stays down until you take it back.
+    taken: Arc<AtomicBool>,
 }
 
 impl Remote {
@@ -157,7 +160,7 @@ impl Remote {
             old.close();
         }
         let g = self.gen.fetch_add(1, Ordering::SeqCst) + 1;
-        let (sink, down, host, gen) = (Arc::clone(&self.sink), Arc::clone(&self.down), self.host.clone(), Arc::clone(&self.gen));
+        let (sink, down, host, gen, taken_flag) = (Arc::clone(&self.sink), Arc::clone(&self.down), self.host.clone(), Arc::clone(&self.gen), Arc::clone(&self.taken));
         let news = move |n: News| {
             if gen.load(Ordering::SeqCst) != g {
                 return;
@@ -168,12 +171,14 @@ impl Remote {
                     tracing::warn!(target: "sb::remote", %why, taken, "the link is down");
                     let mut d = down.lock().unwrap();
                     *d = Some(why.clone());
-                    let _ = sink.handle.emit("link", json!({ "up": false, "host": host, "why": why, "taken": taken }));
+                    taken_flag.store(taken, Ordering::SeqCst);
+                    let _ = sink.handle.emit("link", json!({ "up": false, "host": host, "why": why, "taken": taken, "retry": !taken }));
                 }
             }
         };
         match Client::connect(&self.argv, news) {
             Ok(c) => {
+                self.taken.store(false, Ordering::SeqCst);
                 *self.client.lock().unwrap() = Some(Arc::clone(&c));
                 // Under the `down` lock: a link that already went down (a takeover
                 // right after the hello) keeps its why, and its banner.
@@ -187,9 +192,36 @@ impl Remote {
             Err(why) => {
                 tracing::warn!(target: "sb::remote", %why, "connect failed");
                 *self.down.lock().unwrap() = Some(why.clone());
-                let _ = self.sink.handle.emit("link", json!({ "up": false, "host": self.host, "why": why, "taken": false }));
+                let _ = self.sink.handle.emit("link", json!({ "up": false, "host": self.host, "why": why, "taken": false, "retry": true }));
                 Err(why)
             }
+        }
+    }
+
+    fn is_up(&self) -> bool {
+        self.down.lock().unwrap().is_none() && self.client.lock().unwrap().as_ref().is_some_and(|c| c.is_up())
+    }
+
+    /// Keeps the link up (SPEC 29.12): a link that went down connects again on its
+    /// own, after 1 s, then 2, 4, 8 and every 15 s. Not after a takeover: two windows
+    /// would take the hub from each other for ever.
+    fn keep_up(&self) {
+        let mut wait = Duration::from_secs(1);
+        let mut next = Instant::now() + wait;
+        loop {
+            std::thread::sleep(Duration::from_millis(250));
+            if self.is_up() || self.taken.load(Ordering::SeqCst) {
+                wait = Duration::from_secs(1);
+                next = Instant::now() + wait;
+                continue;
+            }
+            if Instant::now() < next {
+                continue;
+            }
+            tracing::info!(target: "sb::remote", secs = wait.as_secs(), "connect again on its own");
+            let _ = self.connect();
+            wait = (wait * 2).min(Duration::from_secs(15));
+            next = Instant::now() + wait;
         }
     }
 
@@ -412,7 +444,7 @@ fn link_mode(remote: bool) -> Res<()> {
 
 /// The commands that run in the app, in remote mode too. Every other command goes
 /// to the backend. A test keeps this list short (SPEC 29).
-const LOCAL: &[&str] = &["log", "open_url", "clip_write", "handover_check", "handover_in", "link_state", "link_reconnect", "link_mode"];
+const LOCAL: &[&str] = &["log", "open_url", "clip_write", "handover_check", "handover_in", "link_state", "link_reconnect", "link_mode", "app_restart"];
 
 /// The one handler of every `invoke` of the window.
 fn handle(invoke: tauri::ipc::Invoke) -> bool {
@@ -484,6 +516,20 @@ fn handle(invoke: tauri::ipc::Invoke) -> bool {
                     webview.app_handle().request_restart();
                 }
                 Err(e) => invoke.resolver.reject(e),
+            }
+        }
+        // Restart (SPEC 29.12). `hub`: the hub on the server starts again with its
+        // newest build, and the link comes back on its own. Else this app restarts;
+        // a hub here restarts with it. Agents keep running in tmux.
+        "app_restart" => {
+            let hub = args.get("hub").and_then(Value::as_bool).unwrap_or(false);
+            match &*backend {
+                Backend::Remote(_) if hub => invoke.resolver.respond_async(async move { run("hub_restart".into(), backend, json!({})).await.map_err(Into::into) }),
+                _ => {
+                    tracing::info!(target: "sb::app", "restart asked");
+                    invoke.resolver.resolve(Value::Null);
+                    webview.app_handle().request_restart();
+                }
             }
         }
         "link_reconnect" => invoke.resolver.respond_async(async move {
@@ -574,6 +620,7 @@ fn main() {
                         leader: config.leader.clone(),
                         gen: Arc::default(),
                         connecting: Mutex::default(),
+                        taken: Arc::default(),
                     };
                     Arc::new(Backend::Remote(remote))
                 }
@@ -605,6 +652,7 @@ fn main() {
                 std::thread::spawn(move || {
                     if let Backend::Remote(r) = &*backend {
                         let _ = r.connect();
+                        r.keep_up();
                     }
                 });
             }
@@ -639,7 +687,7 @@ mod tests {
     /// nothing else here (SPEC 29).
     #[test]
     fn the_local_commands_stay_few() {
-        assert_eq!(LOCAL, &["log", "open_url", "clip_write", "handover_check", "handover_in", "link_state", "link_reconnect", "link_mode"]);
+        assert_eq!(LOCAL, &["log", "open_url", "clip_write", "handover_check", "handover_in", "link_state", "link_reconnect", "link_mode", "app_restart"]);
         for c in LOCAL {
             assert!(!dispatch::COMMANDS.contains(c), "{c} is a hub command too");
         }

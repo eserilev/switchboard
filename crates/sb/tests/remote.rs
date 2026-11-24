@@ -311,3 +311,24 @@ fn two_hubs_never_share_a_home() {
         let _ = Path::new(&home.root);
     }
 }
+
+/// Restart (SPEC 29.12): `hub_restart` makes `sb serve` start again in place, with
+/// the same pid. The link goes down, not as a takeover, and a new window finds the
+/// pane still there.
+#[test]
+fn a_restart_keeps_the_pid_and_the_panes() {
+    let home = Home::new("restart");
+    let (a, got_a) = connect(&home);
+    let pid = home.serve_pid().unwrap();
+    let id = open_shell(&a, &home);
+    a.call("hub_restart", json!({})).unwrap();
+    wait_for("the link goes down", 10, || got_a.down.lock().unwrap().is_some());
+    let (why, taken) = got_a.down.lock().unwrap().clone().unwrap();
+    assert!(!taken, "a restart is no takeover: {why}");
+    wait_for("sb serve listens again", 15, || UnixStream::connect(home.window_sock()).is_ok() && home.serve_pid().is_some());
+    assert_eq!(home.serve_pid(), Some(pid), "the same process, started again in place");
+    let (b, _got_b) = connect(&home);
+    let panes = b.call("panes", json!({})).unwrap();
+    assert!(panes.as_array().unwrap().iter().any(|p| p["id"] == id), "the shell still runs: {panes}");
+    b.close();
+}

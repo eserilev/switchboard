@@ -1088,6 +1088,7 @@ Where the build differs from the text above:
 - Sandbox (31): a pane that starts again (resume, restart, a new connection) keeps the sandbox of its settings file, whatever the mode is now. A resumed Ask pane has no Ask mark in its start, so the mode alone would drop it.
 - Sandbox (31): the git paths in `denyWrite` are the real paths when the pane starts, not globs such as `modules/*/hooks`: Claude Code skips a glob in a write rule on Linux. So a submodule or a worktree added while the pane runs is not covered until the pane starts again. A `config.worktree` that is not there yet is listed only when `extensions.worktreeConfig` is on, since git reads it only then (and that setting lives in the closed `config`).
 - Repo context (37): built as 37 says. Not built yet: notes in Settings, URL sources, and the notes in the window's review panel.
+- Reconnect and restart (29.12): built as 29.12 says.
 - Today (39): built as 39 says, except 39.10. Tell Claude (39.12) is built. A live run against GitHub is `cargo test -p switchboard-core live_today -- --ignored --nocapture` (read only). In remote mode it runs on the server, with the server's `gh` login.
 - Pane tools (36): built, slice 1 (36.8): tasks, the board and the start note. Not built yet: the change feed and its Undo, the "sb" mark and call log on the tile, the switch in Settings (only the config key), review reads, and the Today writes (Done and Later from an agent). The Today reads are built (39.8). Checked on 2026-11-23 with Claude Code 2.1.330: an interactive pane loads the `--mcp-config` server with no "new MCP server" dialog, shows it connected with its 6 tools, and the user's own servers still load.
 - Sandbox (31): the `credentials` key of the sandbox is not used. `denyRead` and the permission deny rules cover the same folders, and an older Claude Code may not know the key.
@@ -1804,6 +1805,15 @@ An agent on a remote hub cannot read the clipboard of the window's machine. So t
 - `pane_image` takes PNG, JPEG, GIF and WebP, up to 32 MB. The hub writes the image to `~/.switchboard/paste/<seconds>-<nanoseconds>.<type>` with mode 0600, and types its path and a space into the pane as one bracketed paste, with no Enter. Claude Code shows the path as `[Image #N]`. A paste removes the images older than 7 days.
 - `pane_image` is in `dispatch::ORDERED`: the path lands after the keys typed before it.
 - Tests: `a_pasted_image_lands_on_the_hub_and_its_path_in_the_pane` (a real hub and tmux: the file, its mode, the path in the pane, no Enter, bad types and empty images refused, the sweep of old images). Window checks: an image paste calls `pane_image` for the live pane with the bytes; a paste with text and an image does not.
+
+### 29.12 Reconnect and restart
+
+- **Reconnect on its own.** A link that goes down connects again with no click: after 1 s, then 2, 4, 8, and every 15 s while it stays down. The banner says "Reconnecting on its own…", and Reconnect still works at once. `sb attach` starts `sb serve` when none runs, so a hub that stopped comes back with the link.
+- Not after a takeover: two windows would take the hub from each other for ever. "Take it back" stays a click.
+- **Restart** is in the host menu (a click on the host name in the top bar), also with no server in the config.
+  - Remote mode: **Restart the hub on <host>** and **Restart this app**. The hub restart sends `hub_restart`. `sb serve` answers, stops its review runs, and starts again in place with `exec`: the same pid, with the `sb` binary on disk now. So an install on the server takes effect with one click. The link drops, and the window links back on its own.
+  - Local mode: **Restart Switchboard**. The app starts again; its hub starts with it.
+  - Agents keep running in tmux. The new hub takes them over, as after any start.
 
 ## 30. Work environment
 
