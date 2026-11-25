@@ -943,8 +943,8 @@ fn signal_group(pid: u32, sig: libc::c_int) {
 
 /// How Claude writes anything the user reads, in every run and pane the app starts
 /// for itself. One line: it also goes through tmux.
-pub const WRITING: &str = "How to write: for a busy reader. Terse, plain English, no jargon. \
-Short sentences, one fact each. Name the exact file, line or thing. \
+pub const WRITING: &str = "How to write: for a busy reader who has not seen the code. Short, plain English, no jargon. \
+Short full sentences that follow from each other: keep because, so, but and when. Behavior first, then the code. Name the exact thing. \
 No recap, no praise, no filler, no hedging words. \
 No stock phrases such as ensures, robust, crucial, comprehensive, seamless, leverage, it matters because: say the specific fact. \
 If a term would be new to a newcomer, use a plainer word or explain it in a few words.";

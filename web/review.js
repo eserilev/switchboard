@@ -597,7 +597,7 @@
       <h4>${mdi(s.title)}</h4>
       ${s.what ? `<div class="what md">${md(s.what)}</div>` : ""}
       ${s.why ? `<p class="lead md">${mdi(whyLead(s.why))}</p>` : ""}
-      ${s.check?.length ? `<div class="cklabel">What Claude looked into</div><ul class="checks md">${s.check.map((c, i) => {
+      ${s.check?.length ? `<div class="cklabel">${s.check_answers?.length ? "What Claude looked into" : "For you to decide"}</div><ul class="checks md">${s.check.map((c, i) => {
         const a = s.check_answers?.[i] ? answerParts(s.check_answers[i]) : null;
         return `<li><span class="q">${mdi(c)}</span>${a ? `<span class="ans">${a.mark}${mdi(a.text)}</span>` : ""}</li>`;
       }).join("")}</ul>` : ""}

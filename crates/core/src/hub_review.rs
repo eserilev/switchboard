@@ -2973,8 +2973,8 @@ impl Hub {
         }
         let prompt = format!(
             "The PR has new commits. The head is now {}. The worktree is checked out at it. Changed files since {old}: {}. \
-             Read the new code. Call guide_set_steps with the full guide for the new head, with the whys, the check answers \
-             and the takes for the new code. Keep the id of each step \
+             Read the new code. Call guide_set_steps with the full guide for the new head, with the text \
+             and the takes for the new code, written by the same rules. Keep the id of each step \
              that still applies, so the reviewer keeps its notes. Every changed line of the new diff must be in a range. \
              Reply with one line when done.",
             f.head,
