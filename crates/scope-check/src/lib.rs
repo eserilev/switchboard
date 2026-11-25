@@ -46,27 +46,29 @@ pub const CLASS: u8 = 3;
 pub const ARGS: u8 = 4;
 
 /// Commands that only read.
-pub const READ_CMDS: &[u8] = b"panes mail_list mail_agents connections repos layouts \
-settings reviews review_prior review_chat review_view review_diff review_file_rows \
-review_context review_files review_file_diff review_drafts_text review_post_preview \
-tasks task_history today today_job today_repo_check";
+pub const READ_CMDS: &[u8] = b"panes mail_list mail_agents connections repos layouts settings reviews review_prior \
+review_chat review_view review_diff review_file_rows review_context review_files \
+review_file_diff review_drafts_text review_post_preview tasks task_history today \
+today_job today_repo_check review_step_note";
 
 /// Commands that change a review, a list or a mark, and post a review to GitHub.
 /// They run no agent and no program of yours.
-pub const REVIEW_CMDS: &[u8] = b"review_open review_open_local review_step_seen \
-review_dismiss review_mark review_pin review_draft review_pin_edit review_draft_edit \
-review_comment review_summary review_post review_update review_round review_range \
-review_mark_reviewed review_base review_base_update review_close review_retry \
-today_done today_later today_looked today_forget today_refresh pane_seen pane_rename \
-pane_reorder task_add task_edit task_status task_move task_delete task_copy \
-task_restore sprint_new sprint_edit sprint_close task_link task_unlink";
+pub const REVIEW_CMDS: &[u8] = b"review_open_local review_step_seen review_dismiss review_mark review_pin \
+review_draft review_pin_edit review_draft_edit review_comment review_summary \
+review_post review_range review_mark_reviewed review_base review_base_update \
+today_done today_later today_looked pane_seen pane_rename pane_reorder task_add \
+task_edit task_status task_move task_delete task_copy task_restore sprint_new \
+sprint_edit sprint_close task_link task_unlink";
 
-/// Runs of Claude that only read.
-pub const ASK_CMDS: &[u8] = b"review_ask review_retake review_restart review_step_note";
+/// Commands that start, or can start, a run of Claude that only reads: a guide, an
+/// answer, or the order of Today.
+pub const ASK_CMDS: &[u8] = b"review_ask review_retake review_open review_update review_round review_retry \
+today_forget today_refresh";
 
-/// Commands that make an agent act: free text to an agent with Bash, or a permit.
-pub const ACT_CMDS: &[u8] = b"permit_answer review_send_agent review_work pane_resume \
-connection_resume task_resume today_tell today_job_save today_job_remove";
+/// Commands that make an agent act (free text to an agent with Bash, or a permit),
+/// or that close its pane or drop its changes.
+pub const ACT_CMDS: &[u8] = b"permit_answer review_send_agent review_work pane_resume connection_resume \
+task_resume today_tell today_job_save today_job_remove review_restart review_close";
 
 /// Commands that show or type in a terminal.
 pub const TERMINAL_CMDS: &[u8] = b"pane_input pane_expand pane_attach pane_detach \
@@ -169,6 +171,15 @@ pub fn name_end(u: &[u8], from: usize) -> usize {
     u.len()
 }
 
+/// True when `u[from..to]` is `.` or `..`: a name that is not a GitHub name.
+/// Needs `from <= to <= u.len()`.
+pub fn dots(u: &[u8], from: usize, to: usize) -> bool {
+    if equal_at(u, from, to, b".") {
+        return true;
+    }
+    equal_at(u, from, to, b"..")
+}
+
 /// The end of the digits that start at `from`.
 pub fn digits_end(u: &[u8], from: usize) -> usize {
     let mut i = from;
@@ -202,6 +213,9 @@ pub fn pr_url_ok(u: &[u8]) -> bool {
     if o_end == o {
         return false;
     }
+    if dots(u, o, o_end) {
+        return false;
+    }
     if o_end >= u.len() {
         return false;
     }
@@ -211,6 +225,9 @@ pub fn pr_url_ok(u: &[u8]) -> bool {
     let r = o_end + 1;
     let r_end = name_end(u, r);
     if r_end == r {
+        return false;
+    }
+    if dots(u, r, r_end) {
         return false;
     }
     if u.len() - r_end < PULL.len() {

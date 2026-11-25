@@ -53,6 +53,17 @@ fn a_device_needs_the_class() {
     assert_eq!(check(DEVICE, 0, b"panes", b""), CLASS);
 }
 
+/// A phone with no `ask` starts no run of Claude, and one with no `act` closes no pane.
+#[test]
+fn runs_and_closes_have_their_class() {
+    for n in ["review_open", "review_update", "review_round", "review_retry", "review_retake", "review_ask", "today_forget", "today_refresh"] {
+        assert_eq!(class_of(n.as_bytes()), ASK, "{n}");
+    }
+    for n in ["review_restart", "review_close", "today_tell"] {
+        assert_eq!(class_of(n.as_bytes()), ACT, "{n}");
+    }
+}
+
 #[test]
 fn more_classes_never_refuse_more() {
     for n in names() {
@@ -85,6 +96,9 @@ fn review_open_takes_only_a_pr_url_from_a_device() {
     assert!(!ok("https://github.com/o"));
     assert!(!ok("https://github.com/o/r"));
     assert!(!ok("https://github.com/o/r/pull"));
+    assert!(!ok("https://github.com/../r/pull/1"));
+    assert!(!ok("https://github.com/o/../pull/1"));
+    assert!(ok("https://github.com/o/.github/pull/1"));
     assert!(!ok("file:///etc/passwd"));
     // A trusted window keeps what the hub accepts.
     assert_eq!(check(TRUSTED, 0, b"review_open", b"github.com/o/r/pull/1"), OK);
