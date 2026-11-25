@@ -1071,7 +1071,7 @@ Where the build differs from the text above:
   - Every window of `sb serve`'s socket is trusted: whoever reaches the socket already runs as you. A device window comes only from the Noise listener.
   - Built: the session (41.5) in `crates/session`, and the listener in `devices.rs`. It is off until `[devices] listen = "<ip>:<port>"` names one address; `sb serve` reads it at its start. `0.0.0.0` and the like are refused. This is the exception to "nothing listens on a network port" (29). The app's own hub does not listen.
   - The session has no `Rekey()`: it ends after 2^20 chunks one way or after an hour, and the device makes a new handshake. The "more" flag takes one byte, so a chunk holds 65,518 bytes of data. The device id goes in the clear before message 1, because the prologue needs it; the hub's public key is its id until the relay gives one. The join of chunks is not a proved crate yet (`record`, step 3).
-  - Before each command, the hub reads the device's row: a revoke, another generation or a changed class holds at once. `RemoteSink::end_device` also closes an open session; nothing calls it yet, so until Remove a device is built, a revoked session can still get events until its next command or its hour ends.
+  - Before each command, the hub reads the device's row: a revoke, another generation or a changed class holds at once. The hub also looks at the list each second while it listens, and closes the sessions of removed devices (`end_unlisted`).
   - Events by class: a device with `read` gets the list `READ_EVENTS` in `remote.rs`, also in a replay; it gets no other event. Ask streams go to every device with `read`, not only to the one that asked.
   - A device's hello needs the same protocol number, not the same version. Version ranges and feature flags are not built.
   - Built: 4 commands at once per device window. Not built: the limits on runs of Claude.
@@ -1079,7 +1079,9 @@ Where the build differs from the text above:
   - A device's `review_open` takes only `https://github.com/<owner>/<repo>/pull/<n>`, then nothing or a `/`, `#` or `?`. A trusted window keeps the looser parser of the hub.
   - Built: the `device` table (store version 16). A revoked row stays, so its key never pairs again; a revoke raises the generation.
   - The hub's key is `device.key` in the data folder, beside the store, not in `~/.switchboard`. Every new agent pane denies the Read and Edit tools that folder. Only the sandbox denies Bash reads of it: with no sandbox, Bash can still read it (41.12).
-  - Not built yet: pairing (IPC and `sb pair`), Remove a device, `models/pairing.qnt`, and idempotency keys. Until pairing is built, no device is on the list, so no device can connect.
+  - Built: QR pairing as `sb pair`, and `sb devices [remove <id>]`. `sb pair` does all of it in its own process: it listens on a free port of the `[devices]` address, asks on `/dev/tty`, and writes the store. So no socket command pairs a device. It reads no answer from stdin, and refuses to run inside Claude Code (an environment check: it stops an agent in good faith, not one with Bash, no sandbox and its own terminal). The QR names the hub's key, not a relay. The check code is 6 digits of the handshake hash. The secret is used up by the first frame that opens, so a phone with a wrong secret spends nothing.
+  - `models/pairing.qnt` has P1 to P5. It has no code pairing (CPace), which comes with the relay.
+  - Not built yet: Add a phone and Remove in the window, `sb devices` for classes, limits on runs of Claude, and idempotency keys.
 
 - `time` in a state message is seconds since the Unix epoch.
 - `idle_end_minutes` is 0 (off) by default. Ending a session is safe, because the tile resumes it, but it is a surprise the first time.

@@ -554,9 +554,16 @@ fn a_device_runs_only_its_classes_and_a_revoke_ends_it() {
     assert!(db.device_classes_set("d1", scope_check::REVIEW).unwrap());
     assert!(p.call("panes", json!({})).unwrap().unwrap_err().contains("may not"));
 
-    // After a revoke, the open session runs nothing, and no new one starts.
-    db.device_revoke("d1", 5).unwrap();
-    assert!(p.call("review_summary", json!({ "id": "r1", "text": "x" })).is_err());
+    // After a remove, the open session closes with no command from the phone, and no new one starts.
+    assert!(home.cmd(&["devices", "remove", "d1"]).status().unwrap().success());
+    let end = Instant::now() + Duration::from_secs(4);
+    let err = loop {
+        assert!(Instant::now() < end, "the session stayed open");
+        if let Err(e) = p.recv() {
+            break e;
+        }
+    };
+    assert!(!matches!(err.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut), "{err}");
     assert!(Phone::connect(port, &me, "d1", &hub, "y").is_err());
     assert!(desk.is_up() && desk.call("panes", json!({})).is_ok());
 }
@@ -599,4 +606,26 @@ fn a_device_that_gives_two_lines_in_one_frame_is_cut() {
         }
     }
     panic!("the link stayed open");
+}
+
+/// `sb pair` needs your terminal: an agent, or a program with no terminal, gets none.
+#[test]
+fn pairing_needs_a_terminal() {
+    use std::os::unix::process::CommandExt;
+    let home = Home::new("pair");
+    let mut c = home.cmd(&["pair"]);
+    c.env("CLAUDECODE", "1");
+    let out = c.output().unwrap();
+    assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("your own terminal"));
+    let mut c = home.cmd(&["pair"]);
+    c.env_remove("CLAUDECODE").stdin(Stdio::null());
+    // SAFETY: setsid is async-signal-safe. With a new session there is no terminal.
+    unsafe {
+        c.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let out = c.output().unwrap();
+    assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("needs a terminal"), "{out:?}");
 }

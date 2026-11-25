@@ -43,6 +43,88 @@ pub fn keypair() -> io::Result<KeyPair> {
     Ok(KeyPair { private: k.private, public: k.public })
 }
 
+/// 32 random bytes of the system.
+pub fn secret() -> io::Result<[u8; 32]> {
+    let mut s = [0; 32];
+    getrandom::fill(&mut s).map_err(bad)?;
+    Ok(s)
+}
+
+pub fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+pub fn unhex(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+}
+
+const PAIR: &str = "Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
+
+fn pair_prologue(hub: &[u8]) -> Vec<u8> {
+    [b"switchboard/1 pair".as_slice(), hub].concat()
+}
+
+/// The 6 digits that both screens show, from the hash of the handshake.
+fn check_code(hash: &[u8]) -> String {
+    let n = u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]]);
+    format!("{:06}", n % 1_000_000)
+}
+
+/// The hub's end of a pairing (SPEC 41.4): the phone's key, the check code, and the
+/// session. The phone proved nothing yet: its first frame does.
+pub fn pair_accept(s: &mut (impl Read + Write), hub: &KeyPair, psk: &[u8; 32]) -> io::Result<(Vec<u8>, String, Sealer, Opener)> {
+    let p = pair_prologue(&hub.public);
+    let mut hs = Builder::new(PAIR.parse().map_err(bad)?)
+        .local_private_key(&hub.private)
+        .map_err(bad)?
+        .prologue(&p)
+        .map_err(bad)?
+        .psk(2, psk)
+        .map_err(bad)?
+        .build_responder()
+        .map_err(bad)?;
+    let mut buf = [0u8; 256];
+    let m1 = read_msg(s, 256)?;
+    if hs.read_message(&m1, &mut buf).map_err(bad)? != 0 {
+        return Err(bad("message 1 carries data"));
+    }
+    let key = hs.get_remote_static().ok_or_else(|| bad("no device key"))?.to_vec();
+    let n = hs.write_message(&[], &mut buf).map_err(bad)?;
+    write_msg(s, &buf[..n])?;
+    let code = check_code(hs.get_handshake_hash());
+    let (seal, open) = finish(hs)?;
+    Ok((key, code, seal, open))
+}
+
+/// The phone's end of a pairing. `hub` and `psk` come from the QR code.
+pub fn pair_connect(s: &mut (impl Read + Write), me: &KeyPair, hub: &[u8], psk: &[u8; 32]) -> io::Result<(String, Sealer, Opener)> {
+    let p = pair_prologue(hub);
+    let mut hs = Builder::new(PAIR.parse().map_err(bad)?)
+        .local_private_key(&me.private)
+        .map_err(bad)?
+        .remote_public_key(hub)
+        .map_err(bad)?
+        .prologue(&p)
+        .map_err(bad)?
+        .psk(2, psk)
+        .map_err(bad)?
+        .build_initiator()
+        .map_err(bad)?;
+    let mut buf = [0u8; 256];
+    let n = hs.write_message(&[], &mut buf).map_err(bad)?;
+    write_msg(s, &buf[..n])?;
+    let m2 = read_msg(s, 256)?;
+    if hs.read_message(&m2, &mut buf).map_err(bad)? != 0 {
+        return Err(bad("message 2 carries data"));
+    }
+    let code = check_code(hs.get_handshake_hash());
+    let (seal, open) = finish(hs)?;
+    Ok((code, seal, open))
+}
+
 /// `"switchboard/1" ‖ hub key ‖ len of the device id ‖ device id ‖ role`. The hub
 /// key is its id until the relay gives one. The length keeps the fields apart.
 fn prologue(hub: &[u8], device: &str) -> Vec<u8> {

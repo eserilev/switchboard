@@ -28,6 +28,7 @@ pub mod mail;
 pub mod memory;
 pub mod mentions;
 pub mod nvim;
+pub mod pairing;
 pub mod paths;
 pub mod post;
 pub mod proto;

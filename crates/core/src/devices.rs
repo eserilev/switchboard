@@ -58,6 +58,16 @@ pub fn address(listen: &str) -> Result<SocketAddr, String> {
     Ok(a)
 }
 
+/// Closes the sessions of removed devices. `sb devices remove` writes only the
+/// store, so the hub looks there.
+fn watch(hub: Weak<Hub>, sink: Arc<RemoteSink>) {
+    while let Some(h) = hub.upgrade() {
+        sink.end_unlisted(&h);
+        drop(h);
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
 /// Listens for devices until the hub goes. The address can come later (Tailscale
 /// starts after the hub): it tries again.
 pub fn serve(listen: &str, hub: Weak<Hub>, sink: Arc<RemoteSink>) -> Result<(), String> {
@@ -66,6 +76,10 @@ pub fn serve(listen: &str, hub: Weak<Hub>, sink: Arc<RemoteSink>) -> Result<(), 
         let h = hub.upgrade().ok_or("the hub is gone")?;
         Arc::new(hub_key(&h.paths)?)
     };
+    {
+        let (hub, sink) = (hub.clone(), Arc::clone(&sink));
+        std::thread::spawn(move || watch(hub, sink));
+    }
     std::thread::spawn(move || {
         let opening = Arc::new(AtomicUsize::new(0));
         while hub.strong_count() > 0 {
@@ -117,7 +131,7 @@ fn accept_all(l: &TcpListener, hub: &Weak<Hub>, sink: &Arc<RemoteSink>, key: &Ar
 }
 
 /// A stream that fails past a time, however slowly its bytes come.
-struct Until<'a>(&'a TcpStream, Instant);
+pub(crate) struct Until<'a>(pub &'a TcpStream, pub Instant);
 
 impl Read for Until<'_> {
     fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {

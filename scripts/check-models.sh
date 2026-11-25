@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Check the Quint models: the permission flow (SPEC 25), review close (SPEC 26),
-# the load cycle of a local review (SPEC 26.1) and several windows (SPEC 29, 41.8).
+# the load cycle of a local review (SPEC 26.1) several windows (SPEC 29, 41.8) and pairing (SPEC 41.4).
 # SAMPLES sets the number of random runs for each step profile (default 100000).
 # STEPS sets the length of each run (default 50).
 set -euo pipefail
@@ -121,4 +121,26 @@ must_fail --init=initAnyAnswer --step=step --invariant=Always
 must_fail --step=stepNoScreenLock --invariant=Always
 must_fail --step=stepPause --invariant=Always
 must_fail --step=stepNoLogLock --invariant=Always
+
+# Pairing, sessions and removal of devices (SPEC 41.4). Each old step has one
+# check off, and must break the invariant of that check.
+quint typecheck pairing.qnt
+echo "== pairing step: $samples runs of $steps steps"
+quint run pairing.qnt --step=step --invariants Always \
+    --max-samples="$samples" --max-steps="$steps" --verbosity=1
+pairing_must_fail() {
+    if quint run pairing.qnt --step="$1" --invariant="$2" --max-samples="$samples" \
+        --max-steps="$steps" --verbosity=0 > /dev/null 2>&1; then
+        echo "error: pairing $1 $2 passed: the model lost that path" >&2
+        exit 1
+    fi
+    echo "== pairing $1 $2 fails, as it must"
+}
+for w in NoRun NoRaceClosed NoReturn; do
+    pairing_must_fail step "$w"
+done
+pairing_must_fail stepManyUses OneUse
+pairing_must_fail stepNoMode OnlyInMode
+pairing_must_fail stepPairAgain NeverAgain
+pairing_must_fail stepNoCheck NothingLate
 echo "models ok"

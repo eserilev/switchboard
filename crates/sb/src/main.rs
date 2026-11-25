@@ -56,6 +56,8 @@ fn main() {
         Some("resume") => resume(&args[1..]),
         Some("serve") => serve(),
         Some("attach") => attach(),
+        Some("pair") => pair(),
+        Some("devices") => devices(&args[1..]),
         Some("connect") if args.get(1).map(String::as_str) == Some("add") => {
             connect_add(&args[2..])
         }
@@ -64,7 +66,7 @@ fn main() {
             0
         }
         _ => {
-            eprintln!("usage: sb open [path] [-w branch] [--nvim|--shell]\n       sb context [path]   (the repo notes an agent here gets)\n       sb today [job]      (what needs you on GitHub, ranked)\n       {TASK_USAGE}\n       sb connect add <name> [--endpoint <url> --model <m> --token <keyring:name>]\n       sb serve      (the hub for remote windows)\n       sb attach     (a remote window's link; starts sb serve when none runs)");
+            eprintln!("usage: sb open [path] [-w branch] [--nvim|--shell]\n       sb context [path]   (the repo notes an agent here gets)\n       sb today [job]      (what needs you on GitHub, ranked)\n       {TASK_USAGE}\n       sb connect add <name> [--endpoint <url> --model <m> --token <keyring:name>]\n       sb serve      (the hub for remote windows)\n       sb attach     (a remote window's link; starts sb serve when none runs)\n       sb pair       (adds a phone)\n       sb devices [remove <id>]");
             2
         }
     };
@@ -745,6 +747,102 @@ fn start_app() -> std::io::Result<()> {
     .stderr(std::process::Stdio::null())
     .spawn()
     .map(drop)
+}
+
+/// Your terminal, or a message why not. Never stdin: a pipe can not answer.
+fn terminal() -> Result<std::fs::File, String> {
+    // Not a wall, since an agent with Bash and no sandbox runs as you (SPEC 41.12):
+    // it stops one that tries in good faith.
+    if std::env::var_os("CLAUDECODE").is_some() {
+        return Err("run this yourself, in your own terminal".into());
+    }
+    std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty").map_err(|e| format!("needs a terminal: {e}"))
+}
+
+fn ask_line(tty: &std::fs::File, text: &str) -> Result<String, String> {
+    use std::io::{BufRead, Write};
+    let mut w = tty;
+    write!(w, "{text}").and_then(|()| w.flush()).map_err(|e| e.to_string())?;
+    let mut line = String::new();
+    std::io::BufReader::new(tty).read_line(&mut line).map_err(|e| e.to_string())?;
+    Ok(line.trim().to_owned())
+}
+
+/// Adds a phone (SPEC 41.4): shows a QR code, then asks you.
+fn pair() -> i32 {
+    match pair_run() {
+        Ok(()) => 0,
+        Err(err) => {
+            eprintln!("sb pair: {err}");
+            1
+        }
+    }
+}
+
+fn pair_run() -> Result<(), String> {
+    use std::io::Write;
+    use switchboard_core::{config::Config, devices, pairing, store::Store};
+    let tty = terminal()?;
+    let paths = Paths::from_env();
+    let listen = Config::load(&paths.config)?.devices.listen.ok_or(format!(
+        "no address for phones. Put this in {}, with an address of this computer that the phone reaches, then restart sb serve:\n\n[devices]\nlisten = \"100.x.y.z:7800\"",
+        paths.config.display()
+    ))?;
+    let hub = devices::address(&listen)?;
+    let key = devices::hub_key(&paths)?;
+    let store = Store::open(&paths.store()).map_err(|e| e.to_string())?;
+    let p = pairing::Pairing::open(hub.ip())?;
+    let qr = p.qr(hub, &key.public)?;
+    let code = qrcode::QrCode::new(&qr).map_err(|e| e.to_string())?;
+    let art = code.render::<qrcode::render::unicode::Dense1x2>().build();
+    // Black on white on any terminal: a scanner can miss an inverted code.
+    let art: String = art.lines().map(|l| format!("\x1b[38;5;16;48;5;231m{l}\x1b[0m\n")).collect();
+    writeln!(&tty, "{art}\nScan this with the Switchboard app on your phone. It works once, for 10 minutes.").map_err(|e| e.to_string())?;
+    let asking = p.wait(key, pairing::OPEN_FOR).ok_or("no phone came in 10 minutes")?;
+    writeln!(&tty, "\n\"{}\" asks to pair. Its screen must show this code:\n\n    {}\n", asking.name, asking.code).map_err(|e| e.to_string())?;
+    let yes = ask_line(&tty, "Does the phone show the same code? Type yes to allow it: ")?;
+    if yes != "yes" {
+        asking.refuse();
+        return Err("refused. Nothing was added.".into());
+    }
+    let name = ask_line(&tty, &format!("A name for it [{}]: ", asking.name))?;
+    let name = if name.is_empty() { asking.name.clone() } else { name };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let id = asking.allow(&store, &name, now)?;
+    println!("{name} is paired, as {id}. Remove it with: sb devices remove {id}");
+    Ok(())
+}
+
+/// Lists the devices, or removes one. The hub closes its sessions within seconds.
+fn devices(args: &[String]) -> i32 {
+    use switchboard_core::store::Store;
+    let run = || -> Result<(), String> {
+        let store = Store::open(&Paths::from_env().store()).map_err(|e| e.to_string())?;
+        match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+            [] => {
+                for d in store.devices().map_err(|e| e.to_string())? {
+                    let state = if d.revoked_at.is_some() { "removed" } else { "paired" };
+                    println!("{}  {state}  {}  {}", d.id, d.platform, d.name);
+                }
+                Ok(())
+            }
+            // Removing only takes rights away, so it asks nothing.
+            ["remove", id] => {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                store.device_revoke(id, now).map_err(|e| e.to_string())?.ok_or(format!("no device {id}"))?;
+                println!("{id} is removed.");
+                Ok(())
+            }
+            _ => Err("usage: sb devices [remove <id>]".into()),
+        }
+    };
+    match run() {
+        Ok(()) => 0,
+        Err(err) => {
+            eprintln!("sb devices: {err}");
+            1
+        }
+    }
 }
 
 fn connect_add(args: &[String]) -> i32 {

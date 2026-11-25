@@ -216,10 +216,11 @@ impl RemoteSink {
         self.keys.lock().unwrap().iter().find(|(_, k)| **k == key).map(|(p, _)| p.clone())
     }
 
-    /// Closes the sessions of a device. Call it after the store has the revoke.
-    pub fn end_device(&self, id: &str) {
+    /// Closes the sessions of devices that are not on the list any more.
+    pub fn end_unlisted(&self, hub: &Hub) {
         for c in self.all() {
-            if c.device.as_ref().is_some_and(|d| d.id == id) {
+            if !c.listed(hub) {
+                tracing::info!(target: "sb::remote", epoch = c.epoch, "the device is not listed any more");
                 c.close();
             }
         }
