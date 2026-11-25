@@ -636,7 +636,8 @@ module windows {
   // A window came back and got a replay of at least one event it missed.
   val NoReplay = s.replayed == 0
 
-  // The same, after a fresh screen of a pane that two windows showed: W6 then
+  // The same, after a fresh screen of a pane that two windows showed. A fixed trace
+  // of windows_test.qnt reaches it, not the random runs: W6 then
   // checks both windows on that path.
   val NoQuietShareAfterResync = not(s.shared > 0) or NoQuietShare
 

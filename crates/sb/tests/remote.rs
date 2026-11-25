@@ -453,3 +453,150 @@ fn a_restart_keeps_the_pid_and_the_panes() {
     assert!(panes.as_array().unwrap().iter().any(|p| p["id"] == id), "the shell still runs: {panes}");
     b.close();
 }
+
+/// A fake phone: a session over TCP, and the lines of the window protocol in it.
+struct Phone {
+    tcp: std::net::TcpStream,
+    seal: session::Sealer,
+    open: session::Opener,
+    n: u64,
+    events: Vec<Value>,
+}
+
+impl Phone {
+    fn connect(port: u16, me: &session::KeyPair, id: &str, hub: &[u8], instance: &str) -> std::io::Result<Phone> {
+        let mut tcp = std::net::TcpStream::connect(("127.0.0.1", port))?;
+        tcp.set_read_timeout(Some(Duration::from_secs(5)))?;
+        let (seal, open) = session::connect(&mut tcp, me, id, hub)?;
+        let mut p = Phone { tcp, seal, open, n: 0, events: vec![] };
+        p.send(&json!({ "hello": { "proto": remote::PROTO, "version": "9.9.9", "instance": instance } }))?;
+        let h = p.recv()?;
+        assert_eq!(h["hello"]["ok"], true, "{h}");
+        Ok(p)
+    }
+
+    fn send(&mut self, v: &Value) -> std::io::Result<()> {
+        self.seal.send(&mut self.tcp, v.to_string().as_bytes())
+    }
+
+    fn recv(&mut self) -> std::io::Result<Value> {
+        let f = self.open.recv(&mut self.tcp, session::MAX_NEWS)?;
+        Ok(serde_json::from_slice(&f).unwrap())
+    }
+
+    /// The answer of a command. The events before it are kept.
+    fn call(&mut self, cmd: &str, args: Value) -> std::io::Result<Result<Value, String>> {
+        self.n += 1;
+        let id = self.n;
+        self.send(&json!({ "id": id, "cmd": cmd, "args": args }))?;
+        loop {
+            let v = self.recv()?;
+            if v["id"] == id {
+                return Ok(match v["err"].as_str() {
+                    Some(e) => Err(e.to_owned()),
+                    None => Ok(v["ok"].clone()),
+                });
+            }
+            self.events.push(v);
+        }
+    }
+}
+
+#[test]
+fn a_device_runs_only_its_classes_and_a_revoke_ends_it() {
+    use switchboard_core::{paths::Paths, store};
+    let home = Home::new("device");
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let paths = Paths::under(home.root.clone());
+    std::fs::write(&paths.config, format!("[devices]\nlisten = \"127.0.0.1:{port}\"\n")).unwrap();
+    let instance = format!("desktop-{}", std::process::id());
+    let (desk, desk_got) = connect_as(&home, &instance);
+    let hub = switchboard_core::devices::hub_key(&paths).unwrap().public;
+    let (me, stranger) = (session::keypair().unwrap(), session::keypair().unwrap());
+    let db = store::Store::open(&paths.store()).unwrap();
+    db.device_add(&store::Device {
+        id: "d1".into(),
+        name: "phone".into(),
+        platform: "ios".into(),
+        session_key: me.public.clone(),
+        push_key: None,
+        classes: scope_check::PHONE,
+        paired_at: 1,
+        last_seen: None,
+        revoked_at: None,
+        generation: 0,
+    })
+    .unwrap();
+    wait_for("the listener", 10, || std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+
+    // A key that is not listed, and a listed key with another id, get no session.
+    assert!(Phone::connect(port, &stranger, "d1", &hub, "x").is_err());
+    assert!(Phone::connect(port, &me, "d2", &hub, "x").is_err());
+
+    // With the desktop's instance id, the phone does not cut the desktop.
+    let mut p = Phone::connect(port, &me, "d1", &hub, &instance).unwrap();
+    assert!(p.call("panes", json!({})).unwrap().is_ok());
+    assert!(p.call("pane_open", json!({})).unwrap().unwrap_err().contains("only on the computer"));
+    assert!(p.call("pane_input", json!({})).unwrap().unwrap_err().contains("may not"));
+    assert!(p.call("review_open", json!({ "url": "https://evil.example/o/r/pull/1" })).unwrap().unwrap_err().contains("arguments"));
+    assert!(db.device("d1").unwrap().unwrap().last_seen.is_some());
+
+    // The desktop opens and shows a pane: the phone gets the pane event and no bytes.
+    let pane = open_shell(&desk, &home);
+    desk.call("pane_expand", json!({ "id": pane })).unwrap();
+    desk.call("pane_input", json!({ "id": pane, "data": "echo se''cret\r", "binary": false })).unwrap();
+    wait_for("the desktop sees the bytes", 10, || desk_got.output_of(&pane).contains("secret"));
+    assert!(p.call("panes", json!({})).unwrap().is_ok());
+    assert!(p.events.iter().any(|e| e["event"] == "panes" || e["event"] == "pane"), "{:?}", p.events);
+    assert!(!p.events.iter().any(|e| e["event"] == "pane_output"), "{:?}", p.events);
+
+    // A class that goes away on the computer holds at the next command.
+    assert!(db.device_classes_set("d1", scope_check::REVIEW).unwrap());
+    assert!(p.call("panes", json!({})).unwrap().unwrap_err().contains("may not"));
+
+    // After a revoke, the open session runs nothing, and no new one starts.
+    db.device_revoke("d1", 5).unwrap();
+    assert!(p.call("review_summary", json!({ "id": "r1", "text": "x" })).is_err());
+    assert!(Phone::connect(port, &me, "d1", &hub, "y").is_err());
+    assert!(desk.is_up() && desk.call("panes", json!({})).is_ok());
+}
+
+#[test]
+fn a_device_that_gives_two_lines_in_one_frame_is_cut() {
+    use switchboard_core::{paths::Paths, store};
+    let home = Home::new("device2");
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let paths = Paths::under(home.root.clone());
+    std::fs::write(&paths.config, format!("[devices]\nlisten = \"127.0.0.1:{port}\"\n")).unwrap();
+    let (_desk, _got) = connect(&home);
+    let hub = switchboard_core::devices::hub_key(&paths).unwrap().public;
+    let me = session::keypair().unwrap();
+    let db = store::Store::open(&paths.store()).unwrap();
+    let d = store::Device {
+        id: "d1".into(),
+        name: "phone".into(),
+        platform: String::new(),
+        session_key: me.public.clone(),
+        push_key: None,
+        classes: scope_check::PHONE,
+        paired_at: 1,
+        last_seen: None,
+        revoked_at: None,
+        generation: 0,
+    };
+    db.device_add(&d).unwrap();
+    wait_for("the listener", 10, || std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+    let mut p = Phone::connect(port, &me, "d1", &hub, "a").unwrap();
+    p.seal.send(&mut p.tcp, b"{\"id\":1,\"cmd\":\"panes\"}\n{\"id\":2,\"cmd\":\"panes\"}").unwrap();
+    let end = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < end {
+        match p.recv() {
+            Ok(v) => assert!(v.get("id").is_none(), "{v}"),
+            Err(e) => {
+                assert!(!matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut), "the link stayed open");
+                return;
+            }
+        }
+    }
+    panic!("the link stayed open");
+}

@@ -485,6 +485,11 @@ impl Store {
         Ok(self.device_rows("SELECT * FROM device WHERE session_key = ?1", &[&key])?.pop())
     }
 
+    /// The device with this id, revoked or not.
+    pub fn device(&self, id: &str) -> R<Option<Device>> {
+        Ok(self.device_rows("SELECT * FROM device WHERE id = ?1", &[&id])?.pop())
+    }
+
     /// Revokes a device and raises its generation: a session that checks it runs
     /// nothing more. Returns the new generation, or `None` for an unknown device.
     pub fn device_revoke(&self, id: &str, at: u64) -> R<Option<u64>> {

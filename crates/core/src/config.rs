@@ -24,6 +24,8 @@ pub struct Config {
     pub machine: Option<String>,
     /// Your own notes for each repo, by `owner/name` (SPEC 37).
     pub repos: BTreeMap<String, RepoCfg>,
+    /// Device windows (SPEC 41).
+    pub devices: DevicesCfg,
     /// Today (SPEC 39): what needs you on GitHub.
     pub today: crate::today::TodayCfg,
     /// Remote mode (SPEC 29): the ssh host of the hub, for example `me@box`. With
@@ -237,6 +239,14 @@ pub struct PaneToolsCfg {
     pub enabled: bool,
 }
 
+/// The `[devices]` table (SPEC 41).
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct DevicesCfg {
+    /// The one address, `<ip>:<port>`, where `sb serve` takes device sessions. With none, it takes none.
+    pub listen: Option<String>,
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields, default)]
 pub struct MessagesCfg {
@@ -271,6 +281,7 @@ impl Default for Config {
             messages: MessagesCfg::default(),
             machine: None,
             repos: BTreeMap::new(),
+            devices: DevicesCfg::default(),
             today: crate::today::TodayCfg::default(),
             remote: None,
             remote_off: false,

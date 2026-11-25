@@ -32,6 +32,21 @@ module windows_test {
       .then(Resync(1))
       .expect(s.streaming.get("A") and s.emu.get("A").on and s.filled == 1 and s.shared == 1)
 
+  // One step that only empties what is in flight, in any order.
+  action drain = any {
+    Read, Redraw("A"), Write(1), Write(2), Resync(1), Resync(2), WinRead(1), WinRead(2),
+    all { quiet, s' = s },
+  }
+
+  // After that fresh screen, all goes quiet with both windows on the pane, and
+  // every invariant holds there (W6 too, in the runs with `redraws`). Random runs almost never get here: 0 of
+  // 10 runs of 100,000 samples did. The test tries many orders of the steps.
+  run bothWindowsAreFreshAfterASharedResyncTest =
+    init.then(dropInOne)
+      .then(Resync(1))
+      .then(40.reps(_ => drain))
+      .expect(s.shared >= 1 and quiet and not(NoQuietShareAfterResync) and Always)
+
   // The fresh screen of remote.qnt paused pane A: window 2 then gets no bytes of it.
   run thePauseStopsTheOtherWindowTest =
     init.then(dropInOne)

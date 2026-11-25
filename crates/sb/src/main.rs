@@ -295,6 +295,12 @@ fn serve() -> i32 {
         let (hub, sink) = (Arc::downgrade(&hub), sink.clone());
         std::thread::spawn(move || remote::serve(listener, hub, sink));
     }
+    if let Some(listen) = hub.config().devices.listen.clone() {
+        if let Err(err) = switchboard_core::devices::serve(&listen, Arc::downgrade(&hub), sink.clone()) {
+            tracing::error!(target: "sb::devices", %err, "no device listener");
+            eprintln!("sb serve: {err}");
+        }
+    }
     while !STOP.load(std::sync::atomic::Ordering::SeqCst) && !hub.restart_asked() {
         std::thread::sleep(Duration::from_millis(200));
     }

@@ -32,7 +32,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::Duration;
@@ -91,14 +91,38 @@ pub fn hello_problem(v: &Value) -> Option<String> {
     None
 }
 
+/// The commands that one device window runs at once, at most.
+pub const MAX_RUNNING: usize = 4;
+
+/// The device of a window, as its session started.
+pub struct Device {
+    pub id: String,
+    pub generation: u64,
+    pub classes: u8,
+}
+
+/// The events a device with `read` gets. A device gets no other event: an event of
+/// one window (`focus`), and the errors of other windows, are not for it.
+const READ_EVENTS: &[&str] = &[
+    "connections", "mail", "mail_agents", "pane", "panes", "review", "review_cleanup", "review_closed",
+    "review_stream", "tasks", "today",
+];
+
+fn device_gets(classes: u8, event: &str) -> bool {
+    classes & scope_check::READ != 0 && READ_EVENTS.contains(&event)
+}
+
 /// One window on the socket.
 struct Conn {
     epoch: u64,
     /// The instance id of its hello, or empty.
     instance: String,
-    /// `scope_check::TRUSTED` or `DEVICE`, and the classes of a device (SPEC 41.7).
-    origin: u8,
-    classes: u8,
+    /// The device behind the window. With none, the window is trusted (SPEC 41.7).
+    device: Option<Device>,
+    /// The classes of the device, as of its last check.
+    classes: AtomicU8,
+    /// The commands of a device that run now.
+    running: AtomicUsize,
     stream: UnixStream,
     lines: Mutex<VecDeque<String>>,
     out: Mutex<outq::Queue>,
@@ -115,6 +139,23 @@ impl Conn {
     fn ring(&self) {
         *self.pending.lock().unwrap() = true;
         self.wake.notify_one();
+    }
+
+    fn gets(&self, event: &str) -> bool {
+        self.device.is_none() || device_gets(self.classes.load(Ordering::SeqCst), event)
+    }
+
+    /// Whether the window may go on: a trusted one always, a device while it is on
+    /// the list with the generation its session started with.
+    fn listed(&self, hub: &Hub) -> bool {
+        let Some(d) = &self.device else { return true };
+        match hub.device(&d.id).filter(|r| r.revoked_at.is_none() && r.generation == d.generation) {
+            Some(r) => {
+                self.classes.store(r.classes, Ordering::SeqCst);
+                true
+            }
+            None => false,
+        }
     }
 
     fn line(&self, v: &Value) {
@@ -175,6 +216,15 @@ impl RemoteSink {
         self.keys.lock().unwrap().iter().find(|(_, k)| **k == key).map(|(p, _)| p.clone())
     }
 
+    /// Closes the sessions of a device. Call it after the store has the revoke.
+    pub fn end_device(&self, id: &str) {
+        for c in self.all() {
+            if c.device.as_ref().is_some_and(|d| d.id == id) {
+                c.close();
+            }
+        }
+    }
+
     /// The number of windows attached.
     pub fn windows(&self) -> usize {
         self.conns.lock().unwrap().len()
@@ -186,14 +236,15 @@ impl Sink for RemoteSink {
         let mut log = self.log.lock().unwrap();
         let boot = log.boot;
         let (_, line) = log.record(event, &payload, |n| json!({ "event": event, "payload": payload, "seq": [boot, n] }).to_string());
-        for c in self.all() {
+        for c in self.all().into_iter().filter(|c| c.gets(event)) {
             c.line_str(line.clone());
         }
     }
 
     fn output(&self, pane: &str, data: &[u8]) {
         let key = self.key(pane);
-        for c in self.all() {
+        // A device gets the bytes of its own screen only (`output_to`).
+        for c in self.all().into_iter().filter(|c| c.device.is_none()) {
             outq::push(&mut c.out.lock().unwrap(), key, data);
             c.ring();
         }
@@ -240,11 +291,13 @@ pub fn serve(listener: UnixListener, hub: Weak<Hub>, sink: Arc<RemoteSink>) {
     for stream in listener.incoming().flatten() {
         let Some(h) = hub.upgrade() else { break };
         let sink = Arc::clone(&sink);
-        std::thread::spawn(move || window(h, sink, stream));
+        std::thread::spawn(move || window(h, sink, stream, None));
     }
 }
 
-fn window(hub: Arc<Hub>, sink: Arc<RemoteSink>, stream: UnixStream) {
+/// One window, until its link ends. `device` is the device behind it, or none for
+/// the hub's own socket: whoever reaches that runs as you already.
+pub(crate) fn window(hub: Arc<Hub>, sink: Arc<RemoteSink>, stream: UnixStream, device: Option<Device>) {
     let Ok(read) = stream.try_clone() else { return };
     let mut reader = BufReader::new(read);
     let mut first = String::new();
@@ -256,6 +309,9 @@ fn window(hub: Arc<Hub>, sink: Arc<RemoteSink>, stream: UnixStream) {
     let hello: Value = serde_json::from_str(&first).unwrap_or(Value::Null);
     let problem = if hello.get("hello").is_none() {
         Some("the first line is not a hello".to_owned())
+    } else if device.is_some() {
+        // A phone updates on its own: only the protocol has to fit.
+        (hello["hello"]["proto"].as_u64() != Some(PROTO)).then(|| "the hub speaks another protocol".to_owned())
     } else {
         hello_problem(&hello)
     };
@@ -269,9 +325,9 @@ fn window(hub: Arc<Hub>, sink: Arc<RemoteSink>, stream: UnixStream) {
     let conn = Arc::new(Conn {
         epoch: sink.next_epoch.fetch_add(1, Ordering::SeqCst) + 1,
         instance,
-        // The hub's socket is yours: whoever reaches it runs as you already.
-        origin: scope_check::TRUSTED,
-        classes: 0,
+        classes: AtomicU8::new(device.as_ref().map_or(0, |d| d.classes)),
+        device,
+        running: AtomicUsize::new(0),
         stream,
         lines: Mutex::default(),
         out: Mutex::new(outq::new(BUDGET)),
@@ -293,13 +349,18 @@ fn window(hub: Arc<Hub>, sink: Arc<RemoteSink>, stream: UnixStream) {
         } }));
         tracing::info!(target: "sb::remote", ?since, missed = missed.as_ref().map(Vec::len), "hello");
         for l in missed.unwrap_or_default() {
-            conn.line_str(l);
+            let event = serde_json::from_str::<Value>(&l).ok();
+            if conn.gets(event.as_ref().and_then(|v| v["event"].as_str()).unwrap_or("")) {
+                conn.line_str(l);
+            }
         }
         let mut conns = sink.conns.lock().unwrap();
         let stale = if conn.instance.is_empty() {
             vec![]
         } else {
-            conns.values().filter(|c| c.instance == conn.instance).cloned().collect()
+            // A device never ends the link of another device or of your computer.
+            let of = |c: &Conn| c.device.as_ref().map(|d| d.id.clone());
+            conns.values().filter(|c| c.instance == conn.instance && of(c) == of(&conn)).cloned().collect()
         };
         conns.insert(conn.epoch, Arc::clone(&conn));
         stale
@@ -310,6 +371,13 @@ fn window(hub: Arc<Hub>, sink: Arc<RemoteSink>, stream: UnixStream) {
     }
     tracing::info!(target: "sb::remote", epoch = conn.epoch, windows = sink.windows(), "a window attached");
 
+    // The window is in the list: a revoke from now on closes it. One that came
+    // before is seen here, and nothing was written yet.
+    if !conn.listed(&hub) {
+        conn.close();
+        sink.conns.lock().unwrap().remove(&conn.epoch);
+        return;
+    }
     let (screens, screen_rx) = mpsc::channel::<u32>();
     {
         let (conn, sink) = (Arc::clone(&conn), Arc::clone(&sink));
@@ -358,6 +426,11 @@ fn window(hub: Arc<Hub>, sink: Arc<RemoteSink>, stream: UnixStream) {
         // A command that changes the screen or types runs here, in the order of the
         // lines: in a thread of its own, a collapse can run after the expand that
         // the window sent next (models/windows.qnt, W4).
+        if conn.device.is_some() && conn.running.load(Ordering::SeqCst) >= MAX_RUNNING {
+            conn.line(&json!({ "id": req["id"], "err": "too many commands at once" }));
+            continue;
+        }
+        conn.running.fetch_add(1, Ordering::SeqCst);
         if dispatch::ORDERED.contains(&req["cmd"].as_str().unwrap_or("")) {
             answer(&hub, &conn, &req);
             continue;
@@ -387,10 +460,24 @@ impl Drop for Leave<'_> {
 
 /// Runs one command line and queues its answer.
 fn answer(hub: &Hub, conn: &Conn, req: &Value) {
+    // Also after a panic in the command.
+    struct Done<'a>(&'a Conn);
+    impl Drop for Done<'_> {
+        fn drop(&mut self) {
+            self.0.running.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    let _done = Done(conn);
+    if !conn.listed(hub) {
+        tracing::info!(target: "sb::remote", epoch = conn.epoch, "the device is not listed any more");
+        conn.close();
+        return;
+    }
+    let origin = if conn.device.is_some() { scope_check::DEVICE } else { scope_check::TRUSTED };
     let id = req["id"].clone();
     let cmd = req["cmd"].as_str().unwrap_or("");
     let args = req.get("args").cloned().unwrap_or(json!({}));
-    let out = match gate(conn.origin, conn.classes, cmd, &args) {
+    let out = match gate(origin, conn.classes.load(Ordering::SeqCst), cmd, &args) {
         Ok(()) => dispatch::dispatch_in(hub, conn.epoch, cmd, &args),
         Err(e) => Err(e),
     };

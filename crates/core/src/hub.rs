@@ -1816,6 +1816,22 @@ impl Hub {
 
     /// The Settings fields, the config file, and the scan folders that do not exist
     /// (SPEC 14.1).
+    /// The device with this session key. A store that fails lists no device.
+    pub(crate) fn device_of_key(&self, key: &[u8]) -> Option<crate::store::Device> {
+        self.store.lock().unwrap().device_by_key(key).ok().flatten()
+    }
+
+    /// The device with this id. A store that fails lists no device.
+    pub(crate) fn device(&self, id: &str) -> Option<crate::store::Device> {
+        self.store.lock().unwrap().device(id).ok().flatten()
+    }
+
+    pub(crate) fn device_seen(&self, id: &str) {
+        if let Err(err) = self.store.lock().unwrap().device_seen(id, now()) {
+            tracing::warn!(target: "sb::devices", device = id, %err, "last seen");
+        }
+    }
+
     pub fn settings_view(&self) -> Value {
         let c = self.config();
         let missing: Vec<&String> = c.scan.iter().chain(&c.review.spec_clones).filter(|s| !expand(s).is_dir()).collect();
