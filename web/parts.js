@@ -34,7 +34,8 @@
     term.loadAddon(fit);
     term.open($(`#t${kind}`));
     window.SB.remeasure(term);
-    term.attachCustomKeyEventHandler((e) => !window.SB.isLeader(e));
+    const emptyBox = window.SB.emptyBox(term);
+    term.attachCustomKeyEventHandler((e) => { emptyBox(e); return !window.SB.isLeader(e); });
     window.SB.webLinks(term);
     window.SB.clip52(term);
     const t = { term, fit, id: null, drawn: false, held: [], keys: "", sending: false };

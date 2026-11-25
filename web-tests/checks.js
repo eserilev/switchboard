@@ -938,6 +938,48 @@
     await wait(1200);
   }
 
+  // Capitals and spaces stay in xterm's hidden text box. A key of the input method
+  // (229) must not send them again.
+  {
+    const t = window.SB.term, box = t.textarea, got = [];
+    const sub = t.onData((d) => got.push(d));
+    const key = (type, keyCode, k, charCode = 0) => {
+      const e = new KeyboardEvent(type, { key: k, bubbles: true, cancelable: true });
+      for (const [n, v] of [["keyCode", keyCode], ["charCode", charCode], ["which", charCode || keyCode]]) Object.defineProperty(e, n, { get: () => v });
+      box.dispatchEvent(e);
+    };
+    const type = (c) => { key("keydown", c.charCodeAt(0), c); key("keypress", c.charCodeAt(0), c, c.charCodeAt(0)); box.value += c; key("keyup", c.charCodeAt(0), c); };
+    box.value = "";
+    for (const c of "I AM SHOUTING") type(c);
+    check("typed capitals go in once", got.join("") === "I AM SHOUTING", got.join("|"));
+    // The input method changes the last letter: same length, other text.
+    got.length = 0;
+    key("keydown", 229, "Process");
+    box.value = box.value.slice(0, -1) + "X";
+    await wait(80);
+    check("an input method key does not paste what you typed before", got.join("") === "X", JSON.stringify(got));
+    // The input method types a letter by itself: it is not lost.
+    got.length = 0;
+    key("keydown", 229, "Process");
+    box.value += "Y";
+    key("keydown", 16, "Shift");
+    await wait(80);
+    check("a letter of the input method is not lost to the next key", got.join("") === "Y", JSON.stringify(got));
+    // A composition keeps its text.
+    got.length = 0;
+    box.value = "";
+    box.dispatchEvent(new CompositionEvent("compositionstart"));
+    box.value = "é";
+    box.dispatchEvent(new CompositionEvent("compositionupdate", { data: "é" }));
+    await wait(5);
+    box.dispatchEvent(new CompositionEvent("compositionend", { data: "é" }));
+    key("keydown", 16, "Shift");
+    await wait(80);
+    check("a composed letter goes in once", got.join("") === "é", JSON.stringify(got));
+    box.value = "";
+    sub.dispose();
+  }
+
   // Claude points to the code (SPEC 11.15): links in the Claude column, Mentioned,
   // and the tour of review_show. None of them takes the keys from the terminal.
   {

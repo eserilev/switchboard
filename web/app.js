@@ -654,7 +654,23 @@ const remeasure = (t) => document.fonts?.load('13px "JetBrains Mono"').then(() =
   t.options.fontFamily = f;
 }).catch(() => {});
 remeasure(term)?.then(() => fitSoon());
+// xterm leaves capitals and spaces in its hidden text box. When the input method
+// handles a key (229), xterm compares the box before and after, and can send the
+// whole box again. So each plain key starts with an empty box. Not while a
+// composition runs, nor just after one or after a 229: xterm still reads the box.
+const emptyBox = (t) => {
+  let composing = false, busy = -1e9;
+  t.textarea.addEventListener("compositionstart", () => { composing = true; });
+  t.textarea.addEventListener("compositionend", () => { composing = false; busy = performance.now(); });
+  return (e) => {
+    if (e.type !== "keydown") return;
+    if (e.keyCode === 229 || e.isComposing) busy = performance.now();
+    else if (!composing && performance.now() - busy > 50 && t.textarea.value) t.textarea.value = "";
+  };
+};
+const emptyTermBox = emptyBox(term);
 term.attachCustomKeyEventHandler((e) => {
+  emptyTermBox(e);
   if (isLeader(e)) return false;
   // Ctrl+V is Claude Code's image paste. On a remote hub it reads the clipboard of
   // the server, which has none: the window sends the image instead (SPEC 29.10).
@@ -1799,7 +1815,7 @@ function copyText(text) {
 }
 
 window.SB = { S, LINK, showMachine, refreshReviews, invoke, call, listen, esc, setHTML, toast, setTab, WORK_TITLE, workOf, openNvim, openLocalReview, expand, collapse, parkLive, paneById, refreshPanes, drawBoard, drawTabs, openLauncher, paneName, copyText, LABEL, term, isLeader, webLinks, clip52, bytes, $,
-  lampIcon, actions, stateAct, stateWord, gb, home, ICON, startRename, remeasure };
+  lampIcon, actions, stateAct, stateWord, gb, home, ICON, startRename, remeasure, emptyBox };
 
 (async function start() {
   try {
