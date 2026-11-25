@@ -604,7 +604,17 @@ impl Hub {
             .map(|i| i.last_event)
             .max();
         let seen = if on { Seen { done_at: Some(now()), done_event: event, later_until: None } } else { Seen::default() };
-        self.store.lock().unwrap().today_set(repo, Self::today_key(number, changed), &seen).map_err(|e| e.to_string())?;
+        let store = self.store.lock().unwrap();
+        store.today_set(repo, Self::today_key(number, changed), &seen).map_err(|e| e.to_string())?;
+        // A What changed row that the Done of its PR hid: the undo takes that one too.
+        if changed && !on {
+            let rows = store.today_seen().map_err(|e| e.to_string())?;
+            let row = items.iter().find(|i| i.section == today::Section::Changed && i.repo.eq_ignore_ascii_case(repo) && i.number == number);
+            if row.is_some_and(|i| today::changed_done(i, &rows).is_some()) {
+                store.today_set(repo, number, &Seen::default()).map_err(|e| e.to_string())?;
+            }
+        }
+        drop(store);
         self.sink.emit("today", json!({ "refreshing": self.today.lock().unwrap().running }));
         Ok(())
     }

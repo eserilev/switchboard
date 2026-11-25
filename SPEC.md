@@ -2863,7 +2863,8 @@ A screen that reads your GitHub repos and lists what needs you, ranked: "what sh
 
 ### 39.2 Done and Later
 
-- **Done** (`x`): "I handled it." The item hides until someone else acts on the PR: a commit, a review, a comment, or a CI result. Your own actions and bots do not count.
+- **Done** (`x`): "I handled it." The item hides until someone else acts on the PR: a commit, a review, a comment, or a CI result. Your own actions and bots do not count. A review asked of another person does not count either.
+- A What changed row is done when you mark it, or its PR, done after the change. So a PR that you close and mark done stays gone. A later change shows again.
 - **Later** (`l`): "Not now." A small menu: `1` Tomorrow morning (9:00), `2` Monday morning, `3` In a week. The item hides until then. A new event does not bring it back early; Bring back now does.
 - **Undo** (`u`) takes back the last Done or Later.
 - An item that comes back after Done gets a **came back** tag, and the panel says what changed, for example "2 commits after you marked it done".

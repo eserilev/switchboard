@@ -651,8 +651,11 @@ pub fn last_event(pr: &Pr, ctx: &Ctx) -> u64 {
             }
         }
     }
+    // Only a review asked of you: on your own PR it is you who asks.
     for r in &pr.requests {
-        t = t.max(r.at);
+        if ctx.mine(&r.author) || ctx.cfg.teams.iter().any(|x| x.eq_ignore_ascii_case(&r.author)) && !ctx.mine(&pr.author) {
+            t = t.max(r.at);
+        }
     }
     t
 }
@@ -1043,6 +1046,16 @@ fn ordinal(n: usize) -> String {
     format!("{n}{suf}")
 }
 
+/// When a What changed row is done: its own Done, or the Done of its PR, at or
+/// after the change. A change after that Done is news.
+pub fn changed_done(it: &Item, seen: &HashMap<(String, u64), Seen>) -> Option<u64> {
+    let repo = it.repo.to_lowercase();
+    [it.number + CHANGED_KEY, it.number]
+        .iter()
+        .filter_map(|n| seen.get(&(repo.clone(), *n))?.done_at)
+        .find(|d| *d >= it.last_event)
+}
+
 /// Splits the items of one job into what shows, Done, Later and Hidden (SPEC 39.2, 39.12).
 fn split(all: &[Item], repos: &[String], wide_ok: bool, seen: &HashMap<(String, u64), Seen>, now: u64) -> (Vec<Item>, Vec<Item>, Vec<Item>, Vec<Item>) {
     let (mut show, mut done, mut later, mut hidden) = (vec![], vec![], vec![], vec![]);
@@ -1057,6 +1070,13 @@ fn split(all: &[Item], repos: &[String], wide_ok: bool, seen: &HashMap<(String, 
             hidden.push(it);
             continue;
         }
+        if it.section == Section::Changed {
+            if let Some(d) = changed_done(&it, seen) {
+                it.done_at = Some(d);
+                done.push(it);
+                continue;
+            }
+        }
         let st = seen.get(&key(&it)).cloned().unwrap_or_default();
         if let Some(until) = st.later_until.filter(|u| *u > now) {
             it.later_until = Some(until);
@@ -1065,13 +1085,15 @@ fn split(all: &[Item], repos: &[String], wide_ok: bool, seen: &HashMap<(String, 
         }
         if let Some(d) = st.done_at {
             let mark = st.done_event.unwrap_or(d);
-            if it.section == Section::Changed || it.last_event <= mark {
+            if it.section != Section::Changed && it.last_event <= mark {
                 it.done_at = Some(d);
                 done.push(it);
                 continue;
             }
-            it.came_back = Some(came_back_text(it.last_event, mark, &it));
-            it.tags.push("came back".into());
+            if it.section != Section::Changed {
+                it.came_back = Some(came_back_text(it.last_event, mark, &it));
+                it.tags.push("came back".into());
+            }
         }
         show.push(it);
     }
@@ -1480,6 +1502,38 @@ mod tests {
         assert!(v.sections[0].items.iter().any(|i| i.number == 53));
         // An unknown job is Everything.
         assert_eq!(view(&all, &c, "nope", &HashMap::new(), None, NOW).job, EVERYTHING);
+    }
+
+    /// You close a PR and mark it done: the news of that close is done too.
+    #[test]
+    fn done_of_a_pr_covers_its_what_changed_row() {
+        let c = cfg();
+        let mut p = pr(60, "me");
+        p.state = "CLOSED".into();
+        p.closed = Some(NOW - 100);
+        let all = items(&Data { closed: vec![p], ..Data::default() }, &[], &ctx(&c));
+        let shown = |n: u64, at: u64| {
+            let seen = HashMap::from([(("o/r".to_owned(), n), Seen { done_at: Some(at), ..Seen::default() })]);
+            let v = view(&all, &c, EVERYTHING, &seen, None, NOW);
+            (v.sections[7].items.len(), v.done.len())
+        };
+        assert_eq!(shown(60, NOW - 94), (0, 1));
+        assert_eq!(shown(60 + CHANGED_KEY, NOW - 94), (0, 1));
+        // Done before the change: the change is news.
+        assert_eq!(shown(60, NOW - 200), (1, 0));
+        assert_eq!(shown(60 + CHANGED_KEY, NOW - 200), (1, 0));
+    }
+
+    /// A review you ask of another person is not news.
+    #[test]
+    fn your_own_review_request_is_no_event() {
+        let c = cfg();
+        let mut p = pr(61, "me");
+        p.requests.push(Ev { author: "bob".into(), at: NOW });
+        assert_eq!(last_event(&p, &ctx(&c)), 0);
+        let mut q = pr(62, "bob");
+        q.requests.push(Ev { author: "me".into(), at: NOW });
+        assert_eq!(last_event(&q, &ctx(&c)), NOW);
     }
 
     #[test]
