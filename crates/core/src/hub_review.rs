@@ -2091,7 +2091,7 @@ impl Hub {
 
         let prompt = match &t.fork_session {
             // A plain follow-up can start with "-", and claude would read it as a flag.
-            Some(_) => format!("Respond tersely. Follow-up question: {text}"),
+            Some(_) => format!("Answer in a few plain, connected sentences. Follow-up question: {text}"),
             None => thread_prompt(&self.step(id, &t.step)?, &t, &pins, text),
         };
         let (resume, fork) = match &t.fork_session {
@@ -2976,9 +2976,10 @@ impl Hub {
              Read the new code. Call guide_set_steps with the full guide for the new head, with the text \
              and the takes for the new code, written by the same rules. Keep the id of each step \
              that still applies, so the reviewer keeps its notes. Every changed line of the new diff must be in a range. \
-             Reply with one line when done.",
+             Reply with one line when done.\n\n{}",
             f.head,
-            if changed.is_empty() { "(none)".to_owned() } else { changed.join(", ") }
+            if changed.is_empty() { "(none)".to_owned() } else { changed.join(", ") },
+            review::STYLE.trim_end()
         );
         self.run_guide(id, &pr, Some(prompt))?;
         let _ = stale;
@@ -3295,6 +3296,7 @@ impl Hub {
             Some(s) => format!("Write your take on step {s} again. Read its code at {} first. Call guide_update_step with id {s} and fields {{\"take\": ...}}.", row.head),
             None => format!("Write your take on the whole PR again. Read the code at {} first. Call guide_set_steps with the full guide, with the new PR take and every step as it is.", row.head),
         };
+        let what = format!("{}\n\n{what}", review::STYLE.trim_end());
         let prompt = if mine.is_empty() {
             format!("{what} Reply with one line when done.")
         } else {
@@ -3535,7 +3537,7 @@ fn thread_prompt(step: &Value, t: &ThreadRow, pins: &[String], question: &str) -
             p += &format!("- {pin}\n");
         }
     }
-    p += "\nDo not call the guide tools. Respond tersely.\n\nQuestion: ";
+    p += "\nDo not call the guide tools. Answer the question first, in a few sentences. Write like the passages of the guide prompt, when you have them: plain, connected, with a small example when it helps.\n\nQuestion: ";
     p += question;
     p
 }
