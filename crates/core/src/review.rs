@@ -33,7 +33,7 @@ pub fn web_rules(domains: &[String]) -> Vec<String> {
 }
 
 pub const DEFAULT_PROMPT: &str = include_str!("../../../prompts/review.md");
-/// How to write a review, with passages of very clear engineering writers. It is in
+/// How to write a review, with pairs of bad and good sentences. It is in
 /// the guide prompt (`{{style}}`) and in each later run that writes a part of the guide:
 /// the session of an old guide does not have it.
 pub const STYLE: &str = include_str!("../../../prompts/style.md");
@@ -1746,7 +1746,7 @@ mod tests {
         assert!(none.contains("Sites you can fetch:\n(none)"));
         assert!(p.contains("a.rs (+3 -1)") && p.contains("abc123") && p.contains("~/specs"));
         assert!(p.contains("guide_set_steps"));
-        assert!(p.contains("Jeff King, git commit a12382f994") && p.contains("every note"), "the style is in the prompt");
+        assert!(p.contains("One fact per sentence") && p.contains("every note"), "the style is in the prompt");
     }
 
     #[test]

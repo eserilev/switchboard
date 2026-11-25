@@ -3537,7 +3537,7 @@ fn thread_prompt(step: &Value, t: &ThreadRow, pins: &[String], question: &str) -
             p += &format!("- {pin}\n");
         }
     }
-    p += "\nDo not call the guide tools. Answer the question first, in a few sentences. Write like the passages of the guide prompt, when you have them: plain, connected, with a small example when it helps.\n\nQuestion: ";
+    p += "\nDo not call the guide tools. Answer the question first, in a few sentences. Follow the writing rules of the guide prompt, when you have them: brief, one fact per sentence, the real names.\n\nQuestion: ";
     p += question;
     p
 }
