@@ -197,6 +197,7 @@ commands! {
     today_job_remove(name: String) -> () => |h| h.today_job_remove(&name);
     today_repo_check(repo: String) -> Value => |h| h.today_repo_check(&repo);
     hub_restart() -> () => |h| h.ask_restart();
+    review_edit(id: String, on: bool) -> () => |h| h.review_edit(&id, on);
     review_work(id: String, task: String) -> Value => |h| h.review_work(&id, &task);
     today_forget(id: u64) -> () => |h| h.today_forget(id);
     pane_input(id: String, data: String, binary: bool) -> () => |h| {

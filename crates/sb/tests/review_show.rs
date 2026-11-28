@@ -191,4 +191,32 @@ fn claude_points_to_the_code() {
     assert!(argv.contains("--setting-sources\nuser\n"), "{argv}");
     let settings: Value = serde_json::from_str(&std::fs::read_to_string(root.join(format!("home/settings/{ask}.json"))).unwrap()).unwrap();
     assert!(settings["permissions"]["allow"].as_array().unwrap().contains(&json!("mcp__sb__review_show")), "{settings}");
+
+    // Edit mode (SPEC 11.17): off at first. On, the same pane starts again with the
+    // edit rules and no sandbox of mode `review`; off puts both back.
+    let start = |on: bool| {
+        std::fs::remove_file(&args_file).unwrap();
+        hub.review_edit("r1", on).unwrap();
+        wait_for("claude starts in the new mode", || std::fs::read_to_string(&args_file).is_ok_and(|a| a.contains("--strict-mcp-config")));
+        let s: Value = serde_json::from_str(&std::fs::read_to_string(root.join(format!("home/settings/{ask}.json"))).unwrap()).unwrap();
+        (std::fs::read_to_string(&args_file).unwrap(), s.get("sandbox").is_some_and(|b| b["enabled"] == true))
+    };
+    assert!(argv.contains("Edit mode is off") && settings.get("sandbox").is_some_and(|b| b["enabled"] == true), "{settings}");
+    let idle = || sb(&root, &pane, &["state", "turn"], &json!({ "session_id": "s9", "last_assistant_message": "ok" }).to_string());
+    idle();
+    wait_for("the turn ends", || hub.views().iter().any(|p| p.id == ask && p.lamp == switchboard_core::lamp::Lamp::Turn));
+    let (argv, sandboxed) = start(true);
+    assert!(argv.contains("turned edit mode on") && !argv.contains("Edit mode is off") && !sandboxed, "{argv}");
+    assert!(argv.contains("--setting-sources\nuser\n"), "the PR's own settings still do not load: {argv}");
+    assert!(hub.review_view("r1").unwrap().edit);
+    assert_eq!(hub.review_term("r1", None, false).unwrap().as_deref(), Some(ask.as_str()), "the same pane");
+    // Not while it works.
+    sb(&root, &pane, &["state", "working"], &json!({ "session_id": "s9" }).to_string());
+    wait_for("it works", || hub.views().iter().any(|p| p.id == ask && p.lamp == switchboard_core::lamp::Lamp::Working));
+    assert!(hub.review_edit("r1", false).unwrap_err().contains("busy"));
+    assert!(hub.review_view("r1").unwrap().edit);
+    idle();
+    wait_for("the turn ends again", || hub.views().iter().any(|p| p.id == ask && p.lamp == switchboard_core::lamp::Lamp::Turn));
+    let (argv, sandboxed) = start(false);
+    assert!(argv.contains("Edit mode is off") && sandboxed, "{argv}");
 }

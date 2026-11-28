@@ -77,7 +77,7 @@ pane_collapse pane_image";
 /// Commands that change the hub itself, open a program, or set a pane's size.
 pub const ADMIN_CMDS: &[u8] = b"pane_open shell_open nvim_open layout_open layout_save \
 settings_save connection_set trust_answer hub_restart task_start_plan handover_out \
-handover_take review_term review_nvim pane_close pane_resize part_resize";
+handover_take review_term review_nvim review_edit pane_close pane_resize part_resize";
 
 /// True when `a[from..to]` equals `b`. Needs `from <= to <= a.len()`.
 pub fn equal_at(a: &[u8], from: usize, to: usize, b: &[u8]) -> bool {

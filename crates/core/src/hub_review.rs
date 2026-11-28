@@ -164,6 +164,8 @@ pub struct ReviewView {
     pub status: String,
     pub error: Option<String>,
     pub new_head: Option<String>,
+    /// Edit mode of the Ask pane (SPEC 11.17).
+    pub edit: bool,
     /// A later round at this head had no file change, so it closed (`drop_empty_round`).
     pub empty_round: Option<String>,
     /// The PR's base branch, once a fetch or a poll has read it. For a local review:
@@ -543,6 +545,7 @@ impl Hub {
             })
             .collect();
         Ok(ReviewView {
+            edit: store.get(&format!("review.edit:{id}")).ok().flatten().as_deref() == Some("1"),
             id: r.row.id.clone(),
             url: r.row.url.clone(),
             repo: r.row.repo.clone(),
@@ -3159,6 +3162,7 @@ impl Hub {
                 setting_sources: Some(review::SETTING_SOURCES),
                 // The PR can hold instructions: sandbox mode `review` covers this pane (SPEC 31).
                 ask: true,
+                edit: self.review_edits(id),
             },
         )?;
         Ok(Some(view.id))

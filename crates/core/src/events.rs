@@ -14,7 +14,7 @@ pub const CAP: usize = 2000;
 /// Events that ask a window to act now, not state: a window that comes back
 /// later does not get them. `focus` shows a pane; later, it jumps for no reason. A
 /// `review_stream` is a piece of an answer: the newest piece alone is wrong text.
-pub const TRANSIENT: &[&str] = &["focus", "review_stream"];
+pub const TRANSIENT: &[&str] = &["clip", "focus", "review_stream"];
 
 pub struct EventLog {
     pub boot: u64,

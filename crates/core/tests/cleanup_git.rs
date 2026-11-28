@@ -277,3 +277,22 @@ fn same_path_sees_through_symlinks() {
     assert!(review::same_path(&root.0.join("gone"), &root.0.join("gone")));
     assert!(!review::same_path(&real, &root.0.join("other")));
 }
+
+/// An Update of a review moves its HEAD (SPEC 11.17): a commit made in edit mode and
+/// not pushed stays on a branch, and a reviewed head that a pin holds makes none.
+#[test]
+fn an_update_keeps_unpushed_commits_on_a_branch() {
+    let root = scratch("edits");
+    let (main, base, head, tree) = setup(&root.0);
+    review::pin(&main, "r1", &head, &base).unwrap();
+    let own = Some(tree.as_path());
+    let edits = || g(&main, &["branch", "--list", "review-edits-*", "--format=%(refname:short)"]);
+    review::checkout_tree_for(&main, "pr1", &base, own).unwrap();
+    assert_eq!(edits(), "");
+    review::checkout_tree_for(&main, "pr1", &head, own).unwrap();
+    let c = commit(&tree, "c.rs", "fn c() {}\n");
+    review::checkout_tree_for(&main, "pr1", &base, own).unwrap();
+    assert_eq!(edits(), format!("review-edits-{}", &c[..12]));
+    gc(&main);
+    assert_eq!(g(&main, &["show", &format!("{c}:c.rs")]).trim(), "fn c() {}");
+}

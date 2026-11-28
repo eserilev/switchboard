@@ -373,6 +373,35 @@
   }
   check("guide text renders markdown", !!$("#rguide .what strong") && !!$("#rguide .checks code"));
   {
+    // A copy from an agent (SPEC 29.14) goes to this computer's clipboard, with a toast.
+    window.__emit("clip", { who: "box", text: "cargo test\n<b>x</b>" });
+    await wait(40);
+    check("an agent's copy goes to the clipboard as it is", called("clip_write").at(-1)?.[1].text === "cargo test\n<b>x</b>" && $("#toast").textContent.includes("box copied 19 characters: cargo test"), $("#toast").textContent);
+    window.__emit("clip", { who: "box", text: "<b>x</b>" });
+    await wait(40);
+    check("the toast shows a copy as text", $("#toast").textContent.includes("<b>x</b>") && !$("#toast b"), $("#toast").innerHTML);
+    const n = called("clip_write").length;
+    window.__emit("clip", { who: "box", text: "" });
+    await wait(20);
+    check("an empty copy does nothing", called("clip_write").length === n);
+  }
+  {
+    // Edit mode (SPEC 11.17): the button says the mode and sends the other one.
+    const b = () => $('#rhead [data-act="edit"]');
+    check("a review is read only at first", b().textContent === "Read only" && b().getAttribute("aria-pressed") === "false");
+    b().click();
+    await wait(30);
+    check("a click turns edit mode on", called("review_edit").at(-1)?.[1].id === "r1" && called("review_edit").at(-1)[1].on === true);
+    window.__emit("review", Object.assign({}, window.__data.reviews[0], { edit: true }));
+    await wait(30);
+    check("the button says Can edit", b().textContent === "Can edit" && b().getAttribute("aria-pressed") === "true");
+    b().click();
+    await wait(30);
+    check("a click turns edit mode off", called("review_edit").at(-1)[1].on === false);
+    window.__emit("review", window.__data.reviews[0]);
+    await wait(30);
+  }
+  {
     // Work on this PR (SPEC 11.16): a new agent on the PR's branch, with a task.
     $('#rhead [data-act="work"]').click();
     await wait(20);

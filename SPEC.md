@@ -710,6 +710,15 @@ A review finds work to do on the PR. A new agent does it, in a folder of its own
 - The main checkout and other worktrees never change branch. So other agents' work there stays where it is.
 - A review of local commits has no PR: no button, and the command refuses.
 
+### 11.17 Edit mode
+
+- **Read only / Can edit** in the review header of a PR. Off by default, and kept for each review (setting `review.edit:<id>`).
+- The Ask pane is a fork of the guide session, so it holds the rule "you only read". `READ_SYSTEM` and `EDIT_SYSTEM` say which rule holds now.
+- A click starts the Ask pane again with the same conversation. Not while it works or waits for a permit.
+- **On:** Claude edits, builds and tests in the review's worktree (a detached HEAD). It commits and pushes only when you ask, with no force push. The sandbox mode `review` does not cover it; mode `all` does. Your user settings decide what it asks.
+- The PR's text and code can hold instructions, so only you turn it on, at the computer: `review_edit` is an `admin` command (41.7).
+- **Your work stays.** A close asks before it drops changes or unpushed commits. An Update or Restart puts unpushed commits on a branch `review-edits-<commit>` before it moves HEAD.
+
 ## 12. Agents
 
 | Where | How |
@@ -1884,6 +1893,13 @@ You work on the server and on your computer, and switch between them with one cl
 - **Handover** (38) shows this computer when it is done; no restart.
 - Window checks: both rows under Board, the server down; the caret folds and unfolds; Use this computer with no restart; the count of the other machine and its update; a click on the machine shown; the switch back.
 
+### 29.14 Copy from an agent
+
+- The tool `clipboard_copy(text)` (every agent pane, and the Ask pane) and `sb copy` (stdin) send text to the hub. The hub sends the event `clip` to each trusted window, and the window calls `clip_write` (29.11). So it works over ssh with no setup.
+- Up to 1 MB, with no control characters but newline, tab and return. A toast says who copied and shows the start of the text.
+- The event is not in the ring (41.8): a window that comes back never gets an old copy. A phone gets no `clip`. The log has the size, not the text.
+- With no open window that shows this machine, nothing is copied. The sender gets "sent", not "copied".
+
 ## 30. Work environment
 
 Status: built.
@@ -2711,6 +2727,7 @@ Every agent pane can see Switchboard. In a pane you can say "what's on my task l
 | `task_status(id, status, blocked_by?)` | todo, doing, blocked or review. Never `done`: only the window sets it (27.7). |
 | `board_list()` | The panes of the caller's repo (worktrees too): pane id, kind, title, worktree, branch, state (the lamp, or "needs permission"), linked task, and `you`. |
 | `agents_list()` | The agents that can get a message, on both machines (40.3). |
+| `clipboard_copy(text)` | Text on your clipboard, on the computer of your window (29.14). |
 | `message_send(to, text)` | A message to another agent (40.2). It may go to the server over ssh. |
 
 Each tool is one request on the socket. No tool starts a process, reaches the network or writes to GitHub, but for the two message tools on a computer whose mailbox is on the server: they run `sb msg` there over ssh (40.2). A reply is the hub's JSON without `ok`; a refusal is a tool error with the reason.

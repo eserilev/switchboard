@@ -49,6 +49,7 @@ fn main() {
         Some("today") => today(args.get(1).map(String::as_str)),
         Some("context") => context(args.get(1).map(String::as_str)),
         Some("msg") => msg(&args[1..]),
+        Some("copy") => copy(),
         Some("mcp") => match args.get(1).map(String::as_str) {
             Some("--pane") => mcp::serve_pane(),
             a => mcp::serve(a == Some("--ask")),
@@ -66,7 +67,7 @@ fn main() {
             0
         }
         _ => {
-            eprintln!("usage: sb open [path] [-w branch] [--nvim|--shell]\n       sb context [path]   (the repo notes an agent here gets)\n       sb today [job]      (what needs you on GitHub, ranked)\n       {TASK_USAGE}\n       sb connect add <name> [--endpoint <url> --model <m> --token <keyring:name>]\n       sb serve      (the hub for remote windows)\n       sb attach     (a remote window's link; starts sb serve when none runs)\n       sb pair       (adds a phone)\n       sb devices [remove <id>]");
+            eprintln!("usage: sb open [path] [-w branch] [--nvim|--shell]\n       sb context [path]   (the repo notes an agent here gets)\n       sb today [job]      (what needs you on GitHub, ranked)\n       {TASK_USAGE}\n       sb connect add <name> [--endpoint <url> --model <m> --token <keyring:name>]\n       sb copy       (stdin goes to the clipboard of your window's computer)\n       sb serve      (the hub for remote windows)\n       sb attach     (a remote window's link; starts sb serve when none runs)\n       sb pair       (adds a phone)\n       sb devices [remove <id>]");
             2
         }
     };
@@ -178,6 +179,30 @@ pub fn mail_route(req: &Request) -> Result<String, String> {
             Ok(v.to_string())
         }
         _ => Ok(send(req, true)?.unwrap_or_default()),
+    }
+}
+
+fn copy() -> i32 {
+    let pane = std::env::var("SB_PANE").ok().filter(|p| !p.is_empty());
+    let mut text = String::new();
+    if let Err(e) = std::io::stdin().read_to_string(&mut text) {
+        eprintln!("sb copy: {e}");
+        return 1;
+    }
+    match send(&Request::Clip { pane, text }, true).map(|l| serde_json::from_str::<Ack>(&l.unwrap_or_default())) {
+        Ok(Ok(Ack { ok: true, .. })) => 0,
+        Ok(Ok(Ack { error, .. })) => {
+            eprintln!("sb copy: {}", error.unwrap_or_else(|| "refused".into()));
+            1
+        }
+        Ok(Err(e)) => {
+            eprintln!("sb copy: {e}");
+            1
+        }
+        Err(e) => {
+            eprintln!("sb copy: {e}");
+            1
+        }
     }
 }
 

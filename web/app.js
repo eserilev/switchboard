@@ -1705,6 +1705,16 @@ listen("pane", (e) => {
 // The first message of Start agent did not go in: it goes to the clipboard.
 // A click on Copy is a user gesture, so the copy works in every webview.
 listen("paste_failed", (e) => window.SBTasks?.showText("The first message did not go in", `The agent was not ready: ${e.payload.why}. Copy the message and paste it into the pane yourself.`, e.payload.text));
+// An agent's clipboard_copy or `sb copy` (SPEC 29.14). The toast shows what it is, so
+// you never paste a text that you did not see.
+listen("clip", (e) => {
+  const { who, text } = e.payload || {};
+  if (typeof text !== "string" || !text) return;
+  const first = text.trim().split("\n")[0];
+  invoke("clip_write", { text })
+    .then(() => toast(`${who || "An agent"} copied ${text.length} characters: ${first.length > 60 ? first.slice(0, 57) + "…" : first}`))
+    .catch((err) => toast(`The copy did not work: ${err}`));
+});
 listen("connections", (e) => { S.conn = e.payload; drawConn(); drawBoard(); });
 listen("focus", (e) => refreshPanes().then(() => expand(e.payload)));
 listen("tmux_exit", () => toast("The Switchboard tmux server ended. Restart the app to start it again."));

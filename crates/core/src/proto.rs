@@ -71,6 +71,13 @@ pub enum Request {
         #[serde(default)]
         number: Option<u64>,
     },
+    /// `clipboard_copy` of an agent, or `sb copy` (SPEC 29.14): text for the clipboard
+    /// of the computer whose window shows this hub.
+    Clip {
+        #[serde(default)]
+        pane: Option<String>,
+        text: String,
+    },
     /// Messages between agents (SPEC 40).
     Mail(MailOp),
 }

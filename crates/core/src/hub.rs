@@ -107,6 +107,8 @@ pub(crate) struct Start {
     pub setting_sources: Option<&'static str>,
     /// A review Ask pane: sandbox mode `review` covers it (SPEC 31).
     pub ask: bool,
+    /// The Ask pane of a review with edit mode on: the sandbox mode `review` does not cover it.
+    pub edit: bool,
     /// `--mcp-config`, with `--strict-mcp-config`: the Ask pane's `sb mcp --ask`.
     pub mcp: Option<String>,
     /// `--append-system-prompt`. One line: the command goes through tmux.
@@ -827,7 +829,7 @@ impl Hub {
         let rust = start.rust.unwrap_or_else(|| tree.join("Cargo.toml").exists());
         let config = self.config();
         // A pane that starts again keeps its sandbox: a resumed Ask pane has no `ask`.
-        let sandboxed = config.sandbox.covers(start.ask) || crate::sandbox::file_on(&settings);
+        let sandboxed = if start.edit { config.sandbox.covers(false) } else { config.sandbox.covers(start.ask) || crate::sandbox::file_on(&settings) };
         // The pane tools (SPEC 36): every agent pane but one with its own server (Ask).
         let tools = config.pane_tools.enabled && start.mcp.is_none();
         let mut allow = start.allow.clone();
@@ -1460,6 +1462,7 @@ impl Hub {
             setting_sources: ask.then_some(crate::review::SETTING_SOURCES),
             rust: ask.then_some(false),
             ask,
+            edit: self.ask_review(id).is_some_and(|r| self.review_edits(&r)),
             ..Start::default()
         };
         let (argv, env) = self.command("claude", id, tree, Some(connection), &start)?;
@@ -2035,6 +2038,10 @@ impl Hub {
                 }
                 Err(err) => json!(Ack::err(err)),
             },
+            Request::Clip { pane, text } => json!(match self.clip(pane.as_deref(), &text) {
+                Ok(()) => Ack::ok(),
+                Err(err) => Ack::err(err),
+            }),
             Request::Task { pane, op } => self.task_socket(pane.as_deref(), op),
             Request::Board { pane } => self.board_socket(pane.as_deref()),
             Request::Today { pane, job, repo, number } => {
@@ -2047,6 +2054,27 @@ impl Hub {
         };
         let mut w = &conn;
         let _ = writeln!(w, "{reply}");
+    }
+
+    /// Text for the clipboard of each trusted window (SPEC 29.14). The event is not in
+    /// the ring: a window that comes back never gets an old copy. The log has no text.
+    pub fn clip(&self, pane: Option<&str>, text: &str) -> Res<()> {
+        if text.is_empty() {
+            return Err("there is no text to copy".into());
+        }
+        if text.len() > 1 << 20 {
+            return Err("the text is over 1 MB".into());
+        }
+        if text.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\t' | '\r')) {
+            return Err("the text has control characters".into());
+        }
+        let who = pane.and_then(|id| {
+            let panes = self.panes.lock().unwrap();
+            panes.iter().find(|p| p.row.id == id).map(|p| p.row.title.clone().unwrap_or_else(|| id.to_owned()))
+        });
+        tracing::info!(target: "sb::hub", pane, bytes = text.len(), "clip");
+        self.sink.emit("clip", json!({ "who": who, "text": text }));
+        Ok(())
     }
 
     // ---------- the ticker ----------
@@ -2309,6 +2337,7 @@ fn request_kind(r: &Request) -> &'static str {
         Request::Permit { .. } => "permit",
         Request::Open { .. } => "open",
         Request::GuideSet { .. } => "guide_set",
+        Request::Clip { .. } => "clip",
         Request::GuideUpdate { .. } => "guide_update",
         Request::ReviewShow { .. } => "review_show",
         Request::ReviewWork { .. } => "review_work",

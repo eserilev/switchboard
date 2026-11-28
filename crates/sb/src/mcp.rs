@@ -108,7 +108,19 @@ pub fn tools() -> Value {
     ])
 }
 
-/// The one tool of `sb mcp --ask`.
+/// The reply of `clipboard_copy`. The hub cannot see the clipboard itself.
+const COPIED: &str = "Sent to the user's open Switchboard windows. The window says when it is on the clipboard.";
+
+/// `clipboard_copy` of the Ask pane and of every agent pane (SPEC 29.14).
+fn clip_tool() -> Value {
+    json!({
+        "name": "clipboard_copy",
+        "description": "Put text on the user's clipboard, on the computer where they sit, also when this agent runs on a server. Only when the user asks you to copy something. Pass the exact text, with no extra words or code fence. A Switchboard window must be open and show this machine.",
+        "inputSchema": { "type": "object", "properties": { "text": { "type": "string", "description": "The exact text, up to 1 MB." } }, "required": ["text"] }
+    })
+}
+
+/// The tools of `sb mcp --ask`.
 pub fn ask_tools() -> Value {
     json!([{
         "name": "review_show",
@@ -145,7 +157,7 @@ pub fn ask_tools() -> Value {
             },
             "required": ["task"]
         }
-    }])
+    }, clip_tool()])
 }
 
 /// The tools of `sb mcp --pane` (SPEC 36), the `switchboard` server of every agent
@@ -220,7 +232,8 @@ pub fn pane_tools() -> Value {
                 "to": s("The agent's name (its title, like sandcastle) or its address from agents_list, like p7@box. When the user says \"tell sandcastle …\", pass sandcastle."),
                 "text": s("The message.")
             }, "required": ["to", "text"] }
-        }
+        },
+        clip_tool()
     ])
 }
 
@@ -230,6 +243,7 @@ pub fn pane_request(name: &str, args: &Value, pane: Option<String>) -> Option<Re
     let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_owned);
     let op = match name {
         "board_list" => return Some(Request::Board { pane }),
+        "clipboard_copy" => return Some(Request::Clip { pane, text: s("text").unwrap_or_default() }),
         "agents_list" => return Some(Request::Mail(switchboard_core::proto::MailOp::Agents { pane })),
         "message_send" => {
             return Some(Request::Mail(switchboard_core::proto::MailOp::Send { pane, from: None, label: None, to: s("to").unwrap_or_default(), text: s("text").unwrap_or_default() }))
@@ -258,7 +272,7 @@ pub fn handle_pane(msg: &Value, pane: Option<String>, call: &dyn Fn(Request) -> 
                 "protocolVersion": v,
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "switchboard", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "Switchboard is the app this agent runs in. These tools read and change the user's Switchboard tasks, to-do list and sprint, list the other agent panes on the board in this repo, and send messages to other agents, also on the user's other machine."
+                "instructions": "Switchboard is the app this agent runs in. These tools read and change the user's Switchboard tasks, to-do list and sprint, list the other agent panes on the board in this repo, send messages to other agents, also on the user's other machine, and put text on the user's clipboard (clipboard_copy)."
             })
         }
         "ping" => json!({}),
@@ -270,6 +284,7 @@ pub fn handle_pane(msg: &Value, pane: Option<String>, call: &dyn Fn(Request) -> 
                 None => (format!("unknown tool {name}"), true),
                 Some(req) => match call(req) {
                     Err(e) => (format!("Switchboard is not reachable: {e}"), true),
+                    Ok(line) if name == "clipboard_copy" && serde_json::from_str::<Ack>(&line).is_ok_and(|a| a.ok) => (COPIED.to_owned(), false),
                     Ok(line) => {
                         let mut v: Value = serde_json::from_str(&line).unwrap_or(json!({ "ok": false, "error": "bad reply" }));
                         if v["ok"] == json!(true) && v["text"].is_string() {
@@ -360,6 +375,10 @@ pub fn handle(
                     review: review.into(),
                     task: args.get("task").and_then(Value::as_str).unwrap_or("").into(),
                 }),
+                "clipboard_copy" if ask => Some(Request::Clip {
+                    pane: std::env::var("SB_PANE").ok().filter(|p| !p.is_empty()),
+                    text: args.get("text").and_then(Value::as_str).unwrap_or("").into(),
+                }),
                 _ if ask => None,
                 "guide_set_steps" => Some(Request::GuideSet {
                     review: review.into(),
@@ -376,6 +395,7 @@ pub fn handle(
                 Some(Ok(Ack { ok: true, .. })) if ask && name == "review_work" => {
                     ("A new agent started in its own worktree on the PR's branch, and the window shows it. The task waits in its prompt until the reviewer sends it. Tell the reviewer so in one line.".to_owned(), false)
                 }
+                Some(Ok(Ack { ok: true, .. })) if ask && name == "clipboard_copy" => (COPIED.to_owned(), false),
                 Some(Ok(Ack { ok: true, .. })) if ask => ("The review window shows the places. Now answer in text too.".to_owned(), false),
                 Some(Ok(Ack { ok: true, .. })) => ("ok".to_owned(), false),
                 Some(Ok(Ack { error, .. })) => (error.unwrap_or_else(|| "refused".into()), true),
@@ -453,7 +473,7 @@ mod tests {
         assert!(r["result"]["instructions"].as_str().unwrap().contains("tasks"));
         let r = handle_pane(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}), Some("p1".into()), &|_| Ok(String::new())).unwrap();
         let names: Vec<&str> = r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["task_list", "task_show", "task_add", "task_note", "task_status", "today_list", "today_item", "board_list", "agents_list", "message_send"]);
+        assert_eq!(names, ["task_list", "task_show", "task_add", "task_note", "task_status", "today_list", "today_item", "board_list", "agents_list", "message_send", "clipboard_copy"]);
     }
 
     #[test]
@@ -630,7 +650,7 @@ mod tests {
         let msg = |id: u32, name: &str, args: Value| json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":args}});
         let r = handle(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), "r3", Path::new("."), true, &call).unwrap();
         let names: Vec<&str> = r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, vec!["review_show", "review_work"]);
+        assert_eq!(names, vec!["review_show", "review_work", "clipboard_copy"]);
         // The guide tools and git are refused by name, and nothing goes to the app.
         for (name, args) in [
             ("guide_set_steps", json!({"steps": []})),

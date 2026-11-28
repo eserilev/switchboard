@@ -94,6 +94,10 @@
       if (act === "finish") return local(id).finish ? closeFinish(id) : openFinish(id);
       if (act === "agent") return sendAgent(id);
       if (act === "work") return workOnPr(id);
+      if (act === "edit") {
+        const on = !S.reviews.get(id)?.edit;
+        return call("review_edit", { id, on }).then(() => toast(on ? "Claude can edit, run and push in this review." : "Claude only reads in this review.")).catch(() => {});
+      }
       if (act === "close") return askClose(id);
       // New commits, New changes and comments to place: the inspector says what to do.
       if (act === "newcommits" || act === "stale") return window.SBInsp.open();
@@ -357,6 +361,7 @@
     const n = r.drafts.length;
     const next = (r.round || 1) + 1;
     put($("#racts"), (r.new_head ? `<button type="button" class="btn sm ghost" data-act="newcommits" title="${r.new_head === r.empty_round ? "New commits with no file change since this round: Update guide" : `Commits the guide does not cover: Start round ${next} or Update guide`}">New commits</button>` : "") + place
+      + `<button type="button" class="btn sm ghost${r.edit ? " editon" : ""}" data-act="edit" aria-pressed="${!!r.edit}" title="${r.edit ? "Claude can edit, run commands and push when you ask. Click for read only." : "Claude only reads. Click to let it edit, run commands, and push when you ask. It then runs with no sandbox."}">${r.edit ? "Can edit" : "Read only"}</button>`
       + `<button type="button" class="btn sm ghost" data-act="work" title="Start a new agent in its own worktree on the PR's branch">Work on this PR</button>`
       + `<button type="button" class="btn big${l.finish ? "" : " primary"}" data-act="finish" aria-haspopup="dialog" aria-expanded="${!!l.finish}" title="Send your comments to GitHub as one review">Finish review · ${n}</button>${closeBtn()}`);
   }

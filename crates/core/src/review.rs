@@ -367,6 +367,16 @@ pub fn checkout_tree(repo_dir: &Path, name: &str, head: &str) -> Result<PathBuf,
     checkout_tree_for(repo_dir, name, head, None)
 }
 
+/// Commits that only the HEAD of `tree` reaches (made in edit mode, not pushed) get a
+/// branch `review-edits-<commit>` before HEAD moves to `head`, so `git gc` never takes them.
+fn keep_commits(tree: &Path, head: &str) -> Result<(), String> {
+    let own = git(tree, &["rev-list", "--max-count=1", "HEAD", "--not", head, "--branches", "--tags", "--remotes", "--glob=refs/switchboard/*"])?;
+    let Some(c) = own.lines().next() else { return Ok(()) };
+    let name = format!("review-edits-{}", &c[..c.len().min(12)]);
+    tracing::info!(target: "sb::review", tree = %tree.display(), branch = %name, "unpushed commits kept on a branch");
+    git(tree, &["branch", "-q", "-f", &name, c]).map(|_| ())
+}
+
 /// As `checkout_tree`. `own` is the worktree of the open review that checks out:
 /// an Update of it moves its HEAD as before, and git carries your edits along or
 /// stops on a conflict. Any other existing folder must be free of work.
@@ -374,6 +384,7 @@ pub fn checkout_tree_for(repo_dir: &Path, name: &str, head: &str, own: Option<&P
     let tree = worktree_path(repo_dir, name);
     tracing::info!(target: "sb::review", tree = %tree.display(), exists = tree.exists(), "PR worktree");
     if tree.exists() && own.is_some_and(|o| same_path(o, &tree)) {
+        keep_commits(&tree, head)?;
         git(&tree, &["checkout", "-q", "--detach", head])?;
     } else if tree.exists() {
         // A folder that a closed review kept with your work: a checkout would carry

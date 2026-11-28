@@ -1020,3 +1020,6 @@ body.rail-wide .nav svg { width: 16px; height: 16px; }
 .tdfcheck.bad { color: var(--danger-fg); }
 .tdffoot { display: flex; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
 .tdffoot small { flex: 1; }
+
+/* Edit mode of a review is on. */
+#racts .editon { color: var(--accent); border-color: var(--accent); }
