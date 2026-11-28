@@ -85,7 +85,8 @@ let linkNews = 0;
 // Once for each time the link comes up, from the event or from Reconnect.
 function linkChanged() {
   if (!LINK.up) LINK.synced = false;
-  else if (!LINK.synced) { LINK.synced = true; resync(); }
+  // A phone: the screens of web/m load their own data.
+  else if (!LINK.synced) { LINK.synced = true; if (!LINK.phone) resync(); }
   drawLink();
 }
 // The rows of the two machines, when both run: a dot for the link and the
@@ -1847,6 +1848,8 @@ window.SB = { S, LINK, showMachine, refreshReviews, invoke, call, listen, esc, s
       window.SBPhone.pair(LINK.pair_qr);
       return;
     }
+    // A paired phone: the desktop page stays empty under the phone screens.
+    if (LINK.phone) return;
     // A remote hub that is not linked yet: the `link` event loads everything.
     LINK.synced = !LINK.remote || LINK.up;
     drawLink();

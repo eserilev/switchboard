@@ -1038,3 +1038,5 @@ body.rail-wide .nav svg { width: 16px; height: 16px; }
 /* A phone: the page fills the screen, under the notch and the home bar too. */
 html { background: var(--bg); }
 body.phone { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); height: 100dvh; }
+/* The phone screens (web/m) are up: the desktop page stays loaded but hidden. */
+body.m-on > :not(#mroot):not(.phpair):not(script) { display: none !important; }
