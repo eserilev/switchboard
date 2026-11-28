@@ -96,6 +96,8 @@
   check("your place goes to the hub, so the desktop opens there", called("review_step_seen").at(-1)?.[1].step === "s2");
   await wait(60);
   check("the narrow diff has added and removed lines with line numbers", $$(".row.add").length === 2 && $$(".row.del").length === 1 && $(".row.add .ln").textContent === "7");
+  check("the file path breaks only after a slash", $(".code .fh .path").innerHTML.includes("/<wbr>") || !$(".code .fh .path").textContent.includes("/"));
+  check("buttons use the page font, not the browser's", getComputedStyle($(".fold")).fontFamily === getComputedStyle($(".m")).fontFamily.split(",")[0] || getComputedStyle($(".fold")).fontFamily.startsWith("Inter"), getComputedStyle($(".fold")).fontFamily);
   check("context far from a change folds", !!$(".fold") && $(".fold").textContent.includes("Show 3 more"));
   check("long lines wrap, with no sideways scroll", noSideScroll(), [document.documentElement.scrollWidth, window.innerWidth]);
   await tap('[data-line="0|new|7"]');

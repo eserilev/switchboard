@@ -188,7 +188,8 @@
       if (!s) return overview(r);
       const d = S.diff.get(`${r.id}|${s.id}|${r.head}`);
       if (d === undefined) loadDiff(r, s.id);
-      const long = (s.what || "").length > 420 && !S.open.has(`${r.id}|${s.id}`);
+      // The story of s1 always shows whole; a long step text gets More.
+      const long = i > 0 && (s.what || "").length > 900 && !S.open.has(`${r.id}|${s.id}`);
       const qs = (s.check || []).map((q, n) => {
         const a = s.check_answers?.[n];
         return `<div class="q">${a ? "•" : "?"} ${mdi(q)}${a ? `<div class="t2">${mdi(a)}</div>` : ""}</div>`;
@@ -226,13 +227,13 @@
           const sel = S.sel && S.sel.path === sec.path && S.sel.side === side && ln >= S.sel.start && ln <= S.sel.line;
           const dim = S.sel && S.sel.path === sec.path && S.sel.side !== side && x.kind !== " ";
           const cls = { "+": "add", "-": "del", " ": "" }[x.kind] || "";
-          out += `<div class="row ${cls}${sel ? " sel" : ""}${dim ? " dim" : ""}"><button type="button" class="plus" data-line="${si}|${side}|${ln}" aria-label="Select line ${ln}">+</button><span class="ln">${ln ?? ""}</span><span class="tx">${esc(x.text)}</span></div>`;
+          out += `<div class="row ${cls}${sel ? " sel" : ""}${dim ? " dim" : ""}"><button type="button" class="plus" data-line="${si}|${side}|${ln}" aria-label="Select line ${ln} to comment or ask">+</button><span class="ln">${ln ?? ""}</span><span class="tx">${esc(x.text)}</span></div>`;
           if (S.sel && S.sel.path === sec.path && S.sel.side === side && ln === S.sel.line) {
             out += `<div class="selbar"><span>${S.sel.start === S.sel.line ? `Line ${ln}` : `Lines ${S.sel.start}–${S.sel.line}`}</span><button type="button" class="btn sm" data-ask>Ask</button><button type="button" class="btn sm gold" data-comment>Comment</button><button type="button" class="btn sm" data-unsel aria-label="Clear the selection">✕</button></div>`;
           }
         });
         flush();
-        return `<div class="code"><div class="fh"><span>${esc(sec.path)}</span><span style="margin-left:auto;white-space:nowrap">+${add} −${del}</span></div>${out}</div>`;
+        return `<div class="code"><div class="fh"><span class="path">${esc(sec.path).replaceAll("/", "/<wbr>")}</span><span style="margin-left:auto;white-space:nowrap">+${add} −${del}</span></div>${out}</div>`;
       }).join("");
     }
     function noteCard(r, n) {
@@ -370,8 +371,9 @@
       const group = (title, list) => list.length ? `<h2>${title} · ${list.length}</h2>${list.map((p) => `<div class="card"><span class="k"><span>${esc(p.id)} · ${esc(p.repo)}</span><span class="st-${esc(p.lamp)}">${esc(p.lamp === "turn" ? "your turn" : p.lamp)}</span></span><span class="t1">${esc(name(p))}</span>${p.summary ? `<span class="t2">${esc(p.summary)}</span>` : ""}</div>`).join("")}` : "";
       const permits = needs.map((p) => `<article class="permit"><div class="k"><span>${esc(p.id)} · ${esc(p.branch || p.repo)}</span></div><div class="t1">${esc(name(p))} ${p.permit ? "wants to run" : "needs you"}</div>${p.permit ? `<pre>${esc(p.permit.summary)}</pre><div class="row2"><button type="button" class="btn" data-permit="${esc(p.permit.id)}" data-allow="0">Deny</button><button type="button" class="btn gold" data-permit="${esc(p.permit.id)}" data-allow="1">Allow</button></div>` : `<div class="t2">${esc(p.summary || "It waits for you in its pane.")}</div>`}</article>`).join("");
       const working = rest.filter((p) => p.lamp === "working");
-      const other = rest.filter((p) => p.lamp !== "working");
-      return hubBar("<h1>Agents</h1>") + `<div class="body">${needs.length ? `<h2 style="color:var(--gold)">Needs you · ${needs.length}</h2>${permits}` : ""}${group("Working", working)}${group("Other", other)}${claude.length ? "" : `<div class="empty">No agents on this hub.</div>`}</div>`;
+      const turn = rest.filter((p) => p.lamp === "turn");
+      const other = rest.filter((p) => p.lamp !== "working" && p.lamp !== "turn");
+      return hubBar("<h1>Agents</h1>") + `<div class="body">${needs.length ? `<h2 style="color:var(--gold)">Needs you · ${needs.length}</h2>${permits}` : ""}${group("Your turn", turn)}${group("Working", working)}${group("Other", other)}${claude.length ? "" : `<div class="empty">No agents on this hub.</div>`}</div>`;
     }
     // ---------- You (42.6) ----------
     function youScreen() {

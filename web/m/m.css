@@ -6,7 +6,8 @@
   --add: #24402f; --add-fg: #c6efd5; --del: #3a1f24; --del-fg: #f3c4cc;
   --mono: "JetBrains Mono", ui-monospace, monospace;
   position: fixed; inset: 0; display: flex; flex-direction: column;
-  background: var(--bg); color: var(--fg); font: 16px/1.45 Inter, system-ui, sans-serif;
+  background: var(--bg); color: var(--fg); font: 16px/1.45 var(--sans);
+  --sans: Inter, -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
   -webkit-tap-highlight-color: transparent; overflow: hidden;
 }
@@ -41,6 +42,7 @@
 .m .sev { padding: 2px 8px; border-radius: 6px; border: 1px solid var(--line2); font: 600 11px var(--mono); white-space: nowrap; }
 .m .sev-must { border-color: #a8546a; color: #f3a9bb; }
 .m .sev-should { border-color: #3f8a85; color: #8fd6cf; }
+@media (prefers-color-scheme: light) { .m .sev-must { border-color: #b4405c; color: #9c2342; } .m .sev-should { border-color: #2c7a73; color: #1f5f59; } }
 .m .sev-nit, .m .sev-question { color: var(--dim); }
 .m .tag { font-size: 11px; font-weight: 700; color: var(--green); }
 /* Swipe rows: the action shows behind the row as it moves. */
@@ -67,7 +69,7 @@
 .m .prog .cur { background: var(--gold); }
 .m .what { font-size: 15px; color: var(--fg2); margin: 8px 0; }
 .m .what p { margin: 0 0 8px; }
-.m .what.short { max-height: 9.5em; overflow: hidden; }
+.m .what.short { max-height: 22em; overflow: hidden; }
 .m .more { border: 0; background: transparent; color: var(--gold); font-weight: 600; padding: 0 0 6px; min-height: 32px; }
 .m .q { font-size: 14px; color: var(--claude); padding: 6px 0; }
 .m .take { padding: 14px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--line); margin: 12px 0; }
@@ -78,9 +80,11 @@
 .m .steps .done .n { color: var(--green); }
 /* The narrow diff: one column, long lines wrap, never a sideways scroll. */
 .m .code { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 12px 0; font: 12.5px/1.55 var(--mono); }
-.m .code .fh { padding: 8px 10px; background: var(--bg2); color: var(--dim); font-weight: 600; display: flex; gap: 8px; overflow-wrap: anywhere; }
+.m .code .fh { padding: 8px 10px; background: var(--bg2); color: var(--dim); font-weight: 600; display: flex; gap: 8px; overflow-wrap: break-word; }
+.m .code .fh .path { min-width: 0; }
 .m .row { display: grid; grid-template-columns: 26px 34px minmax(0, 1fr); align-items: start; }
-.m .row .plus { width: 26px; height: 22px; border: 0; background: transparent; color: var(--dim2); font: 700 14px Inter; padding: 0; }
+.m .row .plus { width: 20px; height: 18px; margin: 2px 0 0 3px; border: 1px solid var(--line2); border-radius: 5px; background: transparent; color: var(--dim2); font: 600 12px/16px var(--sans); padding: 0; opacity: .7; }
+.m .row.sel .plus { border-color: var(--gold); color: var(--gold); opacity: 1; }
 .m .row .ln { color: var(--dim2); text-align: right; padding-right: 8px; user-select: none; }
 .m .row .tx { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 8px; }
 .m .row.add { background: var(--add); }
@@ -90,8 +94,8 @@
 .m .row.sel { box-shadow: inset 3px 0 0 var(--gold); }
 .m .row.sel .ln { color: var(--gold); }
 .m .row.dim { opacity: .45; }
-.m .fold { width: 100%; border: 0; background: var(--bg2); color: var(--dim); font: 600 12px Inter; padding: 8px; min-height: 36px; }
-.m .selbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg3); border-top: 1px solid var(--line2); font: 600 13px Inter; position: sticky; bottom: 0; }
+.m .fold { width: 100%; border: 0; background: var(--bg2); color: var(--dim); font: 600 12px var(--sans); padding: 8px; min-height: 36px; }
+.m .selbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg3); border-top: 1px solid var(--line2); font: 600 13px var(--sans); position: sticky; bottom: 0; }
 .m .selbar span { flex: 1; }
 .m .note { padding: 14px; border-radius: 12px; background: var(--bg3); border: 1px solid var(--line2); display: flex; flex-direction: column; gap: 8px; margin: 0; }
 .m .note .acts { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -100,7 +104,7 @@
 .m .scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, .5); display: flex; align-items: flex-end; z-index: 5; }
 .m .sheet { width: 100%; max-height: 88%; overflow-y: auto; background: var(--bg2); border-radius: 18px 18px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 12px; }
 .m .sheet h3 { margin: 0; font-size: 17px; }
-.m .sheet textarea { width: 100%; min-height: 120px; border-radius: 10px; border: 1px solid var(--line2); background: var(--bg); color: var(--fg); font: 16px/1.4 Inter, sans-serif; padding: 10px; resize: vertical; }
+.m .sheet textarea { width: 100%; min-height: 120px; border-radius: 10px; border: 1px solid var(--line2); background: var(--bg); color: var(--fg); font: 16px/1.4 var(--sans); padding: 10px; resize: vertical; }
 .m .sheet .row2 { display: flex; gap: 8px; }
 .m .answer { font-size: 15px; color: var(--fg2); white-space: pre-wrap; }
 .m .undo { position: absolute; left: 12px; right: 12px; bottom: calc(76px + env(safe-area-inset-bottom)); padding: 10px 14px; border-radius: 12px; background: var(--bg3); border: 1px solid var(--line2); display: flex; align-items: center; gap: 10px; z-index: 6; font-size: 14px; }
