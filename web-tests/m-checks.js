@@ -139,6 +139,17 @@
   const p = called("review_post").at(-1)?.[1];
   check("Finish sends the verdict with the plan token", p?.event === "APPROVE" && p.token === "tok");
 
+  // A link opens a screen.
+  location.hash = "#review/r1/2";
+  await wait(60);
+  check("#review/<id>/<n> opens that step", $(".top").textContent.includes("Step 2 of 2"));
+  location.hash = "#review/r1";
+  await wait(60);
+  check("#review/<id> opens the overview", $(".m h1")?.textContent === "Fix redb backend bugs" && !$(".top").textContent.includes("Step"));
+  location.hash = "#reviews";
+  await wait(60);
+  check("#reviews opens the tab", $(".tabs [aria-current]")?.textContent.includes("Reviews"));
+
   // Agents (42.5).
   await tap('[data-go="reviews"]');
   await tap('[data-tab="agents"]');

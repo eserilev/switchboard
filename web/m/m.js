@@ -505,9 +505,21 @@
     api.listen?.("panes", (e) => { const v = e.payload ?? e; if (Array.isArray(v)) { S.panes = v; draw(); } else loadPanes(); });
     api.listen?.("today", () => loadToday());
 
+    // A link opens a screen: #today, #reviews, #agents, #you, #review/<id> (the overview)
+    // or #review/<id>/<step number from 1>. Notices and tests use it.
+    function route() {
+      const [what, id, n] = decodeURIComponent(location.hash.slice(1)).split("/");
+      if (["today", "reviews", "agents", "you"].includes(what)) { S.tab = what; S.view = null; }
+      else if (what === "review" && id) { S.tab = "reviews"; S.view = n ? { kind: "step", id, i: Math.max(0, +n - 1) } : { kind: "ov", id }; }
+      else return;
+      S.sel = null;
+      draw();
+    }
+    window.addEventListener("hashchange", route);
+
     loadToday();
-    loadReviews();
     loadPanes();
+    loadReviews().then(route);
     draw();
     return {
       root,
