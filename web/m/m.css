@@ -118,4 +118,4 @@
 }
 
 /* On a phone the screens cover the desktop page, which runs on underneath for the link. */
-body.sbm-on > *:not(.m) { display: none !important; }
+body.sbm-on > *:not(.m):not(:has(.m)) { display: none !important; }

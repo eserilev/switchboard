@@ -29,7 +29,8 @@
   function mount(root, api) {
     if (mounted) {
       if (api?.hub) mounted.setHub(api.hub);
-      if (root !== mounted.root && !root.childElementCount) root.remove();
+      // The caller shows its own root: the screens move into it, so its CSS shows them.
+      if (root && root !== mounted.root && root.isConnected && !root.contains(mounted.root)) root.appendChild(mounted.root);
       return mounted;
     }
     mounted = mountOne(root, api);

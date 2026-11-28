@@ -63,7 +63,8 @@
   const noSideScroll = () => document.documentElement.scrollWidth <= window.innerWidth && $$(".m .body").every((b) => b.scrollWidth <= b.clientWidth + 1);
 
   // Today (42.3).
-  check("a second mount gives the first copy and adds none", again === ui && $$(".m").length === 1 && !extra.isConnected);
+  check("a second mount gives the first copy, adds none, and moves it into the new root", again === ui && $$(".m").length === 1 && extra.contains(ui.root));
+  $("#app").appendChild(ui.root);
   check("the phone is at phone width", window.innerWidth === 390 && window.innerHeight === 844, [window.innerWidth, window.innerHeight]);
   check("four tabs, Today first, with the hub on top", $$(".tabs button").map((b) => b.textContent.replace(/\d+/g, "").trim()).join() === "Today,Reviews,Agents,You" && $(".tabs [aria-current]").textContent.includes("Today") && $(".hub").textContent.includes("archlinux") && !!$(".hub .dot.on"));
   check("Today shows the sections and rows, and the job tabs", $$(".m h2").map((h) => h.textContent).join("|") === "Your PRs · 1|Reviews · 1" && $$("[data-job]").length === 2 && $(".card .t1").textContent.includes("Reply to dknopik"));
