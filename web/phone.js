@@ -99,33 +99,6 @@
   window.__TAURI__.event.listen("link", (e) => {
     if ((isPhone || document.body.classList.contains("phone")) && e.payload && e.payload.up) fire(e.payload);
   });
-  // The phone screens (SPEC 42, web/m): phone.js mounts them at the first link, then
-  // tells them when the link goes up or down. SBM.mount is safe to call twice. The
-  // desktop page stays underneath, hidden.
-  let ui = null;
-  function seen() {
-    return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
-  ready((link) => {
-    if (ui) return ui.setHub({ linked: true, seen: "now" });
-    if (!window.SBM) return;
-    const root = el("div", { id: "mroot" });
-    document.body.append(root);
-    document.body.classList.add("m-on");
-    ui = window.SBM.mount(root, {
-      call,
-      listen: (ev, fn) => window.__TAURI__.event.listen(ev, fn),
-      hub: { name: link.host || "hub", linked: true },
-      unpair: async () => {
-        await invoke("phone_unpair");
-        location.reload();
-      },
-    });
-  });
-  window.__TAURI__.event.listen("link", (e) => {
-    if (ui && e.payload && !e.payload.up) ui.setHub({ linked: false, seen: seen() });
-  });
-
   // A phone that is paired and already linked when the page loads.
   invoke("link_state")
     .then((st) => {
