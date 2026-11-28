@@ -132,8 +132,10 @@ mod tests {
     fn setup(name: &str) -> (PathBuf, PathBuf) {
         let root = std::env::temp_dir().join(format!("sb-prwork-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("up")).unwrap();
+        // macOS: the temp folder is a link (/var -> /private/var), and git gives the real path.
+        let root = root.canonicalize().unwrap();
         let up = root.join("up");
-        std::fs::create_dir_all(&up).unwrap();
         run(&up, &["init", "-q", "-b", "main"]);
         run(&up, &["commit", "-q", "--allow-empty", "-m", "base"]);
         run(&root, &["clone", "-q", up.to_str().unwrap(), "fork"]);

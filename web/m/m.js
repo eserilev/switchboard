@@ -502,4 +502,25 @@
     };
   }
   window.SBM = { mount };
+
+  // On a phone (web/phone.js): the screens come up with the link, over the desktop page.
+  let ui = null;
+  const linkOf = (l) => ({ name: l?.host || l?.hub || "hub", linked: l?.up !== false, version: l?.version });
+  function onPhone(link) {
+    if (ui) return ui.setHub(linkOf(link));
+    const T = window.__TAURI__;
+    if (!T) return;
+    const el = document.createElement("div");
+    el.id = "sbm";
+    document.body.appendChild(el);
+    document.body.classList.add("sbm-on");
+    ui = mount(el, {
+      call: (cmd, args) => (window.SBPhone?.call || T.core.invoke)(cmd, args),
+      listen: (ev, fn) => T.event.listen(ev, fn),
+      hub: linkOf(link),
+      unpair: () => T.core.invoke("phone_unpair").then(() => location.reload()),
+    });
+  }
+  if (window.SBPhone?.ready) window.SBPhone.ready(onPhone);
+  else document.addEventListener("sb:phone-ready", (e) => onPhone(e.detail));
 })();
