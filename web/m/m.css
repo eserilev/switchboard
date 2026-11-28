@@ -82,11 +82,13 @@
 .m .code { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 12px 0; font: 12.5px/1.55 var(--mono); }
 .m .code .fh { padding: 8px 10px; background: var(--bg2); color: var(--dim); font-weight: 600; display: flex; gap: 8px; overflow-wrap: break-word; }
 .m .code .fh .path { min-width: 0; }
-.m .row { display: grid; grid-template-columns: 26px 34px minmax(0, 1fr); align-items: start; }
+.m .row { display: grid; grid-template-columns: 26px 44px minmax(0, 1fr); align-items: start; }
 .m .row .plus { width: 22px; height: 20px; margin: 1px 0 0 2px; border: 0; border-radius: 5px; background: transparent; color: var(--dim2); padding: 0; opacity: .55; display: flex; align-items: center; justify-content: center; }
 .m .row.sel .plus { border-color: var(--gold); color: var(--gold); opacity: 1; }
 .m .row .ln { color: var(--dim2); text-align: right; padding-right: 8px; user-select: none; }
-.m .row .tx { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 8px; }
+.m .row .tx { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 8px; text-indent: 0; }
+.m .row .mk { display: inline-block; width: 1ch; margin-right: 2px; font-weight: 700; }
+.m .nowrap { white-space: nowrap; }
 .m .row.add { background: var(--add); }
 .m .row.add .tx { color: var(--add-fg); }
 .m .row.del { background: var(--del); }

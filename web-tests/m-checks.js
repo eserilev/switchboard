@@ -95,10 +95,12 @@
   check("the step shows its place, title, text and question", $(".top").textContent.includes("Step 2 of 2") && $(".m h1").textContent.includes("keep errors") && $(".q").textContent.includes("Do we want to log it") && $$(".m h2").some((h) => h.textContent === "For you to decide"));
   check("your place goes to the hub, so the desktop opens there", called("review_step_seen").at(-1)?.[1].step === "s2");
   await wait(60);
-  check("the narrow diff has added and removed lines with line numbers", $$(".row.add").length === 2 && $$(".row.del").length === 1 && $(".row.add .ln").textContent === "7");
+  check("the narrow diff has added and removed lines with line numbers", $$(".row.add").length === 2 && $$(".row.del").length === 1 && $(".row.add .ln").textContent === "+7");
   check("the file path breaks only after a slash", $(".code .fh .path").innerHTML.includes("/<wbr>") || !$(".code .fh .path").textContent.includes("/"));
   check("buttons use the page font, not the browser's", getComputedStyle($(".fold")).fontFamily === getComputedStyle($(".m")).fontFamily.split(",")[0] || getComputedStyle($(".fold")).fontFamily.startsWith("Inter"), getComputedStyle($(".fold")).fontFamily);
   check("the line button is a comment bubble, not a + that reads as an added line", $(".row .plus svg") && !$$(".row .plus").some((b) => b.textContent.trim() === "+"));
+  check("added and removed rows also differ by a mark, not colour alone", $(".row.add .mk").textContent === "+" && $(".row.del .mk").textContent === "−" && $(".row.del .mk").getAttribute("aria-label") === "removed");
+  check("a deep indent is capped, so the code starts on the number's row", $$(".row .tx").every((x) => parseFloat(x.style.paddingLeft || "0") <= 8) && !$$(".row .tx").some((x) => x.textContent.startsWith(" ")));
   check("context far from a change folds", !!$(".fold") && $(".fold").textContent.includes("Show 3 more"));
   check("long lines wrap, with no sideways scroll", noSideScroll(), [document.documentElement.scrollWidth, window.innerWidth]);
   await tap('[data-line="0|new|7"]');
@@ -117,6 +119,13 @@
   const nc = called("review_comment").at(-1)?.[1];
   check("swipe right on a note adds it as an agent draft", nc?.comment.agent === true && nc.comment.line === 7 && nc.comment.text === note.text);
   await swipe($('[data-swipe="note"]'), -140);
+  R = { ...R, dismissed: ["s2|must|src/a.rs:7|" + note.text] };
+  emit("review", R);
+  await wait(40);
+  check("a dismissed card says what it was", $(".note .t2")?.textContent.includes("The LevelDB path"), $(".note")?.textContent);
+  R = { ...R, dismissed: [] };
+  emit("review", R);
+  await wait(40);
   check("swipe left on a note dismisses it, with undo", called("review_dismiss").at(-1)?.[1].on === true && called("review_dismiss").at(-1)[1].note === "s2|must|src/a.rs:7|" + note.text && !!$(".undo [data-undo]"));
   // Ask.
   await tap(".bar [data-ask]");
@@ -129,6 +138,7 @@
   check("the answer shows in the sheet when it comes", $(".answer")?.textContent === "It keeps the error." && !!$(".answer b"));
   await tap(".sheet [data-close]");
   // Reviewed.
+  check("the gold button stays on one line", (() => { const b = $("[data-reviewed]"); return b.scrollHeight <= b.clientHeight + 2 && getComputedStyle(b).whiteSpace === "nowrap"; })());
   await tap("[data-reviewed]");
   check("Reviewed marks the step and goes on", called("review_mark").at(-1)?.[1].step === "s2" && called("review_mark").at(-1)[1].checked === true);
   R = { ...R, steps: [{ id: "s1", checked: true }, { id: "s2", checked: true }] };

@@ -204,7 +204,7 @@
           <div class="what${long ? " short" : ""}">${md(s.what || "")}${s.why ? `<p><b>${mdi(s.why)}</b></p>` : ""}</div>${long ? `<button type="button" class="more" data-more="${esc(s.id)}">More</button>` : ""}
           ${qlabel}${qs}${codeBox(r, s, d)}${drafts.map((x) => `<div class="draft"><div class="t2 mono">${esc(x.path.split("/").pop())}:${x.line}</div>${esc(x.text)}</div>`).join("")}
           ${cards ? `<h2 id="notes" style="margin:14px 0 6px">Claude's notes</h2>${cards}` : ""}</div>
-          <div class="bar"><button type="button" class="btn" style="flex:0 0 52px" data-prev aria-label="Previous step">${svg("back", 20)}</button><button type="button" class="btn" data-ask>Ask</button><button type="button" class="btn" data-comment ${S.sel ? "" : "disabled"}>Comment</button><button type="button" class="btn gold" style="flex:1.5" data-reviewed>${checked(r, s.id) ? "Next ›" : "Reviewed ›"}</button></div>`;
+          <div class="bar"><button type="button" class="btn" style="flex:0 0 52px" data-prev aria-label="Previous step">${svg("back", 20)}</button><button type="button" class="btn" data-ask>Ask</button><button type="button" class="btn" data-comment ${S.sel ? "" : "disabled"}>Comment</button><button type="button" class="btn gold nowrap" style="flex:1.6" data-reviewed>${checked(r, s.id) ? "Next ›" : "Reviewed ›"}</button></div>`;
     }
     // The narrow diff (42.4): one column, wrapped lines, a + on each line, folded context.
     function codeBox(r, s, d) {
@@ -228,7 +228,7 @@
           const sel = S.sel && S.sel.path === sec.path && S.sel.side === side && ln >= S.sel.start && ln <= S.sel.line;
           const dim = S.sel && S.sel.path === sec.path && S.sel.side !== side && x.kind !== " ";
           const cls = { "+": "add", "-": "del", " ": "" }[x.kind] || "";
-          out += `<div class="row ${cls}${sel ? " sel" : ""}${dim ? " dim" : ""}"><button type="button" class="plus" data-line="${si}|${side}|${ln}" aria-label="Select line ${ln} to comment or ask">${svg("bubble", 13)}</button><span class="ln">${ln ?? ""}</span><span class="tx">${esc(x.text)}</span></div>`;
+          out += `<div class="row ${cls}${sel ? " sel" : ""}${dim ? " dim" : ""}"><button type="button" class="plus" data-line="${si}|${side}|${ln}" aria-label="Select line ${ln} to comment or ask">${svg("bubble", 13)}</button><span class="ln"><span class="mk" aria-label="${{ "+": "added", "-": "removed" }[x.kind] || "unchanged"}">${{ "+": "+", "-": "−" }[x.kind] || ""}</span>${ln ?? ""}</span>${indented(x.text)}</div>`;
           if (S.sel && S.sel.path === sec.path && S.sel.side === side && ln === S.sel.line) {
             out += `<div class="selbar"><span>${S.sel.start === S.sel.line ? `Line ${ln}` : `Lines ${S.sel.start}–${S.sel.line}`}</span><button type="button" class="btn sm" data-ask>Ask</button><button type="button" class="btn sm gold" data-comment>Comment</button><button type="button" class="btn sm" data-unsel aria-label="Clear the selection">✕</button></div>`;
           }
@@ -237,8 +237,15 @@
         return `<div class="code"><div class="fh"><span class="path">${esc(sec.path).replaceAll("/", "/<wbr>")}</span><span style="margin-left:auto;white-space:nowrap">+${add} −${del}</span></div>${out}</div>`;
       }).join("");
     }
+    // Leading spaces and tabs become a left padding of at most 8 columns: a deep indent
+    // on a narrow screen would push the code onto the next row.
+    function indented(text) {
+      const m = /^[ \t]*/.exec(text)[0];
+      const cols = [...m].reduce((c, ch) => c + (ch === "\t" ? 4 : 1), 0);
+      return `<span class="tx" style="padding-left:${Math.min(cols, 8)}ch">${esc(text.slice(m.length))}</span>`;
+    }
     function noteCard(r, n) {
-      if (n.dismissed) return `<div class="note" data-note="${esc(n.key)}"><span class="t2">Dismissed${n.line ? ` · line ${n.line}` : ""}</span><div class="acts"><button type="button" class="btn sm" data-undismiss>Undo</button></div></div>`;
+      if (n.dismissed) return `<div class="note" data-note="${esc(n.key)}"><span class="t2">Dismissed${n.line ? ` · line ${n.line}` : ""}: ${esc(n.text.length > 70 ? n.text.slice(0, 67) + "…" : n.text)}</span><div class="acts"><button type="button" class="btn sm" data-undismiss>Undo</button></div></div>`;
       const added = S.open.has(`added|${n.key}`);
       return `<div class="swipe" data-swipe="note" data-key="${esc(n.key)}"><div class="under"><span class="r">Add as comment</span><span class="l">Dismiss</span></div>
         <div class="note card"><div style="display:flex;gap:8px;align-items:center"><span class="sev sev-${esc(n.severity)}">${esc(n.severity)}</span>${n.file ? `<span class="mono t2">${esc(n.file.split("/").pop())}${n.line ? `:${n.line}` : ""}</span>` : ""}${added ? `<span class="tag">✓ added</span>` : ""}</div>
