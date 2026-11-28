@@ -75,5 +75,37 @@
     pasteBtn.onclick = () => start(text.value);
   }
 
-  window.SBPhone = { pair };
+  // The hand-over to the phone screens (SPEC 42, web/m/). `ready(fn)` calls fn each
+  // time the link to the hub comes up on a phone: after pairing, at start when the
+  // phone is paired, and after each reconnect. The same moment fires the DOM event
+  // `sb:phone-ready` on document. `call(cmd, args)` runs a hub command: the window
+  // protocol of the desktop (SPEC 29.2), limited to the phone's classes (41.7).
+  const readyFns = [];
+  function ready(fn) {
+    readyFns.push(fn);
+  }
+  function fire(link) {
+    for (const fn of readyFns) {
+      try {
+        fn(link);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    document.dispatchEvent(new CustomEvent("sb:phone-ready", { detail: link }));
+  }
+  const call = (cmd, args) => invoke(cmd, args || {});
+  let isPhone = false;
+  window.__TAURI__.event.listen("link", (e) => {
+    if ((isPhone || document.body.classList.contains("phone")) && e.payload && e.payload.up) fire(e.payload);
+  });
+  // A phone that is paired and already linked when the page loads.
+  invoke("link_state")
+    .then((st) => {
+      isPhone = !!(st && st.phone);
+      if (isPhone && st.paired && st.up) fire(st);
+    })
+    .catch(() => {});
+
+  window.SBPhone = { pair, ready, call };
 })();
