@@ -90,16 +90,17 @@
   await tap('[data-tab="reviews"]');
   check("Reviews lists the open PR reviews, not local ones", $$("[data-openrev]").length === 1 && $(".card .t2").textContent.includes("2 steps · 1 reviewed"));
   await tap("[data-openrev]");
-  check("the overview shows the title, the counts, Claude's take and Go on at step 2", $(".m h1").textContent === "Fix redb backend bugs" && $(".take").textContent.includes("needs a change") && $(".take").textContent.includes("1 must") && $(".bar .gold").textContent === "Go on at step 2");
+  check("the overview shows the title, the counts, Claude's take and Go on at step 2", $(".m h1").textContent === "Fix redb backend bugs" && $(".m-take").textContent.includes("needs a change") && $(".m-take").textContent.includes("1 must") && $(".bar .gold").textContent === "Go on at step 2");
   await tap(".bar .gold");
   check("the step shows its place, title, text and question", $(".top").textContent.includes("Step 2 of 2") && $(".m h1").textContent.includes("keep errors") && $(".q").textContent.includes("Do we want to log it") && $$(".m h2").some((h) => h.textContent === "For you to decide"));
   check("your place goes to the hub, so the desktop opens there", called("review_step_seen").at(-1)?.[1].step === "s2");
   await wait(60);
-  check("the narrow diff has added and removed lines with line numbers", $$(".row.add").length === 2 && $$(".row.del").length === 1 && $(".row.add .ln").textContent === "+7");
+  check("the narrow diff has added and removed lines with line numbers", $$(".row.add").length === 2 && $$(".row.del").length === 1 && $(".row.add .ln").textContent === "+7" && !$(".row:not(.add):not(.del) .m-mark"));
   check("the file path breaks only after a slash", $(".code .fh .path").innerHTML.includes("/<wbr>") || !$(".code .fh .path").textContent.includes("/"));
   check("buttons use the page font, not the browser's", getComputedStyle($(".fold")).fontFamily === getComputedStyle($(".m")).fontFamily.split(",")[0] || getComputedStyle($(".fold")).fontFamily.startsWith("Inter"), getComputedStyle($(".fold")).fontFamily);
-  check("the line button is a comment bubble, not a + that reads as an added line", $(".row .plus svg") && !$$(".row .plus").some((b) => b.textContent.trim() === "+"));
-  check("added and removed rows also differ by a mark, not colour alone", $(".row.add .mk").textContent === "+" && $(".row.del .mk").textContent === "−" && $(".row.del .mk").getAttribute("aria-label") === "removed");
+  check("the line button is a comment bubble, not a + that reads as an added line", $(".row .m-plus svg") && !$$(".row .m-plus").some((b) => b.textContent.trim() === "+"));
+  check("added and removed rows also differ by a mark, not colour alone", $(".row.add .m-mark").textContent === "+" && $(".row.del .m-mark").textContent === "−" && $(".row.del .m-mark").getAttribute("aria-label") === "removed" && !$(".m .mk"));
+  check("each line takes one row: the mark and the number fit the gutter", $$(".row").every((x) => { const n = x.querySelector(".ln"); return n.getBoundingClientRect().height <= parseFloat(getComputedStyle(n).lineHeight) * 1.5; }));
   check("a deep indent is capped, so the code starts on the number's row", $$(".row .tx").every((x) => parseFloat(x.style.paddingLeft || "0") <= 8) && !$$(".row .tx").some((x) => x.textContent.startsWith(" ")));
   check("context far from a change folds", !!$(".fold") && $(".fold").textContent.includes("Show 3 more"));
   check("long lines wrap, with no sideways scroll", noSideScroll(), [document.documentElement.scrollWidth, window.innerWidth]);
@@ -170,7 +171,7 @@
   await tap('[data-go="reviews"]');
   await tap('[data-tab="agents"]');
   check("Agents puts the permit first, with Allow and Deny", $$(".m h2")[0].textContent.startsWith("Needs you") && $(".permit pre").textContent === "Bash: cargo test -p store" && $$(".card").length === 1);
-  check("the tab bar counts what needs you", $('[data-tab="agents"] .badge')?.textContent === "1");
+  check("the tab bar counts what needs you", $('[data-tab="agents"] .m-badge')?.textContent === "1");
   await tap('[data-permit][data-allow="1"]');
   check("Allow answers the permit", called("permit_answer").at(-1)?.[1].permit === "p61-1" && called("permit_answer").at(-1)[1].allow === true);
   // You (42.6).

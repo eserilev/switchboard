@@ -88,7 +88,7 @@
     function tabs() {
       const waiting = (S.today?.jobs || []).find((j) => j.name === (S.today?.job || "Everything"))?.count || 0;
       const needs = S.panes.filter((p) => p.permit || p.lamp === "needs").length;
-      const t = (k, label, badge) => `<button type="button" data-tab="${k}"${S.tab === k ? ' aria-current="page"' : ""}>${svg(k)}${label}${badge ? `<span class="badge">${badge}</span>` : ""}</button>`;
+      const t = (k, label, badge) => `<button type="button" data-tab="${k}"${S.tab === k ? ' aria-current="page"' : ""}>${svg(k)}${label}${badge ? `<span class="m-badge">${badge}</span>` : ""}</button>`;
       return `<nav class="tabs" aria-label="Tabs">${t("today", "Today", waiting)}${t("reviews", "Reviews")}${t("agents", "Agents", needs)}${t("you", "You")}</nav>`;
     }
 
@@ -97,7 +97,7 @@
       const v = S.today;
       if (!v) return hubBar("<h1>Today</h1>") + `<div class="body"><div class="empty">Loading…</div></div>`;
       if (v.error) return hubBar("<h1>Today</h1>") + `<div class="body"><div class="empty">${esc(v.error)}</div></div>`;
-      const jobs = (v.jobs || []).length > 1 ? `<div class="chips" role="tablist" aria-label="Jobs" style="padding:0 6px 6px">${v.jobs.map((j) => `<button type="button" class="chip" role="tab" data-job="${esc(j.name)}" aria-selected="${j.name === v.job}">${esc(j.name)} ${j.count}</button>`).join("")}</div>` : "";
+      const jobs = (v.jobs || []).length > 1 ? `<div class="chips" role="tablist" aria-label="Jobs" style="padding:0 6px 6px">${v.jobs.map((j) => `<button type="button" class="m-chip" role="tab" data-job="${esc(j.name)}" aria-selected="${j.name === v.job}">${esc(j.name)} ${j.count}</button>`).join("")}</div>` : "";
       const secs = (v.sections || []).filter((s) => s.items.length);
       const rows = secs.map((s) => `<section aria-label="${esc(s.title)}"><h2>${esc(s.title)} · ${s.items.length}</h2>${s.items.map((i) => {
         const key = `${i.repo}#${i.number}#${i.section === "changed" ? "c" : ""}`;
@@ -123,7 +123,7 @@
     function laterSheet(key) {
       const i = todayItem(key);
       if (!i) return;
-      S.sheet = { kind: "later", key, html: `<h3>Later: #${i.number}</h3>${LATER.map(([l, v], n) => `<button type="button" class="btn" data-later="${n}">${l}</button>`).join("")}<button type="button" class="btn" data-close>Cancel</button>` };
+      S.sheet = { kind: "later", key, html: `<h3>Later: #${i.number}</h3>${LATER.map(([l, v], n) => `<button type="button" class="m-btn" data-later="${n}">${l}</button>`).join("")}<button type="button" class="m-btn" data-close>Cancel</button>` };
       draw();
     }
     async function later(key, n) {
@@ -148,7 +148,7 @@
       const open = S.reviews.find((r) => r.repo === i.repo && r.number === i.number);
       S.sheet = { kind: "item", html: `<h3>${esc(i.repo)}#${i.number}</h3><div class="t1">${esc(i.title)}</div><div class="what">${esc(i.line)}</div>
         ${(i.detail || []).map((d) => `<div class="t2">${esc(d)}</div>`).join("")}${i.why ? `<div class="t2">${esc(i.why)}</div>` : ""}
-        <div class="row2">${open ? `<button type="button" class="btn gold" data-openrev="${esc(open.id)}">Open review</button>` : `<button type="button" class="btn gold" data-startrev="${esc(i.url)}">Start review</button>`}<button type="button" class="btn" data-close>Close</button></div>` };
+        <div class="row2">${open ? `<button type="button" class="m-btn gold" data-openrev="${esc(open.id)}">Open review</button>` : `<button type="button" class="m-btn gold" data-startrev="${esc(i.url)}">Start review</button>`}<button type="button" class="m-btn" data-close>Close</button></div>` };
       draw();
     }
 
@@ -177,9 +177,9 @@
       const body = r.status !== "ready"
         ? `<div class="empty">${esc(r.status === "error" ? r.error || "The guide failed." : "Claude is writing the guide…")}</div>`
         : `<div class="t1" style="font-size:13px;display:flex;justify-content:space-between"><span>${ss.length} steps · ${ok} reviewed</span><span class="t2">${r.drafts.length} draft${r.drafts.length === 1 ? "" : "s"}</span></div>${progress(r, ok === ss.length ? -1 : at)}
-          ${take ? `<section class="take" aria-label="Claude on the PR"><div class="lbl">Claude on the PR${verdict ? ` · ${verdict}` : ""}</div><div class="what">${mdi(take.summary || "")}</div><div class="chips">${counts}</div></section>` : ""}
-          <div class="steps">${ss.map((s, i) => `<button type="button" data-step="${i}" class="${checked(r, s.id) ? "done" : ""}${i === at && ok < ss.length ? " cur" : ""}"><span class="n">${checked(r, s.id) ? "✓" : i + 1}</span><span>${mdi(s.title)}</span></button>`).join("")}</div>`;
-      const go = r.status !== "ready" ? "" : ok === ss.length ? `<button type="button" class="btn gold" data-finish>Finish review</button>` : `<button type="button" class="btn" data-finish>Finish</button><button type="button" class="btn gold" data-step="${at}" style="flex:2">${at ? `Go on at step ${at + 1}` : "Start at step 1"}</button>`;
+          ${take ? `<section class="m-take" aria-label="Claude on the PR"><div class="lbl">Claude on the PR${verdict ? ` · ${verdict}` : ""}</div><div class="what">${mdi(take.summary || "")}</div><div class="chips">${counts}</div></section>` : ""}
+          <div class="m-steps">${ss.map((s, i) => `<button type="button" data-step="${i}" class="${checked(r, s.id) ? "done" : ""}${i === at && ok < ss.length ? " cur" : ""}"><span class="n">${checked(r, s.id) ? "✓" : i + 1}</span><span>${mdi(s.title)}</span></button>`).join("")}</div>`;
+      const go = r.status !== "ready" ? "" : ok === ss.length ? `<button type="button" class="m-btn gold" data-finish>Finish review</button>` : `<button type="button" class="m-btn" data-finish>Finish</button><button type="button" class="m-btn gold" data-step="${at}" style="flex:2">${at ? `Go on at step ${at + 1}` : "Start at step 1"}</button>`;
       return hubBar(`<span class="mono t2">${esc(r.repo.split("/").pop())}#${r.number} · round ${r.round || 1}</span>`, "reviews")
         + `<div class="body" style="padding:0 18px 16px"><h1>${esc(r.title)}</h1>${body}</div>${go ? `<div class="bar">${go}</div>` : ""}`;
     }
@@ -202,9 +202,9 @@
       return hubBar(`<span class="t2" style="font-weight:600">Step ${i + 1} of ${ss.length}</span>`, `ov:${r.id}`)
         + `<div class="body" style="padding:0 16px 16px" data-swipe="step">${progress(r, i)}<h1 style="font-size:21px;margin-top:8px">${mdi(s.title)}</h1>
           <div class="what${long ? " short" : ""}">${md(s.what || "")}${s.why ? `<p><b>${mdi(s.why)}</b></p>` : ""}</div>${long ? `<button type="button" class="more" data-more="${esc(s.id)}">More</button>` : ""}
-          ${qlabel}${qs}${codeBox(r, s, d)}${drafts.map((x) => `<div class="draft"><div class="t2 mono">${esc(x.path.split("/").pop())}:${x.line}</div>${esc(x.text)}</div>`).join("")}
+          ${qlabel}${qs}${codeBox(r, s, d)}${drafts.map((x) => `<div class="m-draft"><div class="t2 mono">${esc(x.path.split("/").pop())}:${x.line}</div>${esc(x.text)}</div>`).join("")}
           ${cards ? `<h2 id="notes" style="margin:14px 0 6px">Claude's notes</h2>${cards}` : ""}</div>
-          <div class="bar"><button type="button" class="btn" style="flex:0 0 52px" data-prev aria-label="Previous step">${svg("back", 20)}</button><button type="button" class="btn" data-ask>Ask</button><button type="button" class="btn" data-comment ${S.sel ? "" : "disabled"}>Comment</button><button type="button" class="btn gold nowrap" style="flex:1.6" data-reviewed>${checked(r, s.id) ? "Next ›" : "Reviewed ›"}</button></div>`;
+          <div class="bar"><button type="button" class="m-btn" style="flex:0 0 52px" data-prev aria-label="Previous step">${svg("back", 20)}</button><button type="button" class="m-btn" data-ask>Ask</button><button type="button" class="m-btn" data-comment ${S.sel ? "" : "disabled"}>Comment</button><button type="button" class="m-btn gold nowrap" style="flex:1.6" data-reviewed>${checked(r, s.id) ? "Next ›" : "Reviewed ›"}</button></div>`;
     }
     // The narrow diff (42.4): one column, wrapped lines, a + on each line, folded context.
     function codeBox(r, s, d) {
@@ -228,9 +228,9 @@
           const sel = S.sel && S.sel.path === sec.path && S.sel.side === side && ln >= S.sel.start && ln <= S.sel.line;
           const dim = S.sel && S.sel.path === sec.path && S.sel.side !== side && x.kind !== " ";
           const cls = { "+": "add", "-": "del", " ": "" }[x.kind] || "";
-          out += `<div class="row ${cls}${sel ? " sel" : ""}${dim ? " dim" : ""}"><button type="button" class="plus" data-line="${si}|${side}|${ln}" aria-label="Select line ${ln} to comment or ask">${svg("bubble", 13)}</button><span class="ln"><span class="mk" aria-label="${{ "+": "added", "-": "removed" }[x.kind] || "unchanged"}">${{ "+": "+", "-": "−" }[x.kind] || ""}</span>${ln ?? ""}</span>${indented(x.text)}</div>`;
+          out += `<div class="row ${cls}${sel ? " sel" : ""}${dim ? " dim" : ""}"><button type="button" class="m-plus" data-line="${si}|${side}|${ln}" aria-label="Select line ${ln} to comment or ask">${svg("bubble", 13)}</button><span class="ln">${x.kind === "+" || x.kind === "-" ? `<span class="m-mark" aria-label="${x.kind === "+" ? "added" : "removed"}">${x.kind === "+" ? "+" : "−"}</span>` : ""}<span class="m-num">${ln ?? ""}</span></span>${indented(x.text)}</div>`;
           if (S.sel && S.sel.path === sec.path && S.sel.side === side && ln === S.sel.line) {
-            out += `<div class="selbar"><span>${S.sel.start === S.sel.line ? `Line ${ln}` : `Lines ${S.sel.start}–${S.sel.line}`}</span><button type="button" class="btn sm" data-ask>Ask</button><button type="button" class="btn sm gold" data-comment>Comment</button><button type="button" class="btn sm" data-unsel aria-label="Clear the selection">✕</button></div>`;
+            out += `<div class="selbar"><span>${S.sel.start === S.sel.line ? `Line ${ln}` : `Lines ${S.sel.start}–${S.sel.line}`}</span><button type="button" class="m-btn sm" data-ask>Ask</button><button type="button" class="m-btn sm gold" data-comment>Comment</button><button type="button" class="m-btn sm" data-unsel aria-label="Clear the selection">✕</button></div>`;
           }
         });
         flush();
@@ -245,11 +245,11 @@
       return `<span class="tx" style="padding-left:${Math.min(cols, 8)}ch">${esc(text.slice(m.length))}</span>`;
     }
     function noteCard(r, n) {
-      if (n.dismissed) return `<div class="note" data-note="${esc(n.key)}"><span class="t2">Dismissed${n.line ? ` · line ${n.line}` : ""}: ${esc(n.text.length > 70 ? n.text.slice(0, 67) + "…" : n.text)}</span><div class="acts"><button type="button" class="btn sm" data-undismiss>Undo</button></div></div>`;
+      if (n.dismissed) return `<div class="note" data-note="${esc(n.key)}"><span class="t2">Dismissed${n.line ? ` · line ${n.line}` : ""}: ${esc(n.text.length > 70 ? n.text.slice(0, 67) + "…" : n.text)}</span><div class="acts"><button type="button" class="m-btn sm" data-undismiss>Undo</button></div></div>`;
       const added = S.open.has(`added|${n.key}`);
       return `<div class="swipe" data-swipe="note" data-key="${esc(n.key)}"><div class="under"><span class="r">Add as comment</span><span class="l">Dismiss</span></div>
         <div class="note card"><div style="display:flex;gap:8px;align-items:center"><span class="sev sev-${esc(n.severity)}">${esc(n.severity)}</span>${n.file ? `<span class="mono t2">${esc(n.file.split("/").pop())}${n.line ? `:${n.line}` : ""}</span>` : ""}${added ? `<span class="tag">✓ added</span>` : ""}</div>
-        <div>${mdi(n.text)}</div><div class="acts">${n.line && !added ? `<button type="button" class="btn sm" data-addnote>Add as comment</button>` : ""}<button type="button" class="btn sm" data-asknote>Ask</button><button type="button" class="btn sm" data-dismiss>Dismiss</button></div></div></div>`;
+        <div>${mdi(n.text)}</div><div class="acts">${n.line && !added ? `<button type="button" class="m-btn sm" data-addnote>Add as comment</button>` : ""}<button type="button" class="m-btn sm" data-asknote>Ask</button><button type="button" class="m-btn sm" data-dismiss>Dismiss</button></div></div></div>`;
     }
     const lineText = (d, sel) => {
       const sec = (d?.sections || []).find((x) => x.path === sel.path);
@@ -280,7 +280,7 @@
       if (!sel) return;
       S.sheet = { kind: "comment", html: `<h3>Comment on ${sel.start === sel.line ? `line ${sel.line}` : `lines ${sel.start}–${sel.line}`}</h3><div class="t2 mono">${esc(sel.path)}</div>
         <textarea data-ctext aria-label="Your comment" placeholder="Your comment. It stays a draft until Finish review."></textarea>
-        <div class="row2"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn gold" data-savecomment>Save draft</button></div>` };
+        <div class="row2"><button type="button" class="m-btn" data-close>Cancel</button><button type="button" class="m-btn gold" data-savecomment>Save draft</button></div>` };
       draw();
       root.querySelector("[data-ctext]")?.focus();
       S.sheet.save = async () => {
@@ -307,7 +307,7 @@
         const last = t?.messages.filter((m) => !m.me).at(-1);
         S.sheet.html = `<h3>Ask about ${sel ? `line ${sel.line}` : "this step"}</h3>${t ? `<div class="answer">${last ? mdi(last.text) : "Claude is thinking…"}</div>` : ""}
           <textarea data-qtext aria-label="Your question" placeholder="Ask Claude about this step.">${esc(about || "")}</textarea>
-          <div class="row2"><button type="button" class="btn" data-close>Close</button><button type="button" class="btn gold" data-sendask ${t?.busy ? "disabled" : ""}>Ask</button></div>`;
+          <div class="row2"><button type="button" class="m-btn" data-close>Close</button><button type="button" class="m-btn gold" data-sendask ${t?.busy ? "disabled" : ""}>Ask</button></div>`;
       };
       S.sheet.paint = paint;
       S.sheet.send = async () => {
@@ -350,10 +350,10 @@
       const paint = () => {
         const drafts = review(r.id)?.drafts || [];
         S.sheet.html = `<h3>Finish review</h3>${p.newer ? `<div class="t2">The PR has newer commits than the reviewed one.</div>` : ""}
-          <div class="t2">${drafts.length} comment${drafts.length === 1 ? "" : "s"} as ${esc(p.login)}</div>${drafts.map((x) => `<div class="draft"><div class="t2 mono">${esc((x.path || "").split("/").pop())}${x.line ? `:${x.line}` : ""}</div>${esc(x.text)}</div>`).join("")}
-          <div class="verdicts">${[["COMMENT", "Comment"], ["APPROVE", "Approve"], ["REQUEST_CHANGES", "Request changes"]].map(([k, l]) => `<button type="button" class="btn" data-event="${k}" aria-pressed="${S.sheet.event === k}">${l}</button>`).join("")}</div>
+          <div class="t2">${drafts.length} comment${drafts.length === 1 ? "" : "s"} as ${esc(p.login)}</div>${drafts.map((x) => `<div class="m-draft"><div class="t2 mono">${esc((x.path || "").split("/").pop())}${x.line ? `:${x.line}` : ""}</div>${esc(x.text)}</div>`).join("")}
+          <div class="verdicts">${[["COMMENT", "Comment"], ["APPROVE", "Approve"], ["REQUEST_CHANGES", "Request changes"]].map(([k, l]) => `<button type="button" class="m-btn" data-event="${k}" aria-pressed="${S.sheet.event === k}">${l}</button>`).join("")}</div>
           <textarea data-summary aria-label="Summary" placeholder="A summary (optional)">${esc(review(r.id)?.summary || "")}</textarea>
-          <div class="row2"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn gold" data-send>Send to GitHub</button></div>`;
+          <div class="row2"><button type="button" class="m-btn" data-close>Cancel</button><button type="button" class="m-btn gold" data-send>Send to GitHub</button></div>`;
       };
       S.sheet.paint = paint;
       S.sheet.send = async () => {
@@ -377,7 +377,7 @@
       const needs = claude.filter((p) => p.permit || p.lamp === "needs");
       const rest = claude.filter((p) => !needs.includes(p));
       const group = (title, list) => list.length ? `<h2>${title} · ${list.length}</h2>${list.map((p) => `<div class="card"><span class="k"><span>${esc(p.id)} · ${esc(p.repo)}</span><span class="st-${esc(p.lamp)}">${esc(p.lamp === "turn" ? "your turn" : p.lamp)}</span></span><span class="t1">${esc(name(p))}</span>${p.summary ? `<span class="t2">${esc(p.summary)}</span>` : ""}</div>`).join("")}` : "";
-      const permits = needs.map((p) => `<article class="permit"><div class="k"><span>${esc(p.id)} · ${esc(p.branch || p.repo)}</span></div><div class="t1">${esc(name(p))} ${p.permit ? "wants to run" : "needs you"}</div>${p.permit ? `<pre>${esc(p.permit.summary)}</pre><div class="row2"><button type="button" class="btn" data-permit="${esc(p.permit.id)}" data-allow="0">Deny</button><button type="button" class="btn gold" data-permit="${esc(p.permit.id)}" data-allow="1">Allow</button></div>` : `<div class="t2">${esc(p.summary || "It waits for you in its pane.")}</div>`}</article>`).join("");
+      const permits = needs.map((p) => `<article class="permit"><div class="k"><span>${esc(p.id)} · ${esc(p.branch || p.repo)}</span></div><div class="t1">${esc(name(p))} ${p.permit ? "wants to run" : "needs you"}</div>${p.permit ? `<pre>${esc(p.permit.summary)}</pre><div class="row2"><button type="button" class="m-btn" data-permit="${esc(p.permit.id)}" data-allow="0">Deny</button><button type="button" class="m-btn gold" data-permit="${esc(p.permit.id)}" data-allow="1">Allow</button></div>` : `<div class="t2">${esc(p.summary || "It waits for you in its pane.")}</div>`}</article>`).join("");
       const working = rest.filter((p) => p.lamp === "working");
       const turn = rest.filter((p) => p.lamp === "turn");
       const other = rest.filter((p) => p.lamp !== "working" && p.lamp !== "turn");
@@ -388,7 +388,7 @@
       const h = S.hub;
       return hubBar("<h1>You</h1>") + `<div class="body"><div class="card"><span class="k"><span>Hub</span></span><span class="t1">${esc(h.name)}</span><span class="t2">${h.linked ? "Linked" : "Not linked"}${h.version ? ` · ${esc(h.version)}` : ""}</span></div>
         <div class="card"><span class="k"><span>This phone</span></span><span class="t2">You manage devices on the computer: <span class="mono">sb devices</span>.</span></div>
-        ${api.unpair ? `<button type="button" class="btn" data-unpair>Remove this phone</button>` : ""}</div>`;
+        ${api.unpair ? `<button type="button" class="m-btn" data-unpair>Remove this phone</button>` : ""}</div>`;
     }
 
     // ---------- drawing and input ----------
@@ -404,7 +404,7 @@
       const typed = root.querySelector(".sheet textarea")?.value;
       root.innerHTML = screen()
         + (S.sheet ? `<div class="scrim" data-scrim><div class="sheet" role="dialog" aria-modal="true">${S.sheet.html}</div></div>` : "")
-        + (S.undo ? `<div class="undo" role="status"><span>${esc(S.undo.text)}</span>${S.undo.undo ? `<button type="button" class="btn sm" data-undo>Undo</button>` : ""}</div>` : "");
+        + (S.undo ? `<div class="undo" role="status"><span>${esc(S.undo.text)}</span>${S.undo.undo ? `<button type="button" class="m-btn sm" data-undo>Undo</button>` : ""}</div>` : "");
       const b = root.querySelector(".body");
       if (b) b.scrollTop = y;
       const ta = root.querySelector(".sheet textarea");
