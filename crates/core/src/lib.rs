@@ -30,6 +30,7 @@ pub mod mentions;
 pub mod nvim;
 pub mod pairing;
 pub mod paths;
+pub mod phone;
 pub mod post;
 pub mod proto;
 pub mod remote;

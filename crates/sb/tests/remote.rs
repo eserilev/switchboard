@@ -629,3 +629,55 @@ fn pairing_needs_a_terminal() {
     let out = c.output().unwrap();
     assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("needs a terminal"), "{out:?}");
 }
+
+/// The phone app's own code (`core::phone`): pairing from the QR text, then a
+/// `Client` over the session, as the app runs it.
+#[test]
+fn the_phone_app_pairs_and_works_through_its_client() {
+    use switchboard_core::{paths::Paths, pairing, phone, store};
+    let home = Home::new("phoneapp");
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let paths = Paths::under(home.root.clone());
+    std::fs::write(&paths.config, format!("[devices]\nlisten = \"127.0.0.1:{port}\"\n")).unwrap();
+    let (desk, _got) = connect(&home);
+    wait_for("the listener", 10, || std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+
+    // Pairing: what `sb pair` does on the computer, and what the app does.
+    let key = switchboard_core::devices::hub_key(&paths).unwrap();
+    let p = pairing::Pairing::open("127.0.0.1".parse().unwrap()).unwrap();
+    let qr = phone::parse_qr(&p.qr(format!("127.0.0.1:{port}").parse().unwrap(), &key.public).unwrap()).unwrap();
+    let waiting = std::thread::spawn(move || p.wait(key, Duration::from_secs(10)));
+    let wait = phone::pair_start(&qr, "Test phone", "ios").unwrap();
+    let asking = waiting.join().unwrap().unwrap();
+    assert_eq!((asking.code.as_str(), asking.name.as_str()), (wait.code.as_str(), "Test phone"));
+    let db = store::Store::open(&paths.store()).unwrap();
+    let id = asking.allow(&db, "Phone", 1).unwrap();
+    let paired = wait.wait(Duration::from_secs(5)).unwrap();
+    assert_eq!(paired.id, id);
+    let file = home.root.join("phone/paired.json");
+    paired.save(&file).unwrap();
+    assert_eq!(phone::Paired::load(&file).unwrap(), paired);
+
+    // The link: commands of its classes work; others are refused; events come.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let c = phone::connect(&paired, "phone-test", None, move |n| {
+        if let remote::News::Event(ev, _) = n {
+            let _ = tx.send(ev);
+        }
+    })
+    .unwrap();
+    assert!(c.call("panes", json!({})).is_ok());
+    assert!(c.call("pane_open", json!({})).unwrap_err().contains("only on the computer"));
+    open_shell(&desk, &home);
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(Instant::now() < end, "no panes event reached the phone");
+        if matches!(rx.recv_timeout(Duration::from_millis(200)).as_deref(), Ok("panes" | "pane")) {
+            break;
+        }
+    }
+    // A removed phone loses its link and can not come back.
+    assert!(home.cmd(&["devices", "remove", &id]).status().unwrap().success());
+    wait_for("the link ends", 10, || !c.is_up());
+    assert!(phone::connect(&paired, "phone-test", None, |_| {}).is_err());
+}

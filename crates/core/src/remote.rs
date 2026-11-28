@@ -30,7 +30,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Write, Read};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -656,11 +656,9 @@ impl Client {
         // Until the hello is good, any way out kills the program.
         let mut child = KillOnDrop(Some(child));
         let c = child.0.as_mut().ok_or("no child")?;
-        let mut stdin = c.stdin.take().ok_or("no stdin")?;
+        let stdin = c.stdin.take().ok_or("no stdin")?;
         let stdout = c.stdout.take().ok_or("no stdout")?;
         let stderr = c.stderr.take().ok_or("no stderr")?;
-        writeln!(stdin, "{}", hello_since(instance, since)).map_err(|e| e.to_string())?;
-        let _ = stdin.flush();
         // The last stderr lines tell why ssh failed.
         let errs: Arc<Mutex<VecDeque<String>>> = Arc::default();
         {
@@ -676,6 +674,33 @@ impl Client {
                 }
             });
         }
+        Self::over(Box::new(stdin), stdout, errs, child, instance, since, news)
+    }
+
+    /// A window's link over a stream pair that is already open: `input` takes the
+    /// lines to the hub, `output` gives its lines. A phone's encrypted session
+    /// (SPEC 41.5) comes in here; so does the program of [`Client::connect_as`].
+    pub fn over_streams(
+        input: Box<dyn Write + Send>,
+        output: impl Read + Send + 'static,
+        instance: &str,
+        since: Option<(u64, u64)>,
+        news: impl Fn(News) + Send + 'static,
+    ) -> Result<Arc<Client>, String> {
+        Self::over(input, output, Arc::default(), KillOnDrop(None), instance, since, news)
+    }
+
+    fn over(
+        mut stdin: Box<dyn Write + Send>,
+        stdout: impl Read + Send + 'static,
+        errs: Arc<Mutex<VecDeque<String>>>,
+        mut child: KillOnDrop,
+        instance: &str,
+        since: Option<(u64, u64)>,
+        news: impl Fn(News) + Send + 'static,
+    ) -> Result<Arc<Client>, String> {
+        writeln!(stdin, "{}", hello_since(instance, since)).map_err(|e| e.to_string())?;
+        let _ = stdin.flush();
         // The hello answer, in a thread: a server that never answers ends in a
         // timeout. The kill on the way out ends that thread too.
         let (tx, rx) = mpsc::channel();
@@ -699,7 +724,7 @@ impl Client {
         let client = Arc::new(Client {
             seq: Arc::new(Mutex::new(since)),
             resumed: answer["hello"]["resumed"] == true,
-            input: Mutex::new(Box::new(stdin)),
+            input: Mutex::new(stdin),
             waiting: Arc::default(),
             next: AtomicU64::new(1),
             up: Arc::new(AtomicBool::new(true)),
