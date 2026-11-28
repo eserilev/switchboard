@@ -3492,7 +3492,7 @@ The hub's name and link state sit at the top of every tab: a green dot when link
 - One column. Removed lines in red, added in green, with old and new line numbers in a thin gutter.
 - Long lines wrap with a small ↪ mark, never a sideways scroll. The changed words inside a line are highlighted.
 - Only the step's ranges, with 3 lines of context. **Show 20 more** above and below.
-- **A + on every line**, in a thin gutter left of the line numbers. A tap selects that line.
+- **A comment button on every line** (a small speech bubble, not a +, which reads as an added line), in a thin gutter left of the line numbers. A tap selects that line.
 - **Drag for more lines:** the selection gets a round handle at its top and at its bottom. Drag either handle up or down, over lines of the same side; the other side's lines dim. A long press on a line and a drag does the same.
 - **A bar under the selection:** "Lines 300–304", with **Ask** and **Comment**. Comment opens the comment sheet for the range; it posts as one multi-line comment, as on the desktop.
 - Pinch zooms the text only, not the layout. Landscape gives the diff the whole width.

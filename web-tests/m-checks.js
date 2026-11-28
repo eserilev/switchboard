@@ -98,6 +98,7 @@
   check("the narrow diff has added and removed lines with line numbers", $$(".row.add").length === 2 && $$(".row.del").length === 1 && $(".row.add .ln").textContent === "7");
   check("the file path breaks only after a slash", $(".code .fh .path").innerHTML.includes("/<wbr>") || !$(".code .fh .path").textContent.includes("/"));
   check("buttons use the page font, not the browser's", getComputedStyle($(".fold")).fontFamily === getComputedStyle($(".m")).fontFamily.split(",")[0] || getComputedStyle($(".fold")).fontFamily.startsWith("Inter"), getComputedStyle($(".fold")).fontFamily);
+  check("the line button is a comment bubble, not a + that reads as an added line", $(".row .plus svg") && !$$(".row .plus").some((b) => b.textContent.trim() === "+"));
   check("context far from a change folds", !!$(".fold") && $(".fold").textContent.includes("Show 3 more"));
   check("long lines wrap, with no sideways scroll", noSideScroll(), [document.documentElement.scrollWidth, window.innerWidth]);
   await tap('[data-line="0|new|7"]');
@@ -145,6 +146,9 @@
   location.hash = "#review/r1/2";
   await wait(60);
   check("#review/<id>/<n> opens that step", $(".top").textContent.includes("Step 2 of 2"));
+  location.hash = "#review/r1/2/notes";
+  await wait(400);
+  check("#review/<id>/<n>/notes scrolls to the note cards", $(".body").scrollTop > 0 || $("#notes").getBoundingClientRect().top < window.innerHeight, $(".body").scrollTop);
   location.hash = "#review/r1";
   await wait(60);
   check("#review/<id> opens the overview", $(".m h1")?.textContent === "Fix redb backend bugs" && !$(".top").textContent.includes("Step"));

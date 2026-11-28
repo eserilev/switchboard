@@ -20,6 +20,7 @@
     agents: '<rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/>',
     you: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
     back: '<path d="M15 5l-7 7 7 7"/>',
+    bubble: '<path d="M4 5h16v11H9l-5 4z"/>',
   };
   const svg = (k, n = 22) => `<svg width="${n}" height="${n}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">${ICON[k]}</svg>`;
 
@@ -202,7 +203,7 @@
         + `<div class="body" style="padding:0 16px 16px" data-swipe="step">${progress(r, i)}<h1 style="font-size:21px;margin-top:8px">${mdi(s.title)}</h1>
           <div class="what${long ? " short" : ""}">${md(s.what || "")}${s.why ? `<p><b>${mdi(s.why)}</b></p>` : ""}</div>${long ? `<button type="button" class="more" data-more="${esc(s.id)}">More</button>` : ""}
           ${qlabel}${qs}${codeBox(r, s, d)}${drafts.map((x) => `<div class="draft"><div class="t2 mono">${esc(x.path.split("/").pop())}:${x.line}</div>${esc(x.text)}</div>`).join("")}
-          ${cards ? `<h2 style="margin:14px 0 6px">Claude's notes</h2>${cards}` : ""}</div>
+          ${cards ? `<h2 id="notes" style="margin:14px 0 6px">Claude's notes</h2>${cards}` : ""}</div>
           <div class="bar"><button type="button" class="btn" style="flex:0 0 52px" data-prev aria-label="Previous step">${svg("back", 20)}</button><button type="button" class="btn" data-ask>Ask</button><button type="button" class="btn" data-comment ${S.sel ? "" : "disabled"}>Comment</button><button type="button" class="btn gold" style="flex:1.5" data-reviewed>${checked(r, s.id) ? "Next ›" : "Reviewed ›"}</button></div>`;
     }
     // The narrow diff (42.4): one column, wrapped lines, a + on each line, folded context.
@@ -227,7 +228,7 @@
           const sel = S.sel && S.sel.path === sec.path && S.sel.side === side && ln >= S.sel.start && ln <= S.sel.line;
           const dim = S.sel && S.sel.path === sec.path && S.sel.side !== side && x.kind !== " ";
           const cls = { "+": "add", "-": "del", " ": "" }[x.kind] || "";
-          out += `<div class="row ${cls}${sel ? " sel" : ""}${dim ? " dim" : ""}"><button type="button" class="plus" data-line="${si}|${side}|${ln}" aria-label="Select line ${ln} to comment or ask">+</button><span class="ln">${ln ?? ""}</span><span class="tx">${esc(x.text)}</span></div>`;
+          out += `<div class="row ${cls}${sel ? " sel" : ""}${dim ? " dim" : ""}"><button type="button" class="plus" data-line="${si}|${side}|${ln}" aria-label="Select line ${ln} to comment or ask">${svg("bubble", 13)}</button><span class="ln">${ln ?? ""}</span><span class="tx">${esc(x.text)}</span></div>`;
           if (S.sel && S.sel.path === sec.path && S.sel.side === side && ln === S.sel.line) {
             out += `<div class="selbar"><span>${S.sel.start === S.sel.line ? `Line ${ln}` : `Lines ${S.sel.start}–${S.sel.line}`}</span><button type="button" class="btn sm" data-ask>Ask</button><button type="button" class="btn sm gold" data-comment>Comment</button><button type="button" class="btn sm" data-unsel aria-label="Clear the selection">✕</button></div>`;
           }
@@ -510,12 +511,14 @@
     // A link opens a screen: #today, #reviews, #agents, #you, #review/<id> (the overview)
     // or #review/<id>/<step number from 1>. Notices and tests use it.
     function route() {
-      const [what, id, n] = decodeURIComponent(location.hash.slice(1)).split("/");
+      const [what, id, n, part] = decodeURIComponent(location.hash.slice(1)).split("/");
       if (["today", "reviews", "agents", "you"].includes(what)) { S.tab = what; S.view = null; }
       else if (what === "review" && id) { S.tab = "reviews"; S.view = n ? { kind: "step", id, i: Math.max(0, +n - 1) } : { kind: "ov", id }; }
       else return;
       S.sel = null;
       draw();
+      // #review/<id>/<n>/notes: the note cards, once the lines are in.
+      if (part === "notes") setTimeout(() => root.querySelector("#notes")?.scrollIntoView(), 300);
     }
     window.addEventListener("hashchange", route);
 
