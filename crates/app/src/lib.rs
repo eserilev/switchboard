@@ -186,7 +186,13 @@ impl Remote {
             old.close();
         }
         let g = self.gen.fetch_add(1, Ordering::SeqCst) + 1;
-        let (sink, down, host, gen, taken_flag) = (Arc::clone(&self.sink), Arc::clone(&self.down), self.host.clone(), Arc::clone(&self.gen), Arc::clone(&self.taken));
+        // A phone's host is the hub it paired with, which can change after the start.
+        let host = match &self.phone {
+            Some(f) => switchboard_core::phone::Paired::load(f).map(|p| p.hub_at).unwrap_or_default(),
+            None => self.host.clone(),
+        };
+        let (sink, down, gen, taken_flag) = (Arc::clone(&self.sink), Arc::clone(&self.down), Arc::clone(&self.gen), Arc::clone(&self.taken));
+        let host_news = host.clone();
         let news = move |n: News| {
             if gen.load(Ordering::SeqCst) != g {
                 return;
@@ -198,7 +204,7 @@ impl Remote {
                     let mut d = down.lock().unwrap();
                     *d = Some(why.clone());
                     taken_flag.store(taken, Ordering::SeqCst);
-                    let _ = sink.handle.emit("link", json!({ "up": false, "host": host, "why": why, "taken": taken, "retry": !taken }));
+                    let _ = sink.handle.emit("link", json!({ "up": false, "host": host_news, "why": why, "taken": taken, "retry": !taken }));
                 }
             }
         };
@@ -218,14 +224,14 @@ impl Remote {
                 let mut d = self.down.lock().unwrap();
                 if c.is_up() {
                     *d = None;
-                    let _ = self.sink.handle.emit("link", json!({ "up": true, "host": self.host }));
+                    let _ = self.sink.handle.emit("link", json!({ "up": true, "host": host }));
                 }
                 Ok(())
             }
             Err(why) => {
                 tracing::warn!(target: "sb::remote", %why, "connect failed");
                 *self.down.lock().unwrap() = Some(why.clone());
-                let _ = self.sink.handle.emit("link", json!({ "up": false, "host": self.host, "why": why, "taken": false, "retry": true }));
+                let _ = self.sink.handle.emit("link", json!({ "up": false, "host": host, "why": why, "taken": false, "retry": true }));
                 Err(why)
             }
         }
