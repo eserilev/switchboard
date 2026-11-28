@@ -116,6 +116,3 @@
 @media (orientation: landscape) and (max-height: 500px) {
   .m .tabs { display: none; }
 }
-
-/* On a phone the screens cover the desktop page, which runs on underneath for the link. */
-body.sbm-on > *:not(#sbm) { display: none !important; }

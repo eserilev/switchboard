@@ -23,7 +23,19 @@
   };
   const svg = (k, n = 22) => `<svg width="${n}" height="${n}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">${ICON[k]}</svg>`;
 
+  // One copy per page: a second mount (phone.js and m.js both try) gets the first one,
+  // with its hub state updated.
+  let mounted = null;
   function mount(root, api) {
+    if (mounted) {
+      if (api?.hub) mounted.setHub(api.hub);
+      if (root !== mounted.root && !root.childElementCount) root.remove();
+      return mounted;
+    }
+    mounted = mountOne(root, api);
+    return mounted;
+  }
+  function mountOne(root, api) {
     const S = { tab: "today", job: null, today: null, reviews: [], panes: [], view: null, diff: new Map(), sel: null, sheet: null, undo: null, hub: api.hub || { name: "hub", linked: true }, open: new Set() };
     root.classList.add("m");
     const call = (cmd, args) => api.call(cmd, args || {});
@@ -497,30 +509,11 @@
     loadPanes();
     draw();
     return {
+      root,
       setHub(h) { S.hub = { ...S.hub, ...h }; draw(); },
       state: S,
     };
   }
   window.SBM = { mount };
-
-  // On a phone (web/phone.js): the screens come up with the link, over the desktop page.
-  let ui = null;
-  const linkOf = (l) => ({ name: l?.host || l?.hub || "hub", linked: l?.up !== false, version: l?.version });
-  function onPhone(link) {
-    if (ui) return ui.setHub(linkOf(link));
-    const T = window.__TAURI__;
-    if (!T) return;
-    const el = document.createElement("div");
-    el.id = "sbm";
-    document.body.appendChild(el);
-    document.body.classList.add("sbm-on");
-    ui = mount(el, {
-      call: (cmd, args) => (window.SBPhone?.call || T.core.invoke)(cmd, args),
-      listen: (ev, fn) => T.event.listen(ev, fn),
-      hub: linkOf(link),
-      unpair: () => T.core.invoke("phone_unpair").then(() => location.reload()),
-    });
-  }
-  if (window.SBPhone?.ready) window.SBPhone.ready(onPhone);
-  else document.addEventListener("sb:phone-ready", (e) => onPhone(e.detail));
+  // web/phone.js mounts the screens on a phone; m.js never mounts by itself.
 })();
