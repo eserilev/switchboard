@@ -19,13 +19,17 @@ open(out, "w").write(page.replace('src="shim.js"', f'src="{here}/shim.js"').repl
 PY
 # A time zone with DST, for the burndown checks.
 TZ="${SB_TEST_TZ:-America/New_York}" "$browser" --headless --disable-gpu --no-sandbox --allow-file-access-from-files --window-size=1600,1000 --virtual-time-budget=120000 --dump-dom "file://$work/page.html" 2>/dev/null >"$work/dom.html"
-python3 - "$work/dom.html" <<'PY'
+# The phone screens (SPEC 42.9), at phone width.
+"$browser" --headless --disable-gpu --no-sandbox --allow-file-access-from-files --window-size=390,844 --virtual-time-budget=20000 --dump-dom "file://$here/m.html" 2>/dev/null >"$work/m.html"
+python3 - "$work/dom.html" "$work/m.html" <<'PY'
 import html, json, re, sys
-dom = open(sys.argv[1]).read()
-m = re.search(r'<pre id="__results"[^>]*>(.*?)</pre>', dom, re.S)
-if not m:
-    print("FAIL: no results in the page"); sys.exit(1)
-results = json.loads(html.unescape(m.group(1)))
+results = []
+for f in sys.argv[1:]:
+    dom = open(f).read()
+    m = re.search(r'<pre id="__results"[^>]*>(.*?)</pre>', dom, re.S)
+    if not m:
+        print(f"FAIL: no results in {f}"); sys.exit(1)
+    results += json.loads(html.unescape(m.group(1)))
 bad = [r for r in results if not r["ok"]]
 for r in results:
     print(("ok   " if r["ok"] else "FAIL ") + r["name"] + ("" if r["ok"] else f"  -> {r.get('info')}"))

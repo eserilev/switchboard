@@ -3438,7 +3438,7 @@ A second agent reviewed the first version of this section against the code (`rem
 
 ## 42. Phone app design
 
-Status: design, not built. The technical part is in 41. The HTML design: https://claude.ai/artifact/FS2RR1dfpP33FB5iLHvrMd (nine phone screens and two landscape ones).
+Status: the first screens are built in `web/m/` (`SBM.mount(el, { call, listen, hub, unpair })`): the tabs, Today with swipes and undo, Reviews, the overview, a step with the narrow diff, line selection, note cards with swipes, Comment, Ask, Reviewed, Finish review, Agents with permits, and You. Window checks run them at 390 × 844 in a frame (`web-tests/m.html`). Not built yet: landscape, drag handles (a second tap on + grows the selection instead), speech, Tell Claude, Fix it, messages to an agent, the agent's screen, the app lock, notices and the offline queue. The technical part is in 41. The HTML design: https://claude.ai/artifact/FS2RR1dfpP33FB5iLHvrMd (nine phone screens and two landscape ones).
 
 The phone app is for the minutes away from the desk: review a PR step by step, judge Claude's notes, answer an agent, check Today. It is not a small desktop: no terminals by default, no file tree, no wide diffs.
 
