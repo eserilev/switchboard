@@ -822,7 +822,7 @@ fn pair_run() -> Result<(), String> {
     let art = code.render::<qrcode::render::unicode::Dense1x2>().build();
     // Black on white on any terminal: a scanner can miss an inverted code.
     let art: String = art.lines().map(|l| format!("\x1b[38;5;16;48;5;231m{l}\x1b[0m\n")).collect();
-    writeln!(&tty, "{art}\nScan this with the Switchboard app on your phone. It works once, for 10 minutes.").map_err(|e| e.to_string())?;
+    writeln!(&tty, "{art}\nScan this with the Switchboard app on your phone. It works once, for 10 minutes.\nNo camera? Paste this text in the app instead:\n\n{qr}\n").map_err(|e| e.to_string())?;
     let asking = p.wait(key, pairing::OPEN_FOR).ok_or("no phone came in 10 minutes")?;
     writeln!(&tty, "\n\"{}\" asks to pair. Its screen must show this code:\n\n    {}\n", asking.name, asking.code).map_err(|e| e.to_string())?;
     let yes = ask_line(&tty, "Does the phone show the same code? Type yes to allow it: ")?;

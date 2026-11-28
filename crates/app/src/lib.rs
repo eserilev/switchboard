@@ -156,6 +156,9 @@ struct Backend {
 struct Remote {
     host: String,
     argv: Vec<String>,
+    /// On a phone: the pairing file. The link is then the device session
+    /// (SPEC 41.5), not `argv`.
+    phone: Option<PathBuf>,
     client: Mutex<Option<Arc<Client>>>,
     /// Why the link is down, or `None` while it is up.
     down: Arc<Mutex<Option<String>>>,
@@ -199,7 +202,14 @@ impl Remote {
                 }
             }
         };
-        match Client::connect(&self.argv, news) {
+        let linked = match &self.phone {
+            Some(f) => match switchboard_core::phone::Paired::load(f) {
+                Some(p) => switchboard_core::phone::connect(&p, switchboard_core::remote::instance(), None, news),
+                None => Err("This phone is not paired yet.".to_owned()),
+            },
+            None => Client::connect(&self.argv, news),
+        };
+        match linked {
             Ok(c) => {
                 self.taken.store(false, Ordering::SeqCst);
                 *self.client.lock().unwrap() = Some(Arc::clone(&c));
@@ -233,7 +243,8 @@ impl Remote {
         let mut next = Instant::now() + wait;
         loop {
             std::thread::sleep(Duration::from_millis(250));
-            if self.is_up() || self.taken.load(Ordering::SeqCst) {
+            let unpaired = self.phone.as_ref().is_some_and(|f| !f.exists());
+            if self.is_up() || self.taken.load(Ordering::SeqCst) || unpaired {
                 wait = Duration::from_secs(1);
                 next = Instant::now() + wait;
                 continue;
@@ -340,6 +351,16 @@ impl Backend {
         v["box"] = server.unwrap_or(Value::Null);
         v["both"] = json!(self.local.is_some() && self.remote.is_some());
         v["here"] = json!(self.here);
+        if let Some(paired) = phone_paired(self) {
+            v["phone"] = json!(true);
+            v["paired"] = json!(paired);
+            // A debug build in the simulator gets the pairing text from its
+            // launch: `SIMCTL_CHILD_SB_PAIR_QR`. The simulator has no camera.
+            #[cfg(debug_assertions)]
+            if let Ok(qr) = std::env::var("SB_PAIR_QR") {
+                v["pair_qr"] = json!(qr);
+            }
+        }
         v
     }
 }
@@ -468,6 +489,55 @@ fn handover_here(remote: bool, go: bool, plan: Value) -> Res<Value> {
     }
 }
 
+/// On a phone, whether it is paired. `None` on a computer.
+fn phone_paired(b: &Backend) -> Option<bool> {
+    let f = b.remote.as_ref()?.phone.as_ref()?;
+    Some(f.exists())
+}
+
+/// The phone's link: the device session to the hub it paired with (SPEC 41.5).
+#[cfg(mobile)]
+fn phone_remote(app: &tauri::App, sink: Arc<AppSink>) -> Result<Remote, Box<dyn std::error::Error>> {
+    let file = app.path().app_data_dir()?.join("paired.json");
+    let host = switchboard_core::phone::Paired::load(&file).map(|p| p.hub_at).unwrap_or_default();
+    Ok(Remote {
+        host,
+        argv: vec![],
+        phone: Some(file),
+        client: Mutex::default(),
+        down: Arc::new(Mutex::new(Some("connecting".into()))),
+        sink,
+        leader: "ctrl+space".into(),
+        gen: Arc::default(),
+        connecting: Mutex::default(),
+        taken: Arc::default(),
+    })
+}
+
+/// A pairing that waits for Allow on the computer.
+static PAIRING: Mutex<Option<switchboard_core::phone::PairWait>> = Mutex::new(None);
+
+fn phone_pair_start(qr: &str) -> Res<Value> {
+    use switchboard_core::phone;
+    let qr = phone::parse_qr(qr)?;
+    let platform = if cfg!(target_os = "ios") { "ios" } else if cfg!(target_os = "android") { "android" } else { "test" };
+    let w = phone::pair_start(&qr, "Phone", platform)?;
+    let code = w.code.clone();
+    *PAIRING.lock().unwrap() = Some(w);
+    Ok(json!({ "code": code, "hub": qr.hub_at }))
+}
+
+fn phone_pair_wait(b: &Backend) -> Res<Value> {
+    let w = PAIRING.lock().unwrap().take().ok_or("Scan the code first.")?;
+    let r = b.remote.as_ref().ok_or("not a phone")?;
+    let file = r.phone.as_ref().ok_or("not a phone")?;
+    let paired = w.wait(switchboard_core::pairing::OPEN_FOR)?;
+    paired.save(file)?;
+    tracing::info!(target: "sb::app", id = %paired.id, hub = %paired.hub_at, "paired");
+    let _ = r.connect();
+    Ok(b.link_state())
+}
+
 /// Log lines from the window.
 fn log(level: &str, message: &str) {
     match level {
@@ -503,7 +573,10 @@ fn remember_machine(remote: bool) {
 
 /// The commands that run in the app, in remote mode too. Every other command goes
 /// to the backend. A test keeps this list short (SPEC 29).
-const LOCAL: &[&str] = &["log", "open_url", "clip_write", "handover_check", "handover_in", "link_state", "link_reconnect", "machine_show", "machine_other", "app_restart"];
+const LOCAL: &[&str] = &[
+    "log", "open_url", "clip_write", "handover_check", "handover_in", "link_state", "link_reconnect", "machine_show", "machine_other", "app_restart",
+    "phone_pair_start", "phone_pair_wait", "phone_unpair",
+];
 
 /// The one handler of every `invoke` of the window.
 fn handle(invoke: tauri::ipc::Invoke) -> bool {
@@ -555,6 +628,26 @@ fn handle(invoke: tauri::ipc::Invoke) -> bool {
             invoke.resolver.respond_async(async move {
                 tauri::async_runtime::spawn_blocking(move || clip_write(&t)).await.map_err(|e| e.to_string()).and_then(|r| r).map(|_| Value::Null).map_err(Into::into)
             });
+        }
+        // Pairing a phone (SPEC 41.4): the QR text gives the check code, then the
+        // wait for Allow on the computer, then the link.
+        "phone_pair_start" => {
+            let qr = text("qr");
+            invoke.resolver.respond_async(async move {
+                tauri::async_runtime::spawn_blocking(move || phone_pair_start(&qr)).await.map_err(|e| e.to_string()).and_then(|r| r).map_err(Into::into)
+            });
+        }
+        "phone_pair_wait" => invoke.resolver.respond_async(async move {
+            tauri::async_runtime::spawn_blocking(move || phone_pair_wait(&backend)).await.map_err(|e| e.to_string()).and_then(|r| r).map_err(Into::into)
+        }),
+        "phone_unpair" => {
+            if let Some(f) = backend.remote.as_ref().and_then(|r| r.phone.as_ref()) {
+                let _ = std::fs::remove_file(f);
+            }
+            if let Some(c) = backend.remote.as_ref().and_then(|r| r.client.lock().unwrap().take()) {
+                c.close();
+            }
+            invoke.resolver.resolve(backend.link_state());
         }
         "link_state" => {
             let mut v = backend.link_state();
@@ -655,7 +748,10 @@ pub fn start() {
     std::panic::set_hook(Box::new(
         |info| tracing::error!(target: "sb::app", %info, "panic"),
     ));
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
+    builder
         .setup(|app| {
             let paths = Paths::from_env();
             // A config that does not parse: the defaults, with the error in the log
@@ -678,6 +774,7 @@ pub fn start() {
                 Remote {
                     host,
                     argv,
+                    phone: None,
                     client: Mutex::default(),
                     down: Arc::new(Mutex::new(Some("connecting".into()))),
                     sink: sink_of(true),
@@ -687,7 +784,8 @@ pub fn start() {
                     taken: Arc::default(),
                 }
             });
-            let local = if only_server {
+            // A phone runs no hub: tmux, git and claude can not run there.
+            let local = if only_server || cfg!(mobile) {
                 None
             } else {
                 match Hub::start(paths, sb_path(), sink_of(false)) {
@@ -709,6 +807,12 @@ pub fn start() {
                 }
             };
             let here = switchboard_core::mail::machine_name(&config);
+            #[cfg(mobile)]
+            let (local, remote) = {
+                let _ = (local, remote);
+                on_remote.store(true, Ordering::SeqCst);
+                (None, Some(phone_remote(app, sink_of(true))?))
+            };
             let backend = Arc::new(Backend { local, remote, on_remote, here });
             app.manage(Arc::clone(&backend));
             let (jobs, rx) = mpsc::channel();
@@ -721,7 +825,10 @@ pub fn start() {
             if backend.remote.is_some() {
                 std::thread::spawn(move || {
                     if let Some(r) = &backend.remote {
-                        let _ = r.connect();
+                        // A phone that is not paired yet connects after its pairing.
+                        if phone_paired(&backend) != Some(false) {
+                            let _ = r.connect();
+                        }
                         r.keep_up();
                     }
                 });
@@ -757,7 +864,14 @@ mod tests {
     /// nothing else here (SPEC 29).
     #[test]
     fn the_local_commands_stay_few() {
-        assert_eq!(LOCAL, &["log", "open_url", "clip_write", "handover_check", "handover_in", "link_state", "link_reconnect", "machine_show", "machine_other", "app_restart"]);
+        // The phone_ commands pair a phone with a hub: only the page asks for them.
+        assert_eq!(
+            LOCAL,
+            &[
+                "log", "open_url", "clip_write", "handover_check", "handover_in", "link_state", "link_reconnect", "machine_show", "machine_other", "app_restart",
+                "phone_pair_start", "phone_pair_wait", "phone_unpair",
+            ]
+        );
         for c in LOCAL {
             assert!(!dispatch::COMMANDS.contains(c), "{c} is a hub command too");
         }

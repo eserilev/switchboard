@@ -1840,6 +1840,13 @@ window.SB = { S, LINK, showMachine, refreshReviews, invoke, call, listen, esc, s
       if (LINK.remote && LINK.box) Object.assign(LINK, linkOf(LINK.box));
     }
     if (LINK.config_error) toast(LINK.config_error);
+    // A phone that is not paired: the pairing screen; its link event loads the rest.
+    if (LINK.phone) document.body.classList.add("phone");
+    if (LINK.phone && !LINK.paired) {
+      LINK.synced = false;
+      window.SBPhone.pair(LINK.pair_qr);
+      return;
+    }
     // A remote hub that is not linked yet: the `link` event loads everything.
     LINK.synced = !LINK.remote || LINK.up;
     drawLink();

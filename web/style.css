@@ -1023,3 +1023,18 @@ body.rail-wide .nav svg { width: 16px; height: 16px; }
 
 /* Edit mode of a review is on. */
 #racts .editon { color: var(--accent); border-color: var(--accent); }
+
+/* The phone's pairing screen (SPEC 41.4, 42). */
+.phpair { position: fixed; inset: 0; z-index: 100; background: var(--bg); display: grid; align-content: center; padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom)); gap: 12px; overflow-y: auto; }
+.phstep { display: grid; gap: 14px; max-width: 420px; width: 100%; margin: 0 auto; }
+.phstep h1 { margin: 0; font: 600 22px/1.25 var(--body); }
+.phstep p { margin: 0; color: var(--muted); }
+.phbig { padding: 14px; font-size: 16px; }
+.phtext { width: 100%; font: 13px/1.4 var(--mono, monospace); background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin: 8px 0; }
+.phstep details summary { color: var(--muted); cursor: pointer; }
+.phcode { font: 600 40px/1.1 var(--mono, monospace); letter-spacing: 0.08em; color: var(--fg) !important; text-align: center; padding: 12px 0; }
+.phwait { text-align: center; }
+.pherr { color: var(--error); max-width: 420px; margin: 0 auto; width: 100%; }
+/* A phone: the page fills the screen, under the notch and the home bar too. */
+html { background: var(--bg); }
+body.phone { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); height: 100dvh; }
