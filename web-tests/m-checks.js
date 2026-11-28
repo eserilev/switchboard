@@ -33,6 +33,7 @@
   const panes = [
     { id: "p61", kind: "claude", repo: "lighthouse", branch: "redb-fixes", title: "#10566 redb fixes", lamp: "needs", permit: { id: "p61-1", summary: "Bash: cargo test -p store" }, summary: null },
     { id: "p7", kind: "claude", repo: "lighthouse", branch: "x", title: "backfill", lamp: "working", permit: null, summary: "Running tests" },
+    { id: "p9", kind: "claude", repo: "lighthouse", branch: "fix", title: "#10566 fix", lamp: "turn", permit: null, summary: "Done.", tail: ["\x1b[32mtest result: ok\x1b[0m. 48 passed", "<b>Done.</b>", ""] },
     { id: "p3", kind: "nvim", repo: "x", lamp: "none" },
   ];
   const answers = {
@@ -40,6 +41,7 @@
     review_diff: () => ({ head: "abc", sections: [{ path: "src/a.rs", rows, ranges: [] }] }),
     review_ask: () => "t1", review_post_preview: () => ({ login: "me", token: "tok", newer: null, plan: {} }), review_post: () => "https://github.com/x",
     review_open: () => "r1",
+    review_work: () => ({ pane: "p9", branch: "redb-fixes", push: "me", reused: false, note: null }),
   };
   const api = {
     call: async (cmd, args) => { calls.push([cmd, args]); const f = answers[cmd]; return f ? JSON.parse(JSON.stringify(f(args))) : null; },
@@ -70,6 +72,9 @@
   check("four tabs, Today first, with the hub on top", $$(".tabs button").map((b) => b.textContent.replace(/\d+/g, "").trim()).join() === "Today,Reviews,Agents,You" && $(".tabs [aria-current]").textContent.includes("Today") && $(".hub").textContent.includes("archlinux") && !!$(".hub .dot.on"));
   check("Today shows the sections and rows, and the job tabs", $$(".m h2").map((h) => h.textContent).join("|") === "Your PRs · 1|Reviews · 1" && $$("[data-job]").length === 2 && $(".card .t1").textContent.includes("Reply to dknopik"));
   check("touch targets are at least 44 px", $$(".tabs button, .m .card").every((b) => b.getBoundingClientRect().height >= 44));
+  $("[data-tellbox]").value = "#10510 is not mine";
+  await tap("[data-tell]");
+  check("Tell Claude sends your note for the job", called("today_tell").at(-1)?.[1].text === "#10510 is not mine" && called("today_tell").at(-1)[1].job === "Everything");
   await swipe($('[data-swipe="today"]'), 140);
   check("swipe right is Done, with an undo bar", called("today_done").at(-1)?.[1].number === 10510 && called("today_done").at(-1)[1].on === true && !!$(".undo [data-undo]"));
   await tap(".undo [data-undo]");
@@ -128,6 +133,31 @@
   emit("review", R);
   await wait(40);
   check("swipe left on a note dismisses it, with undo", called("review_dismiss").at(-1)?.[1].on === true && called("review_dismiss").at(-1)[1].note === "s2|must|src/a.rs:7|" + note.text && !!$(".undo [data-undo]"));
+  // Fix it (42.4): Work on this PR with the task from the note.
+  await tap('[data-swipe="note"] [data-fixnote]');
+  check("Fix it opens a sheet with the task from the note", $(".sheet h3").textContent === "Fix it with an agent" && $(".sheet textarea").value.includes(note.text) && $(".sheet textarea").value.includes("src/a.rs:7"));
+  await tap("[data-startfix]");
+  await wait(40);
+  const w = called("review_work").at(-1)?.[1];
+  check("Start agent starts the work with that task and shows the agent", w?.id === "r1" && w.task.includes(note.text) && $(".top").textContent.includes("p9") && $(".undo").textContent.includes("redb-fixes"));
+  check("the agent's screen shows its last lines as text, with no colour codes or markup", $(".m-screen").textContent.includes("test result: ok. 48 passed") && !$(".m-screen").textContent.includes("\x1b") && !$(".m-screen b") && $(".m-screen").textContent.includes("<b>Done.</b>"));
+  await tap("[data-sayenter]");
+  check("Send what waits presses Enter only", called("pane_say").at(-1)?.[1].id === "p9" && called("pane_say").at(-1)[1].text === "");
+  $("[data-say]").value = "Also run clippy.";
+  await tap("[data-saysend]");
+  check("Send sends your message to the agent", called("pane_say").at(-1)?.[1].text === "Also run clippy.");
+  await tap('[data-go="agents"]');
+  location.hash = "#review/r1/2";
+  await wait(60);
+
+  // Wide code: Rotate shows only the lines, unwrapped, with a sideways scroll in the box.
+  await tap(".m-wide");
+  check("Rotate shows only the lines, unwrapped", $(".m").classList.contains("wide") && getComputedStyle($(".row .tx")).whiteSpace === "pre" && getComputedStyle($(".m .bar")).display === "none" && getComputedStyle($(".m h1")).display === "none");
+  check("the wide view keeps the page from scrolling sideways", document.documentElement.scrollWidth <= window.innerWidth);
+  await tap(".m-wide");
+  check("✕ closes the wide view", !$(".m").classList.contains("wide") && getComputedStyle($(".row .tx")).whiteSpace === "pre-wrap");
+  history.replaceState(null, "", location.pathname);
+
   // Ask.
   await tap(".bar [data-ask]");
   $(".sheet textarea").value = "Why map_err?";
@@ -170,10 +200,13 @@
   // Agents (42.5).
   await tap('[data-go="reviews"]');
   await tap('[data-tab="agents"]');
-  check("Agents puts the permit first, with Allow and Deny", $$(".m h2")[0].textContent.startsWith("Needs you") && $(".permit pre").textContent === "Bash: cargo test -p store" && $$(".card").length === 1);
+  check("Agents puts the permit first, with Allow and Deny", $$(".m h2")[0].textContent.startsWith("Needs you") && $(".permit pre").textContent === "Bash: cargo test -p store" && $$(".card").length === 2 && $$(".m h2")[1].textContent === "Your turn · 1");
   check("the tab bar counts what needs you", $('[data-tab="agents"] .m-badge')?.textContent === "1");
   await tap('[data-permit][data-allow="1"]');
   check("Allow answers the permit", called("permit_answer").at(-1)?.[1].permit === "p61-1" && called("permit_answer").at(-1)[1].allow === true);
+  await tap('[data-agent="p7"]');
+  check("a working agent's screen takes no message yet", $("[data-saysend]").disabled && $("[data-say]").placeholder.includes("when it waits"));
+  await tap('[data-go="agents"]');
   // You (42.6).
   await tap('[data-tab="you"]');
   check("You shows the hub", $(".body").textContent.includes("archlinux") && $(".body").textContent.includes("Linked"));

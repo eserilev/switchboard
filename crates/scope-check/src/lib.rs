@@ -67,7 +67,7 @@ today_forget today_refresh";
 
 /// Commands that make an agent act (free text to an agent with Bash, or a permit),
 /// or that close its pane or drop its changes.
-pub const ACT_CMDS: &[u8] = b"permit_answer review_send_agent review_work pane_resume connection_resume \
+pub const ACT_CMDS: &[u8] = b"permit_answer pane_say review_send_agent review_work pane_resume connection_resume \
 task_resume today_tell today_job_save today_job_remove review_restart review_close";
 
 /// Commands that show or type in a terminal.

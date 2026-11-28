@@ -258,6 +258,35 @@ impl Hub {
         }
     }
 
+    /// `pane_say` (SPEC 42.5): your message to a Claude agent, from a window with no
+    /// terminal (a phone). It goes in as one paste with Enter, as you would type it,
+    /// and only when the agent waits for you: a paste into a turn that runs, or into
+    /// a permit prompt, would answer something else.
+    pub fn pane_say(&self, id: &str, text: &str) -> Res<()> {
+        let view = self.views().into_iter().find(|v| v.id == id).ok_or(format!("no pane {id}"))?;
+        if view.kind != "claude" {
+            return Err("Only a Claude agent takes a message.".into());
+        }
+        if view.permit.is_some() {
+            return Err("The agent waits for a permit: Allow or Deny first.".into());
+        }
+        match view.lamp.as_str() {
+            "idle" | "turn" | "error" | "limit" => {}
+            "ended" => return Err("The agent ended. Start it again on the computer.".into()),
+            _ => return Err("The agent is working. Send your message when it waits for you.".into()),
+        }
+        // No text: only Enter, which sends what waits in the prompt (the task of Fix it).
+        let Some(text) = mail::clean(text) else {
+            tracing::info!(target: "sb::mail", pane = id, "your Enter");
+            return self.input(id, b"\r");
+        };
+        tracing::info!(target: "sb::mail", pane = id, chars = text.chars().count(), "your message");
+        self.input(id, crate::hub::bracketed_paste(&text).as_bytes())?;
+        // Enter on its own, after the paste, so the prompt takes the paste first.
+        std::thread::sleep(Duration::from_millis(150));
+        self.input(id, b"\r")
+    }
+
     /// The Stop hook of a pane (SPEC 40.4): the waiting messages, as the reason
     /// that makes the agent go on. None when nothing waits.
     pub fn mail_take(&self, pane: &str) -> Option<String> {

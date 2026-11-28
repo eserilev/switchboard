@@ -106,7 +106,8 @@
           <button type="button" class="card" data-item="${esc(key)}"><span class="k"><span>${esc(i.repo.split("/").pop())}#${i.number}</span>${tags}</span><span class="t1">${esc(i.line)}</span><span class="t2">${esc(i.title)}</span></button></div>`;
       }).join("")}</section>`).join("");
       const body = rows || `<div class="m-empty">All done for today.</div>`;
-      return hubBar("<h1>Today</h1>") + `<div class="body">${jobs}${body}<p class="t2" style="padding:0 8px">Swipe right: Done · Swipe left: Later</p></div>`;
+      const tell = `<div class="m-tell"><textarea data-tellbox rows="1" aria-label="Tell Claude what is wrong with the list" placeholder="Tell Claude: “#9811 is not mine”"></textarea><button type="button" class="m-btn sm" data-tell>Tell</button></div>`;
+      return hubBar("<h1>Today</h1>") + `<div class="body">${tell}${jobs}${body}<p class="t2" style="padding:0 8px">Swipe right: Done · Swipe left: Later</p></div>`;
     }
     const todayItem = (key) => (S.today?.sections || []).flatMap((s) => s.items).find((i) => `${i.repo}#${i.number}#${i.section === "changed" ? "c" : ""}` === key);
     async function done(key) {
@@ -234,7 +235,7 @@
           }
         });
         flush();
-        return `<div class="code"><div class="fh"><span class="path">${esc(sec.path).replaceAll("/", "/<wbr>")}</span><span style="margin-left:auto;white-space:nowrap">+${add} −${del}</span></div>${out}</div>`;
+        return `<div class="code"><div class="fh"><span class="path">${esc(sec.path).replaceAll("/", "/<wbr>")}</span><span style="margin-left:auto;white-space:nowrap">+${add} −${del}</span><button type="button" class="m-wide" data-wide aria-label="${S.wide ? "Close the wide code" : "Turn sideways for the full code"}">${S.wide ? "✕" : "Rotate"}</button></div>${out}</div>`;
       }).join("");
     }
     // Leading spaces and tabs become a left padding of at most 8 columns: a deep indent
@@ -249,7 +250,7 @@
       const added = S.open.has(`added|${n.key}`);
       return `<div class="swipe" data-swipe="note" data-key="${esc(n.key)}"><div class="under"><span class="r">Add as comment</span><span class="l">Dismiss</span></div>
         <div class="m-note card"><div style="display:flex;gap:8px;align-items:center"><span class="sev sev-${esc(n.severity)}">${esc(n.severity)}</span>${n.file ? `<span class="m-mono t2">${esc(n.file.split("/").pop())}${n.line ? `:${n.line}` : ""}</span>` : ""}${added ? `<span class="tag">✓ added</span>` : ""}</div>
-        <div>${mdi(n.text)}</div><div class="acts">${n.line && !added ? `<button type="button" class="m-btn sm" data-addnote>Add as comment</button>` : ""}<button type="button" class="m-btn sm" data-asknote>Ask</button><button type="button" class="m-btn sm" data-dismiss>Dismiss</button></div></div></div>`;
+        <div>${mdi(n.text)}</div><div class="acts">${n.line && !added ? `<button type="button" class="m-btn sm" data-addnote>Add as comment</button>` : ""}<button type="button" class="m-btn sm" data-asknote>Ask</button><button type="button" class="m-btn sm" data-fixnote>Fix it</button><button type="button" class="m-btn sm" data-dismiss>Dismiss</button></div></div></div>`;
     }
     const lineText = (d, sel) => {
       const sec = (d?.sections || []).find((x) => x.path === sel.path);
@@ -322,6 +323,32 @@
       paint();
       draw();
     }
+    // Fix it (42.4): Work on this PR with the task from the note. The agent gets the task
+    // in its prompt; Start agent here only starts it, and Send on its screen sends it.
+    function fixSheet(r, s, key) {
+      const n = notesOf(r, s.id, s.take).find((x) => x.key === key);
+      if (!n) return;
+      const task = `Fix this review note on PR #${r.number}${n.file ? `, ${n.file}${n.line ? `:${n.line}` : ""}` : ""}: ${n.text} Then run the tests for that code.`;
+      S.sheet = { kind: "fix", html: `<h3>Fix it with an agent</h3><div class="t2">A new agent starts in its own worktree on the PR's branch. The task waits in its prompt until you send it.</div>
+        <textarea data-fixtask aria-label="The agent's task">${esc(task)}</textarea>
+        <div class="row2"><button type="button" class="m-btn" data-close>Cancel</button><button type="button" class="m-btn gold" data-startfix>Start agent</button></div>` };
+      S.sheet.start = async () => {
+        const text = root.querySelector("[data-fixtask]")?.value.trim();
+        if (!text) return;
+        const btn = root.querySelector("[data-startfix]");
+        if (btn) { btn.disabled = true; btn.textContent = "Starting…"; }
+        try {
+          const w = await call("review_work", { id: r.id, task: text });
+          S.sheet = null;
+          await loadPanes();
+          S.view = { kind: "agent", id: w.pane };
+          S.tab = "agents";
+          draw();
+          toast(`${w.reused ? "The agent works in" : "New worktree on"} ${w.branch}${w.push ? `, pushes to ${w.push}` : ", cannot push"}. Tap Send what waits when it is ready.`);
+        } catch (e) { if (btn) { btn.disabled = false; btn.textContent = "Start agent"; } fail(e); }
+      };
+      draw();
+    }
     async function reviewed(r, i) {
       const s = steps(r)[i];
       try {
@@ -376,13 +403,37 @@
       const name = (p) => p.title || p.repo;
       const needs = claude.filter((p) => p.permit || p.lamp === "needs");
       const rest = claude.filter((p) => !needs.includes(p));
-      const group = (title, list) => list.length ? `<h2>${title} · ${list.length}</h2>${list.map((p) => `<div class="card"><span class="k"><span>${esc(p.id)} · ${esc(p.repo)}</span><span class="st-${esc(p.lamp)}">${esc(p.lamp === "turn" ? "your turn" : p.lamp)}</span></span><span class="t1">${esc(name(p))}</span>${p.summary ? `<span class="t2">${esc(p.summary)}</span>` : ""}</div>`).join("")}` : "";
+      const group = (title, list) => list.length ? `<h2>${title} · ${list.length}</h2>${list.map((p) => `<button type="button" class="card" data-agent="${esc(p.id)}"><span class="k"><span>${esc(p.id)} · ${esc(p.repo)}</span><span class="st-${esc(p.lamp)}">${esc(p.lamp === "turn" ? "your turn" : p.lamp)}</span></span><span class="t1">${esc(name(p))}</span>${p.summary ? `<span class="t2">${esc(p.summary)}</span>` : ""}</button>`).join("")}` : "";
       const permits = needs.map((p) => `<article class="permit"><div class="k"><span>${esc(p.id)} · ${esc(p.branch || p.repo)}</span></div><div class="t1">${esc(name(p))} ${p.permit ? "wants to run" : "needs you"}</div>${p.permit ? `<pre>${esc(p.permit.summary)}</pre><div class="row2"><button type="button" class="m-btn" data-permit="${esc(p.permit.id)}" data-allow="0">Deny</button><button type="button" class="m-btn gold" data-permit="${esc(p.permit.id)}" data-allow="1">Allow</button></div>` : `<div class="t2">${esc(p.summary || "It waits for you in its pane.")}</div>`}</article>`).join("");
       const working = rest.filter((p) => p.lamp === "working");
       const turn = rest.filter((p) => p.lamp === "turn");
       const other = rest.filter((p) => p.lamp !== "working" && p.lamp !== "turn");
       return hubBar("<h1>Agents</h1>") + `<div class="body">${needs.length ? `<h2 style="color:var(--gold)">Needs you · ${needs.length}</h2>${permits}` : ""}${group("Your turn", turn)}${group("Working", working)}${group("Other", other)}${claude.length ? "" : `<div class="m-empty">No agents on this hub.</div>`}</div>`;
     }
+    // The agent's screen (42.5): its last lines, read only, and a box for your message.
+    const plain = (s) => String(s).replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, "").replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+    function agentScreen(p) {
+      const waits = ["idle", "turn", "error", "limit"].includes(p.lamp) && !p.permit;
+      const lines = (p.tail || []).map(plain).filter((l) => l.trim()).slice(-30);
+      const permit = p.permit ? `<article class="permit"><div class="t1">It wants to run</div><pre>${esc(p.permit.summary)}</pre><div class="row2"><button type="button" class="m-btn" data-permit="${esc(p.permit.id)}" data-allow="0">Deny</button><button type="button" class="m-btn gold" data-permit="${esc(p.permit.id)}" data-allow="1">Allow</button></div></article>` : "";
+      const state = p.permit ? "waits for a permit" : { turn: "your turn", idle: "waits for you", working: "working", ended: "ended", needs: "needs you" }[p.lamp] || p.lamp;
+      return hubBar(`<span class="t2" style="font-weight:600">${esc(p.id)} · ${esc(p.repo)}</span>`, "agents")
+        + `<div class="body" style="padding:0 16px 16px"><h1 style="font-size:21px">${esc(p.title || p.repo)}</h1><div class="t2"><span class="st-${esc(p.lamp)}">${esc(state)}</span>${p.branch ? ` · ${esc(p.branch)}` : ""}</div>${permit}
+          <h2 style="margin:14px 0 6px">Its screen</h2><pre class="m-screen" aria-label="The agent's last lines">${lines.length ? esc(lines.join("\n")) : "Nothing yet."}</pre></div>
+          <div class="bar" style="flex-direction:column"><textarea data-say aria-label="Your message to the agent" placeholder="${waits ? "Your message. It goes in with Enter." : "You can send when it waits for you."}" rows="2"></textarea>
+          <div style="display:flex;gap:8px"><button type="button" class="m-btn" data-sayenter ${waits ? "" : "disabled"} title="Press Enter in its prompt: sends a task that waits there">Send what waits</button><button type="button" class="m-btn gold" data-saysend ${waits ? "" : "disabled"}>Send</button></div></div>`;
+    }
+    async function say(p, text) {
+      try {
+        await call("pane_say", { id: p.id, text });
+        haptic();
+        const ta = root.querySelector("[data-say]");
+        if (ta) ta.value = "";
+        toast(text ? "Sent." : "Pressed Enter.");
+        setTimeout(loadPanes, 800);
+      } catch (e) { fail(e); }
+    }
+
     // ---------- You (42.6) ----------
     function youScreen() {
       const h = S.hub;
@@ -395,6 +446,7 @@
     function screen() {
       if (S.view?.kind === "ov") { const r = review(S.view.id); if (r) return overview(r); }
       if (S.view?.kind === "step") { const r = review(S.view.id); if (r) return stepScreen(r, S.view.i); }
+      if (S.view?.kind === "agent") { const p = S.panes.find((x) => x.id === S.view.id); if (p) return agentScreen(p); }
       S.view = null;
       return { today: todayScreen, reviews: reviewsScreen, agents: agentsScreen, you: youScreen }[S.tab]() + tabs();
     }
@@ -402,6 +454,8 @@
       if (S.sheet?.paint) S.sheet.paint();
       const y = root.querySelector(".body")?.scrollTop || 0;
       const typed = root.querySelector(".sheet textarea")?.value;
+      root.dataset.view = S.view?.kind || S.tab;
+      root.classList.toggle("wide", !!S.wide && S.view?.kind === "step");
       root.innerHTML = screen()
         + (S.sheet ? `<div class="scrim" data-scrim><div class="sheet" role="dialog" aria-modal="true">${S.sheet.html}</div></div>` : "")
         + (S.undo ? `<div class="undo" role="status"><span>${esc(S.undo.text)}</span>${S.undo.undo ? `<button type="button" class="m-btn sm" data-undo>Undo</button>` : ""}</div>` : "");
@@ -437,6 +491,20 @@
       if (d.finish !== undefined && r) return finishSheet(r);
       if (d.event && S.sheet?.kind === "finish") { S.sheet.event = d.event; draw(); return; }
       if (d.send !== undefined && S.sheet?.send) return S.sheet.send();
+      if (d.agent) { S.view = { kind: "agent", id: d.agent }; S.tab = "agents"; draw(); return; }
+      if (d.saysend !== undefined || d.sayenter !== undefined) {
+        const p = S.panes.find((x) => x.id === S.view?.id);
+        const text = d.saysend !== undefined ? root.querySelector("[data-say]")?.value.trim() || "" : "";
+        if (p && (text || d.sayenter !== undefined)) say(p, text);
+        return;
+      }
+      if (d.tell !== undefined) {
+        const ta = root.querySelector("[data-tellbox]");
+        const text = ta?.value.trim();
+        if (!text) return;
+        call("today_tell", { text, job: S.today?.job || null }).then(() => { ta.value = ""; toast("Claude reads your note and sorts the list again."); }).catch(fail);
+        return;
+      }
       if (d.permit) { call("permit_answer", { permit: d.permit, allow: d.allow === "1" }).then(() => { haptic(); loadPanes(); }).catch(fail); return; }
       if (d.unpair !== undefined) { api.unpair?.(); return; }
       if (!r || !s) return;
@@ -466,6 +534,9 @@
       if (d.addnote !== undefined) return addNote(r, s, nk);
       if (d.dismiss !== undefined) return dismiss(r, nk, true);
       if (d.undismiss !== undefined) return dismiss(r, nk, false);
+      if (d.fixnote !== undefined) return fixSheet(r, s, nk);
+      if (d.startfix !== undefined) return S.sheet?.start?.();
+      if (d.wide !== undefined) { S.wide = !S.wide; draw(); return; }
       if (d.asknote !== undefined) { const n = notesOf(r, s.id, s.take).find((x) => x.key === nk); S.sel = n?.line && n.file ? { path: n.file, side: n.side, start: n.line, line: n.line } : S.sel; return askSheet(r, s, n ? `About your note "${n.text}": ` : ""); }
     });
 

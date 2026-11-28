@@ -3308,7 +3308,7 @@ Every command of `dispatch` is in one table, by name, with its class and its arg
 | `read` | `panes`, `reviews`, `review_view`, `today`, `tasks`, `mail_list` | on |
 | `review` | step marks, `review_draft*`, `review_pin`, `today_done`, `today_later`, Finish review (posts to GitHub) | on |
 | `ask` | `review_ask` and other runs of Claude that only read | on, with the limits below |
-| `act` | messages to agents, `permit_answer`, `review_work`, `review_send_agent`, `sb resume`, `today_tell`, `today_job_save` | on; one tap each |
+| `act` | messages to agents, `permit_answer`, `pane_say`, `review_work`, `review_send_agent`, `sb resume`, `today_tell`, `today_job_save` | on; one tap each |
 | `terminal` | `pane_input`, `pane_expand`, `pane_attach`, `pane_image` | off |
 | `admin` | pairing, scopes, `settings_save`, `connection_set`, `trust_answer`, `hub_restart`, `pane_open`, `shell_open`, `nvim_open`, `layout_open`, `task_start_plan`, `handover_*` | never through the relay |
 
@@ -3439,7 +3439,7 @@ A second agent reviewed the first version of this section against the code (`rem
 
 ## 42. Phone app design
 
-Status: the first screens are built in `web/m/` (`SBM.mount(el, { call, listen, hub, unpair })`): the tabs, Today with swipes and undo, Reviews, the overview, a step with the narrow diff, line selection, note cards with swipes, Comment, Ask, Reviewed, Finish review, Agents with permits, and You. Window checks run them at 390 × 844 in a frame (`web-tests/m.html`). Not built yet: landscape, drag handles (a second tap on + grows the selection instead), speech, Tell Claude, Fix it, messages to an agent, the agent's screen, the app lock, notices and the offline queue. The technical part is in 41. The HTML design: https://claude.ai/artifact/FS2RR1dfpP33FB5iLHvrMd (nine phone screens and two landscape ones).
+Status: the first screens are built in `web/m/` (`SBM.mount(el, { call, listen, hub, unpair })`): the tabs, Today with swipes and undo, Reviews, the overview, a step with the narrow diff, line selection, note cards with swipes, Comment, Ask, Reviewed, Finish review, Agents with permits, You, Tell Claude, Fix it, the agent's screen with your message, and the wide code (landscape, or Rotate; unified only). `web/phone.js` mounts them on a phone after pairing; links such as `#review/<id>/<step>` open a screen. Window checks run them at 390 × 844 in a frame (`web-tests/m.html`), with the desktop's `style.css` loaded as on a phone. Not built yet: Split in the wide code, drag handles (a second tap on the line button grows the selection instead), speech, Show me in Ask, the app lock, notices and the offline queue. The technical part is in 41. The HTML design: https://claude.ai/artifact/FS2RR1dfpP33FB5iLHvrMd (nine phone screens and two landscape ones).
 
 The phone app is for the minutes away from the desk: review a PR step by step, judge Claude's notes, answer an agent, check Today. It is not a small desktop: no terminals by default, no file tree, no wide diffs.
 
@@ -3529,7 +3529,7 @@ The hub's name and link state sit at the top of every tab: a green dot when link
 
 - A list of the hub's agents: title, repo and branch, state. **Needs you** first, with what it needs.
 - **A permit** shows the tool and what it wants to do, in plain words, with **Allow** and **Deny**. Same rules as 25. Permits and messages are the `act` class (41.7): one tap each.
-- **A message** to the agent: a box at the bottom of its screen (40). Its recent messages above.
+- **A message** to the agent: a box at the bottom of its screen. `pane_say(id, text)` types it in as one paste with Enter, only while the agent waits for you (idle, your turn, an error or a limit) and has no permit; else it is refused. No text: only Enter, which sends a task that waits in the prompt (Fix it). It is the `act` class: a phone has no terminal.
 - **The agent's screen:** a read-only view of its last lines. Typing into it needs the `terminal` scope (41.7), off by default; then a full terminal opens, landscape first.
 
 ### 42.6 You

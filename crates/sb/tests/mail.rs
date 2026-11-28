@@ -187,4 +187,20 @@ fn agents_on_two_machines_send_messages_that_land() {
         }
     }
     assert!(refused, "the send limit holds");
+
+    // Your message from a phone (`pane_say`, SPEC 42.5): typed in with Enter, but
+    // only when the agent waits for you.
+    sb(&ha, &a1, &ra, &["state", "working"], "{}");
+    wait_for("a1 works", 5, || hub_a.views().iter().any(|v| v.id == a1 && v.lamp.as_str() == "working"));
+    assert!(hub_a.pane_say(&a1, "fix the test").unwrap_err().contains("working"));
+    sb(&ha, &a1, &ra, &["state", "turn"], "{}");
+    wait_for("a1 waits", 5, || hub_a.views().iter().any(|v| v.id == a1 && v.lamp.as_str() == "turn"));
+    hub_a.pane_say(&a1, "fix the test\u{1b}[201~").unwrap();
+    let typed = || std::fs::read_to_string(ra.join(format!(".typed-{a1}"))).unwrap_or_default();
+    wait_for("the message is typed in", 5, || typed().contains("\u{1b}[200~fix the test[201~\u{1b}[201~\r"));
+    // No text: only Enter, for a task that waits in the prompt.
+    let before = typed().len();
+    hub_a.pane_say(&a1, " \u{7} ").unwrap();
+    wait_for("only Enter is typed", 5, || typed()[before..] == *"\r");
+    assert!(hub_a.pane_say("nope", "x").is_err());
 }

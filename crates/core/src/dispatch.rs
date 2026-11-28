@@ -118,6 +118,7 @@ commands! {
     pane_reorder(ids: Vec<String>) -> () => |h| h.reorder(&ids);
     pane_resume(id: String) -> () => |h| h.resume(&id);
     permit_answer(permit: String, allow: bool) -> () => |h| h.permit_answer(&permit, allow);
+    pane_say(id: String, text: String) -> () => |h| h.pane_say(&id, &text);
     trust_answer(id: String, yes: bool) -> () => |h| h.trust(&id, yes);
     connections() -> Value => |h| Ok(json!(h.connection_view()));
     connection_set(name: String) -> () => |h| h.connection_set(&name);

@@ -121,9 +121,22 @@
 .m .st-needs { color: var(--gold); }
 .m .verdicts { display: grid; gap: 8px; }
 .m .verdicts button[aria-pressed="true"] { border-color: var(--gold); color: var(--gold); }
+/* Wide code (42.4): sideways, or Rotate. Only the lines, no wrap, a sideways scroll in the box. */
+.m .m-wide { margin-left: 6px; border: 1px solid var(--line2); border-radius: 12px; background: transparent; color: var(--fg2); font: 600 11px var(--sans); padding: 2px 9px; min-height: 26px; }
+.m.wide .body > :not(.code), .m.wide .bar, .m.wide .top { display: none; }
+.m.wide .body { padding: 0 !important; }
+.m.wide .code { margin: 0; border-radius: 0; border: 0; overflow-x: auto; }
+.m.wide .code .fh { position: sticky; left: 0; }
+.m.wide .row .tx { white-space: pre; overflow-wrap: normal; }
 @media (orientation: landscape) and (max-height: 500px) {
   .m .tabs { display: none; }
+  .m[data-view="step"] .body > :not(.code), .m[data-view="step"] .bar { display: none; }
+  .m[data-view="step"] .code { overflow-x: auto; }
+  .m[data-view="step"] .row .tx { white-space: pre; overflow-wrap: normal; }
 }
+.m .m-screen { margin: 0; padding: 10px; border-radius: 10px; background: var(--bg2); font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg2); max-height: 50vh; overflow-y: auto; }
+.m .bar textarea, .m .m-tell textarea { width: 100%; border-radius: 10px; border: 1px solid var(--line2); background: var(--bg2); color: var(--fg); font: 16px/1.35 var(--sans); padding: 8px 10px; resize: none; }
+.m .m-tell { display: flex; gap: 8px; align-items: flex-end; padding: 4px 6px 10px; }
 
 /* On a phone the screens cover the desktop page, which runs on underneath for the link. */
 body.sbm-on > *:not(.m):not(:has(.m)) { display: none !important; }
