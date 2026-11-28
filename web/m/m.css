@@ -21,7 +21,7 @@
 }
 .m * { box-sizing: border-box; }
 .m button { font: inherit; color: inherit; }
-.m code, .m .mono { font-family: var(--mono); font-size: 13px; }
+.m code, .m .m-mono { font-family: var(--mono); font-size: 13px; }
 .m h1 { margin: 0; font-size: 26px; font-weight: 700; line-height: 1.2; }
 .m h2 { margin: 14px 8px 6px; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--dim); }
 .m .top { padding: 14px 18px 8px; display: flex; align-items: center; gap: 10px; }
@@ -35,7 +35,7 @@
 .m .k { font: 600 12px var(--mono); color: var(--dim); display: flex; justify-content: space-between; gap: 8px; }
 .m .t1 { font-size: 15px; font-weight: 600; line-height: 1.3; }
 .m .t2 { font-size: 13px; color: var(--dim); }
-.m .empty { padding: 40px 16px; text-align: center; color: var(--dim); }
+.m .m-empty { padding: 40px 16px; text-align: center; color: var(--dim); }
 .m .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .m .m-chip { padding: 6px 12px; min-height: 36px; border-radius: 18px; border: 1px solid var(--line2); background: transparent; font-size: 13px; font-weight: 600; color: var(--dim); }
 .m .m-chip[aria-selected="true"] { background: var(--bg3); color: var(--fg); }
@@ -67,17 +67,17 @@
 .m .prog span { height: 5px; border-radius: 3px; background: var(--line); }
 .m .prog .ok { background: var(--green); }
 .m .prog .cur { background: var(--gold); }
-.m .what { font-size: 15px; color: var(--fg2); margin: 8px 0; }
-.m .what p { margin: 0 0 8px; }
-.m .what.short { max-height: 22em; overflow: hidden; }
+.m .m-what { font-size: 15px; color: var(--fg2); margin: 8px 0; }
+.m .m-what p { margin: 0 0 8px; }
+.m .m-what.short { max-height: 22em; overflow: hidden; }
 .m .more { border: 0; background: transparent; color: var(--gold); font-weight: 600; padding: 0 0 6px; min-height: 32px; }
-.m .q { font-size: 14px; color: var(--claude); padding: 6px 0; }
+.m .m-q { font-size: 14px; color: var(--claude); padding: 6px 0; }
 .m .m-take { padding: 14px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--line); margin: 12px 0; }
 .m .m-take .lbl { font-size: 12px; font-weight: 700; color: var(--claude); margin-bottom: 6px; display: flex; gap: 8px; align-items: center; }
 .m .m-steps button { width: 100%; border: 0; background: transparent; text-align: left; display: flex; gap: 12px; padding: 12px 6px; font-size: 14px; min-height: 44px; border-radius: 10px; }
 .m .m-steps button.cur { background: var(--bg3); font-weight: 600; }
-.m .m-steps .n { width: 22px; color: var(--dim2); flex: none; }
-.m .m-steps .done .n { color: var(--green); }
+.m .m-steps .m-n { width: 22px; color: var(--dim2); flex: none; }
+.m .m-steps .done .m-n { color: var(--green); }
 /* The narrow diff: one column, long lines wrap, never a sideways scroll. */
 .m .code { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 12px 0; font: 12.5px/1.55 var(--mono); }
 .m .code .fh { padding: 8px 10px; background: var(--bg2); color: var(--dim); font-weight: 600; display: flex; gap: 8px; overflow-wrap: break-word; }
@@ -101,8 +101,8 @@
 .m .fold { width: 100%; border: 0; background: var(--bg2); color: var(--dim); font: 600 12px var(--sans); padding: 8px; min-height: 36px; }
 .m .selbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg3); border-top: 1px solid var(--line2); font: 600 13px var(--sans); position: sticky; bottom: 0; }
 .m .selbar span { flex: 1; }
-.m .note { padding: 14px; border-radius: 12px; background: var(--bg3); border: 1px solid var(--line2); display: flex; flex-direction: column; gap: 8px; margin: 0; }
-.m .note .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.m .m-note { padding: 14px; border-radius: 12px; background: var(--bg3); border: 1px solid var(--line2); display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.m .m-note .acts { display: flex; gap: 8px; flex-wrap: wrap; }
 .m .m-draft { padding: 10px 12px; border-radius: 10px; background: var(--bg2); border-left: 3px solid var(--gold); font-size: 14px; margin: 6px 0; }
 /* Sheets. */
 .m .scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, .5); display: flex; align-items: flex-end; z-index: 5; }

@@ -95,8 +95,8 @@
     // ---------- Today (42.3) ----------
     function todayScreen() {
       const v = S.today;
-      if (!v) return hubBar("<h1>Today</h1>") + `<div class="body"><div class="empty">Loading…</div></div>`;
-      if (v.error) return hubBar("<h1>Today</h1>") + `<div class="body"><div class="empty">${esc(v.error)}</div></div>`;
+      if (!v) return hubBar("<h1>Today</h1>") + `<div class="body"><div class="m-empty">Loading…</div></div>`;
+      if (v.error) return hubBar("<h1>Today</h1>") + `<div class="body"><div class="m-empty">${esc(v.error)}</div></div>`;
       const jobs = (v.jobs || []).length > 1 ? `<div class="chips" role="tablist" aria-label="Jobs" style="padding:0 6px 6px">${v.jobs.map((j) => `<button type="button" class="m-chip" role="tab" data-job="${esc(j.name)}" aria-selected="${j.name === v.job}">${esc(j.name)} ${j.count}</button>`).join("")}</div>` : "";
       const secs = (v.sections || []).filter((s) => s.items.length);
       const rows = secs.map((s) => `<section aria-label="${esc(s.title)}"><h2>${esc(s.title)} · ${s.items.length}</h2>${s.items.map((i) => {
@@ -105,7 +105,7 @@
         return `<div class="swipe" data-swipe="today" data-key="${esc(key)}"><div class="under"><span class="r">✓ Done</span><span class="l">Later</span></div>
           <button type="button" class="card" data-item="${esc(key)}"><span class="k"><span>${esc(i.repo.split("/").pop())}#${i.number}</span>${tags}</span><span class="t1">${esc(i.line)}</span><span class="t2">${esc(i.title)}</span></button></div>`;
       }).join("")}</section>`).join("");
-      const body = rows || `<div class="empty">All done for today.</div>`;
+      const body = rows || `<div class="m-empty">All done for today.</div>`;
       return hubBar("<h1>Today</h1>") + `<div class="body">${jobs}${body}<p class="t2" style="padding:0 8px">Swipe right: Done · Swipe left: Later</p></div>`;
     }
     const todayItem = (key) => (S.today?.sections || []).flatMap((s) => s.items).find((i) => `${i.repo}#${i.number}#${i.section === "changed" ? "c" : ""}` === key);
@@ -146,7 +146,7 @@
       const i = todayItem(key);
       if (!i) return;
       const open = S.reviews.find((r) => r.repo === i.repo && r.number === i.number);
-      S.sheet = { kind: "item", html: `<h3>${esc(i.repo)}#${i.number}</h3><div class="t1">${esc(i.title)}</div><div class="what">${esc(i.line)}</div>
+      S.sheet = { kind: "item", html: `<h3>${esc(i.repo)}#${i.number}</h3><div class="t1">${esc(i.title)}</div><div class="m-what">${esc(i.line)}</div>
         ${(i.detail || []).map((d) => `<div class="t2">${esc(d)}</div>`).join("")}${i.why ? `<div class="t2">${esc(i.why)}</div>` : ""}
         <div class="row2">${open ? `<button type="button" class="m-btn gold" data-openrev="${esc(open.id)}">Open review</button>` : `<button type="button" class="m-btn gold" data-startrev="${esc(i.url)}">Start review</button>`}<button type="button" class="m-btn" data-close>Close</button></div>` };
       draw();
@@ -160,7 +160,7 @@
         const st = r.status === "ready" ? `${n} steps · ${ok} reviewed` : esc(r.status);
         return `<button type="button" class="card" data-openrev="${esc(r.id)}"><span class="k"><span>${esc(r.repo.split("/").pop())}#${r.number}</span><span>${r.drafts.length ? `${r.drafts.length} draft${r.drafts.length > 1 ? "s" : ""}` : ""}</span></span><span class="t1">${esc(r.title)}</span><span class="t2">${st}</span></button>`;
       }).join("");
-      return hubBar("<h1>Reviews</h1>") + `<div class="body">${list || `<div class="empty">No open review. Start one from Today.</div>`}</div>`;
+      return hubBar("<h1>Reviews</h1>") + `<div class="body">${list || `<div class="m-empty">No open review. Start one from Today.</div>`}</div>`;
     }
     function progress(r, cur) {
       const ss = steps(r);
@@ -175,12 +175,12 @@
       const counts = SEVS.map((v) => [v, all.filter((n) => n.severity === v).length]).filter(([, c]) => c).map(([v, c]) => `<span class="sev sev-${v}">${c} ${v}</span>`).join("");
       const verdict = { good: "looks good", change: "needs a change", question: "has a question" }[take?.verdict] || "";
       const body = r.status !== "ready"
-        ? `<div class="empty">${esc(r.status === "error" ? r.error || "The guide failed." : "Claude is writing the guide…")}</div>`
+        ? `<div class="m-empty">${esc(r.status === "error" ? r.error || "The guide failed." : "Claude is writing the guide…")}</div>`
         : `<div class="t1" style="font-size:13px;display:flex;justify-content:space-between"><span>${ss.length} steps · ${ok} reviewed</span><span class="t2">${r.drafts.length} draft${r.drafts.length === 1 ? "" : "s"}</span></div>${progress(r, ok === ss.length ? -1 : at)}
-          ${take ? `<section class="m-take" aria-label="Claude on the PR"><div class="lbl">Claude on the PR${verdict ? ` · ${verdict}` : ""}</div><div class="what">${mdi(take.summary || "")}</div><div class="chips">${counts}</div></section>` : ""}
-          <div class="m-steps">${ss.map((s, i) => `<button type="button" data-step="${i}" class="${checked(r, s.id) ? "done" : ""}${i === at && ok < ss.length ? " cur" : ""}"><span class="n">${checked(r, s.id) ? "✓" : i + 1}</span><span>${mdi(s.title)}</span></button>`).join("")}</div>`;
+          ${take ? `<section class="m-take" aria-label="Claude on the PR"><div class="lbl">Claude on the PR${verdict ? ` · ${verdict}` : ""}</div><div class="m-what">${mdi(take.summary || "")}</div><div class="chips">${counts}</div></section>` : ""}
+          <div class="m-steps">${ss.map((s, i) => `<button type="button" data-step="${i}" class="${checked(r, s.id) ? "done" : ""}${i === at && ok < ss.length ? " cur" : ""}"><span class="m-n">${checked(r, s.id) ? "✓" : i + 1}</span><span>${mdi(s.title)}</span></button>`).join("")}</div>`;
       const go = r.status !== "ready" ? "" : ok === ss.length ? `<button type="button" class="m-btn gold" data-finish>Finish review</button>` : `<button type="button" class="m-btn" data-finish>Finish</button><button type="button" class="m-btn gold" data-step="${at}" style="flex:2">${at ? `Go on at step ${at + 1}` : "Start at step 1"}</button>`;
-      return hubBar(`<span class="mono t2">${esc(r.repo.split("/").pop())}#${r.number} · round ${r.round || 1}</span>`, "reviews")
+      return hubBar(`<span class="m-mono t2">${esc(r.repo.split("/").pop())}#${r.number} · round ${r.round || 1}</span>`, "reviews")
         + `<div class="body" style="padding:0 18px 16px"><h1>${esc(r.title)}</h1>${body}</div>${go ? `<div class="bar">${go}</div>` : ""}`;
     }
     function stepScreen(r, i) {
@@ -193,7 +193,7 @@
       const long = i > 0 && (s.what || "").length > 900 && !S.open.has(`${r.id}|${s.id}`);
       const qs = (s.check || []).map((q, n) => {
         const a = s.check_answers?.[n];
-        return `<div class="q">${a ? "•" : "?"} ${mdi(q)}${a ? `<div class="t2">${mdi(a)}</div>` : ""}</div>`;
+        return `<div class="m-q">${a ? "•" : "?"} ${mdi(q)}${a ? `<div class="t2">${mdi(a)}</div>` : ""}</div>`;
       }).join("");
       const qlabel = (s.check || []).length ? `<h2 style="margin:10px 0 2px">${(s.check_answers || []).length ? "What Claude looked into" : "For you to decide"}</h2>` : "";
       const notes = notesOf(r, s.id, s.take);
@@ -201,8 +201,8 @@
       const drafts = r.drafts.filter((x) => (d?.sections || []).some((sec) => sec.path === x.path));
       return hubBar(`<span class="t2" style="font-weight:600">Step ${i + 1} of ${ss.length}</span>`, `ov:${r.id}`)
         + `<div class="body" style="padding:0 16px 16px" data-swipe="step">${progress(r, i)}<h1 style="font-size:21px;margin-top:8px">${mdi(s.title)}</h1>
-          <div class="what${long ? " short" : ""}">${md(s.what || "")}${s.why ? `<p><b>${mdi(s.why)}</b></p>` : ""}</div>${long ? `<button type="button" class="more" data-more="${esc(s.id)}">More</button>` : ""}
-          ${qlabel}${qs}${codeBox(r, s, d)}${drafts.map((x) => `<div class="m-draft"><div class="t2 mono">${esc(x.path.split("/").pop())}:${x.line}</div>${esc(x.text)}</div>`).join("")}
+          <div class="m-what${long ? " short" : ""}">${md(s.what || "")}${s.why ? `<p><b>${mdi(s.why)}</b></p>` : ""}</div>${long ? `<button type="button" class="more" data-more="${esc(s.id)}">More</button>` : ""}
+          ${qlabel}${qs}${codeBox(r, s, d)}${drafts.map((x) => `<div class="m-draft"><div class="t2 m-mono">${esc(x.path.split("/").pop())}:${x.line}</div>${esc(x.text)}</div>`).join("")}
           ${cards ? `<h2 id="notes" style="margin:14px 0 6px">Claude's notes</h2>${cards}` : ""}</div>
           <div class="bar"><button type="button" class="m-btn" style="flex:0 0 52px" data-prev aria-label="Previous step">${svg("back", 20)}</button><button type="button" class="m-btn" data-ask>Ask</button><button type="button" class="m-btn" data-comment ${S.sel ? "" : "disabled"}>Comment</button><button type="button" class="m-btn gold nowrap" style="flex:1.6" data-reviewed>${checked(r, s.id) ? "Next ›" : "Reviewed ›"}</button></div>`;
     }
@@ -245,10 +245,10 @@
       return `<span class="tx" style="padding-left:${Math.min(cols, 8)}ch">${esc(text.slice(m.length))}</span>`;
     }
     function noteCard(r, n) {
-      if (n.dismissed) return `<div class="note" data-note="${esc(n.key)}"><span class="t2">Dismissed${n.line ? ` · line ${n.line}` : ""}: ${esc(n.text.length > 70 ? n.text.slice(0, 67) + "…" : n.text)}</span><div class="acts"><button type="button" class="m-btn sm" data-undismiss>Undo</button></div></div>`;
+      if (n.dismissed) return `<div class="m-note" data-note="${esc(n.key)}"><span class="t2">Dismissed${n.line ? ` · line ${n.line}` : ""}: ${esc(n.text.length > 70 ? n.text.slice(0, 67) + "…" : n.text)}</span><div class="acts"><button type="button" class="m-btn sm" data-undismiss>Undo</button></div></div>`;
       const added = S.open.has(`added|${n.key}`);
       return `<div class="swipe" data-swipe="note" data-key="${esc(n.key)}"><div class="under"><span class="r">Add as comment</span><span class="l">Dismiss</span></div>
-        <div class="note card"><div style="display:flex;gap:8px;align-items:center"><span class="sev sev-${esc(n.severity)}">${esc(n.severity)}</span>${n.file ? `<span class="mono t2">${esc(n.file.split("/").pop())}${n.line ? `:${n.line}` : ""}</span>` : ""}${added ? `<span class="tag">✓ added</span>` : ""}</div>
+        <div class="m-note card"><div style="display:flex;gap:8px;align-items:center"><span class="sev sev-${esc(n.severity)}">${esc(n.severity)}</span>${n.file ? `<span class="m-mono t2">${esc(n.file.split("/").pop())}${n.line ? `:${n.line}` : ""}</span>` : ""}${added ? `<span class="tag">✓ added</span>` : ""}</div>
         <div>${mdi(n.text)}</div><div class="acts">${n.line && !added ? `<button type="button" class="m-btn sm" data-addnote>Add as comment</button>` : ""}<button type="button" class="m-btn sm" data-asknote>Ask</button><button type="button" class="m-btn sm" data-dismiss>Dismiss</button></div></div></div>`;
     }
     const lineText = (d, sel) => {
@@ -278,7 +278,7 @@
     function commentSheet(r, s) {
       const sel = S.sel;
       if (!sel) return;
-      S.sheet = { kind: "comment", html: `<h3>Comment on ${sel.start === sel.line ? `line ${sel.line}` : `lines ${sel.start}–${sel.line}`}</h3><div class="t2 mono">${esc(sel.path)}</div>
+      S.sheet = { kind: "comment", html: `<h3>Comment on ${sel.start === sel.line ? `line ${sel.line}` : `lines ${sel.start}–${sel.line}`}</h3><div class="t2 m-mono">${esc(sel.path)}</div>
         <textarea data-ctext aria-label="Your comment" placeholder="Your comment. It stays a draft until Finish review."></textarea>
         <div class="row2"><button type="button" class="m-btn" data-close>Cancel</button><button type="button" class="m-btn gold" data-savecomment>Save draft</button></div>` };
       draw();
@@ -350,7 +350,7 @@
       const paint = () => {
         const drafts = review(r.id)?.drafts || [];
         S.sheet.html = `<h3>Finish review</h3>${p.newer ? `<div class="t2">The PR has newer commits than the reviewed one.</div>` : ""}
-          <div class="t2">${drafts.length} comment${drafts.length === 1 ? "" : "s"} as ${esc(p.login)}</div>${drafts.map((x) => `<div class="m-draft"><div class="t2 mono">${esc((x.path || "").split("/").pop())}${x.line ? `:${x.line}` : ""}</div>${esc(x.text)}</div>`).join("")}
+          <div class="t2">${drafts.length} comment${drafts.length === 1 ? "" : "s"} as ${esc(p.login)}</div>${drafts.map((x) => `<div class="m-draft"><div class="t2 m-mono">${esc((x.path || "").split("/").pop())}${x.line ? `:${x.line}` : ""}</div>${esc(x.text)}</div>`).join("")}
           <div class="verdicts">${[["COMMENT", "Comment"], ["APPROVE", "Approve"], ["REQUEST_CHANGES", "Request changes"]].map(([k, l]) => `<button type="button" class="m-btn" data-event="${k}" aria-pressed="${S.sheet.event === k}">${l}</button>`).join("")}</div>
           <textarea data-summary aria-label="Summary" placeholder="A summary (optional)">${esc(review(r.id)?.summary || "")}</textarea>
           <div class="row2"><button type="button" class="m-btn" data-close>Cancel</button><button type="button" class="m-btn gold" data-send>Send to GitHub</button></div>`;
@@ -381,13 +381,13 @@
       const working = rest.filter((p) => p.lamp === "working");
       const turn = rest.filter((p) => p.lamp === "turn");
       const other = rest.filter((p) => p.lamp !== "working" && p.lamp !== "turn");
-      return hubBar("<h1>Agents</h1>") + `<div class="body">${needs.length ? `<h2 style="color:var(--gold)">Needs you · ${needs.length}</h2>${permits}` : ""}${group("Your turn", turn)}${group("Working", working)}${group("Other", other)}${claude.length ? "" : `<div class="empty">No agents on this hub.</div>`}</div>`;
+      return hubBar("<h1>Agents</h1>") + `<div class="body">${needs.length ? `<h2 style="color:var(--gold)">Needs you · ${needs.length}</h2>${permits}` : ""}${group("Your turn", turn)}${group("Working", working)}${group("Other", other)}${claude.length ? "" : `<div class="m-empty">No agents on this hub.</div>`}</div>`;
     }
     // ---------- You (42.6) ----------
     function youScreen() {
       const h = S.hub;
       return hubBar("<h1>You</h1>") + `<div class="body"><div class="card"><span class="k"><span>Hub</span></span><span class="t1">${esc(h.name)}</span><span class="t2">${h.linked ? "Linked" : "Not linked"}${h.version ? ` · ${esc(h.version)}` : ""}</span></div>
-        <div class="card"><span class="k"><span>This phone</span></span><span class="t2">You manage devices on the computer: <span class="mono">sb devices</span>.</span></div>
+        <div class="card"><span class="k"><span>This phone</span></span><span class="t2">You manage devices on the computer: <span class="m-mono">sb devices</span>.</span></div>
         ${api.unpair ? `<button type="button" class="m-btn" data-unpair>Remove this phone</button>` : ""}</div>`;
     }
 

@@ -92,7 +92,7 @@
   await tap("[data-openrev]");
   check("the overview shows the title, the counts, Claude's take and Go on at step 2", $(".m h1").textContent === "Fix redb backend bugs" && $(".m-take").textContent.includes("needs a change") && $(".m-take").textContent.includes("1 must") && $(".bar .gold").textContent === "Go on at step 2");
   await tap(".bar .gold");
-  check("the step shows its place, title, text and question", $(".top").textContent.includes("Step 2 of 2") && $(".m h1").textContent.includes("keep errors") && $(".q").textContent.includes("Do we want to log it") && $$(".m h2").some((h) => h.textContent === "For you to decide"));
+  check("the step shows its place, title, text and question", $(".top").textContent.includes("Step 2 of 2") && $(".m h1").textContent.includes("keep errors") && $(".m-q").textContent.includes("Do we want to log it") && $$(".m h2").some((h) => h.textContent === "For you to decide"));
   check("your place goes to the hub, so the desktop opens there", called("review_step_seen").at(-1)?.[1].step === "s2");
   await wait(60);
   check("the narrow diff has added and removed lines with line numbers", $$(".row.add").length === 2 && $$(".row.del").length === 1 && $(".row.add .ln").textContent === "+7" && !$(".row:not(.add):not(.del) .m-mark"));
@@ -115,7 +115,7 @@
   const c = called("review_comment").at(-1)?.[1];
   check("Save draft sends one multi-line comment", c?.comment.line === 8 && c.comment.start_line === 7 && c.comment.side === "new" && c.comment.text === "Name the slot." && c.comment.line_text === "    .collect()" && !$(".sheet"));
   // Claude's notes as cards.
-  check("a note shows as a card with its kind and line", $(".note .sev-must") && $(".note").textContent.includes("a.rs:7"));
+  check("a note shows as a card with its kind and line", $(".m-note .sev-must") && $(".m-note").textContent.includes("a.rs:7"));
   await swipe($('[data-swipe="note"]'), 140);
   const nc = called("review_comment").at(-1)?.[1];
   check("swipe right on a note adds it as an agent draft", nc?.comment.agent === true && nc.comment.line === 7 && nc.comment.text === note.text);
@@ -123,7 +123,7 @@
   R = { ...R, dismissed: ["s2|must|src/a.rs:7|" + note.text] };
   emit("review", R);
   await wait(40);
-  check("a dismissed card says what it was", $(".note .t2")?.textContent.includes("The LevelDB path"), $(".note")?.textContent);
+  check("a dismissed card says what it was", $(".m-note .t2")?.textContent.includes("The LevelDB path"), $(".m-note")?.textContent);
   R = { ...R, dismissed: [] };
   emit("review", R);
   await wait(40);
